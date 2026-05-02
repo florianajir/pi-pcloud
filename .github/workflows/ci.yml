@@ -78,8 +78,8 @@ jobs:
       - name: Render generated configs for CI
         run: |
           set -euo pipefail
-          sh ./scripts/authelia-pre-start.sh
-          sh ./scripts/headscale-pre-start.sh
+          bash ./scripts/authelia-pre-start.sh
+          bash ./scripts/headscale-pre-start.sh
 
           # Make all generated files world-readable so docker compose (and the Docker
           # daemon) can open env_files regardless of the runner's umask or ownership.

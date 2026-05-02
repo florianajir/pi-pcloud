@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 # Create a temporary SQL file with environment variables substituted
 TEMP_SQL=$(mktemp)

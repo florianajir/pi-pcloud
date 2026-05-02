@@ -1,8 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 # Configure Portainer OAuth against Authelia OIDC.
 # Safe to run multiple times.
 
-set -e
+set -euo pipefail
 
 . "$(dirname "$0")/lib.sh"
 

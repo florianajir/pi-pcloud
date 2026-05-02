@@ -1,8 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 # Configure Dockhand OIDC, app timezone, and ntfy notifications.
 # Safe to run multiple times.
 
-set -e
+set -euo pipefail
 
 . "$(dirname "$0")/lib.sh"
 

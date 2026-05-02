@@ -1,7 +1,7 @@
-#!/bin/sh
+#!/bin/bash
 # Render Headscale policy from template using EMAIL
 
-set -e
+set -euo pipefail
 
 . "$(dirname "$0")/lib.sh"
 

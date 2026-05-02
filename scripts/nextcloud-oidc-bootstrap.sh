@@ -1,9 +1,9 @@
-#!/bin/sh
+#!/bin/bash
 # Configure Nextcloud OIDC provider for Authelia integration.
 # Runs as ExecStartPost after docker compose up.
 # Safe to run multiple times (idempotent).
 
-set -e
+set -euo pipefail
 
 . "$(dirname "$0")/lib.sh"
 

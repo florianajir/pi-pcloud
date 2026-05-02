@@ -1,10 +1,10 @@
-#!/bin/sh
+#!/bin/bash
 # Bootstrap Pi-hole: adds recommended block lists and updates gravity.
 # Uses the Pi-hole v6 REST API via docker exec curl.
 # Firebog "ticked" lists (low false-positive rate) — https://firebog.net
 # Safe to run multiple times — skips lists already present.
 
-set -e
+set -euo pipefail
 
 . "$(dirname "$0")/lib.sh"
 

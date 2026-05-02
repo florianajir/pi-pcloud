@@ -1,8 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 # Auto-initialization script for Headscale + Tailscale + Headplane
 # Runs automatically on first start, creates user and performs one-time Tailscale bootstrap with a short-lived preauthkey, then initializes Headplane config with a long-lived reusable preauthkey.
 
-set -e
+set -euo pipefail
 
 . "$(dirname "$0")/lib.sh"
 

@@ -1,8 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 # Generate Authelia secrets and render configuration from template.
 # Idempotent: existing secrets and configuration are preserved.
 
-set -e
+set -euo pipefail
 
 . "$(dirname "$0")/lib.sh"
 

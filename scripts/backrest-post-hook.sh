@@ -1,5 +1,5 @@
-#!/bin/sh
-set -eu
+#!/bin/bash
+set -euo pipefail
 
 NTFY_BASE_URL="${NTFY_BASE_URL:-https://ntfy.${HOST_NAME:-pi.lan}}"
 NTFY_TOPIC="${BACKREST_NTFY_TOPIC:-pi}"

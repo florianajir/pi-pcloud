@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Unified PostgreSQL backup script.
 # Usage: db-backup.sh <service>
 #   e.g.: db-backup.sh authelia
@@ -17,7 +17,7 @@
 #   NEXTCLOUD_CONFIG_FILE       — path to config.php (default: /nextcloud-config/config.php)
 #   Enables maintenance mode before dump and restores original state after.
 
-set -eu
+set -euo pipefail
 
 SERVICE="${1:-}"
 if [ -z "$SERVICE" ]; then

@@ -1,11 +1,11 @@
-#!/bin/sh
+#!/bin/bash
 # Bootstrap qBittorrent: set WebUI credentials.
 # Auth bypass (subnet whitelist + reverse proxy) is pre-configured via the
 # config template rendered by qbittorrent-pre-start.sh, so setPreferences
 # can be called unauthenticated from 127.0.0.1.
 # Runs as ExecStartPost after docker compose up. Idempotent.
 
-set -e
+set -euo pipefail
 
 . "$(dirname "$0")/lib.sh"
 

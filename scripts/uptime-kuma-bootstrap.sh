@@ -1,10 +1,10 @@
-#!/bin/sh
+#!/bin/bash
 # Bootstrap Uptime Kuma: auto-configures admin account, ntfy notifications,
 # Docker host, and container monitors for all services in compose.yaml.
 # Runs the Python bootstrap script inside a temporary container on the
 # same Docker network as Uptime Kuma (no local venv required).
 
-set -e
+set -euo pipefail
 
 . "$(dirname "$0")/lib.sh"
 

@@ -1,10 +1,10 @@
-#!/bin/sh
+#!/bin/bash
 # Auto-initialization script for Beszel Hub + beszel-agent token bootstrap.
 # Ensures a permanent universal token exists, persists it to
 # config/beszel-agent/agent.env, then
 # (re)starts beszel-agent so first boot works out-of-the-box.
 
-set -e
+set -euo pipefail
 
 . "$(dirname "$0")/lib.sh"
 

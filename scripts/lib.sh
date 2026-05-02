@@ -212,7 +212,7 @@ ensure_authelia_oidc_materials() {
         return 1
     fi
 
-    if ! sh "$pre_start_script"; then
+    if ! "$pre_start_script"; then
         log "WARNING: authelia-pre-start.sh failed while preparing ${display_name} OIDC materials"
         return 1
     fi
