@@ -328,7 +328,7 @@ tailscale set --exit-node <pi-ip>
 Only route specific traffic through VPN:
 
 ```bash
-tailscale up --routes=192.168.1.0/24
+tailscale up --advertise-routes=<HOST_LAN_SUBNET>
 ```
 
 Then on client:
@@ -336,7 +336,7 @@ Then on client:
 tailscale set --accept-routes=true
 ```
 
-Now can access home LAN (`192.168.1.x`) from VPN.
+Now can access the home LAN from VPN clients.
 
 ## Troubleshooting
 
@@ -371,7 +371,7 @@ tailscale ip                            # Should be 100.64.x.x
 docker compose exec headscale headscale nodes list
 ```
 
-Check "Routes" column — should include internal Docker IPs (172.30.x.x).
+Check "Routes" column — it should include your LAN subnet (for example `192.168.1.0/24`).
 
 If empty, Headscale wasn't configured to advertise routes. Restart:
 ```bash

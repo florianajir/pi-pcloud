@@ -48,6 +48,7 @@ main() {
     EMAIL="$(get_env_value EMAIL)"
     HOST_NAME="$(get_env_value HOST_NAME)"
     DATA_LOCATION="$(get_env_value DATA_LOCATION)"
+    HOST_LAN_SUBNET="$(get_env_value HOST_LAN_SUBNET)"
 
     if [ -z "$EMAIL" ]; then
         die "EMAIL is not set in .env"
@@ -55,6 +56,7 @@ main() {
 
     HOST_NAME="${HOST_NAME:-pi.lan}"
     DATA_LOCATION="${DATA_LOCATION:-./data}"
+    HOST_LAN_SUBNET="${HOST_LAN_SUBNET:-192.168.1.0/24}"
     case "$DATA_LOCATION" in
         /*) : ;;
         *)  DATA_LOCATION="$PROJECT_DIR/$DATA_LOCATION" ;;
@@ -69,7 +71,10 @@ main() {
         log "WARNING: OIDC secret not found at $OIDC_SECRET_FILE (run authelia-pre-start.sh first)"
     fi
 
-    UPDATED_POLICY=$(sed -e "s|__HEADSCALE_USER__|$EMAIL|g" "$POLICY_TEMPLATE_FILE")
+    UPDATED_POLICY=$(sed \
+        -e "s|__HEADSCALE_USER__|$EMAIL|g" \
+        -e "s|__HOST_LAN_SUBNET__|$HOST_LAN_SUBNET|g" \
+        "$POLICY_TEMPLATE_FILE")
 
     if [ -f "$POLICY_FILE" ] && [ "$UPDATED_POLICY" = "$(cat "$POLICY_FILE")" ]; then
         log "Policy already up to date"

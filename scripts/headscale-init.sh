@@ -155,7 +155,7 @@ connect_tailscale_if_needed() {
         --auth-key="$key" \
         --accept-dns=true \
         --advertise-exit-node \
-        --advertise-routes=192.168.1.0/24 \
+        --advertise-routes="${HOST_LAN_SUBNET}" \
         --accept-routes \
         --hostname="tailscale"
 
@@ -173,7 +173,9 @@ main() {
 
     HOST_NAME="$(get_env_value HOST_NAME)"
     EMAIL="$(get_env_value EMAIL)"
+    HOST_LAN_SUBNET="$(get_env_value HOST_LAN_SUBNET)"
     HOST_NAME="${HOST_NAME:-pi.lan}"
+    HOST_LAN_SUBNET="${HOST_LAN_SUBNET:-192.168.1.0/24}"
     HEADSCALE_USER="${EMAIL}"
     if [ -z "$HEADSCALE_USER" ]; then
         die "HEADSCALE_USER (EMAIL) is not set."
