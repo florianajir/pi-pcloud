@@ -86,8 +86,9 @@
 		"!reset sequence"
 	],
 	"[yaml]": {
-		"editor.defaultFormatter": "redhat.vscode-yaml"
+		"editor.defaultFormatter": "redhat.vscode-yaml",
 	},
+	"yaml.format.printWidth": 500,
 	"chat.tools.terminal.autoApprove": {
 		"nslookup": true,
 		"true": true,
