@@ -26,6 +26,10 @@ services:
     # Depends on gluetun which is excluded from CI.
     profiles: [ci-excluded]
 
+  stremio:
+    # Depends on gluetun which is excluded from CI.
+    profiles: [ci-excluded]
+
   ddns-updater:
     # Requires valid Cloudflare zone and API token.
     profiles: [ci-excluded]
