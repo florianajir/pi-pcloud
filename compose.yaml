@@ -64,7 +64,7 @@ x-healthcheck-fast: &healthcheck-fast
 services:
   ddns-updater:
     <<: *service-defaults
-    image: ghcr.io/qdm12/ddns-updater:v2.9
+    image: ghcr.io/qdm12/ddns-updater:v2.10
     container_name: pi-ddns-updater
     environment:
       CONFIG: >-
