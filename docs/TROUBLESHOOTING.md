@@ -64,26 +64,7 @@ A split verdict means the client resolved the public address instead of the Pi-h
 
 **A service returns a generic 404 from Traefik.** Its router is gone. For qBittorrent, Prowlarr, Kapowarr and Stremio the usual cause is **gluetun being unhealthy** — they share its network namespace, so when it drops, all of their Traefik routes vanish at once rather than erroring individually. `docker compose ps gluetun` and `docker compose logs gluetun`.
 
-**Nextcloud returns 502 right after installing an app from the UI.** Its PHP workers are
-segfaulting, so Traefik has no live backend. The signature is in the container log, one line per
-dead worker:
-
-```bash
-docker logs pi-nextcloud | grep 'Segmentation fault'
-```
-
-`docker restart pi-nextcloud` clears it — the state that kills the workers is process-wide, not
-something the installed app left on disk. `config/nextcloud/zz-opcache-jit.ini` disables the tracing
-JIT that the upstream image enables by default; that is the suspected mechanism rather than a proven
-one, since the crash has not been reproduced on demand, but it is the known-fragile piece on aarch64
-and Nextcloud loses little without it. If you see a 502 again, first confirm the JIT is still off:
-
-```bash
-docker exec pi-nextcloud php -i | grep -E '^opcache.jit(_buffer_size)? =>'   # expect disable / 0
-```
-
-Note that `.htaccess` rewrites unknown `.php` paths to `index.php`, so dropping a test script in the
-webroot to isolate PHP from Nextcloud's own code does not work — it runs the full bootstrap instead.
+**Nextcloud returns 502.** Its PHP workers are segfaulting, so Traefik has no live backend — `docker logs pi-nextcloud | grep 'Segmentation fault'` confirms it, and `docker restart pi-nextcloud` clears it. `config/nextcloud/zz-opcache-jit.ini` disables the tracing JIT to keep this from recurring, so check that it is still in effect (`docker exec pi-nextcloud php -i | grep '^opcache.jit =>'` should report `disable`); if it is, suspect APCu or the redis and imagick extensions instead.
 
 **`dig AAAA` returns nothing for a stack hostname on the LAN.** Expected: Pi-hole has an A record for `*.<HOST_NAME>` and dnsmasq answers AAAA for those names with `NODATA-IPv6` rather than forwarding, so LAN clients using it take the IPv4 path deliberately. See [Networking → IPv6](NETWORKING.md#what-stays-ipv4-and-why).
 
