@@ -5,6 +5,10 @@
 # the two cannot drift. Takes no arguments, so neither caller can ask for a
 # different start than the other.
 #
+# Which hooks run, and in what order, is scripts/run-hooks.sh — CI runs the same
+# two phases against the stack it starts, and a list kept in both places is a
+# list that only one of them maintains.
+#
 # Host-only, never mounted into a container, so sourcing lib.sh is fine here.
 
 set -eu
@@ -49,96 +53,6 @@ if profiles_have stremio-lan && { profiles_have stremio || profiles_have all; };
     die "COMPOSE_PROFILES lists both stremio and stremio-lan: same server, two networking modes, one data volume - keep only one"
 fi
 
-# --- The sequence ---
-#
-# An entry is "script.sh", or "service:script.sh" to gate it on that optional
-# service being selected.
-
-# Blocking: nothing should start against a half-written configuration.
-PRE_START_HOOKS='
-authelia-pre-start.sh
-headscale-pre-start.sh
-backrest-pre-start.sh
-ntfy-pre-start.sh
-vaultwarden:vaultwarden-pre-start.sh
-qbittorrent:qbittorrent-pre-start.sh
-prowlarr:prowlarr-pre-start.sh
-kapowarr:kapowarr-pre-start.sh
-kavita:kavita-pre-start.sh
-shelfmark:shelfmark-pre-start.sh
-audiobookshelf:audiobookshelf-pre-start.sh
-nextcloud:nextcloud-pre-start.sh
-llama-cpp:llama-cpp-pre-start.sh
-stremio-lan:stremio-lan-pre-start.sh
-comet:comet-pre-start.sh
-n8n:n8n-pre-start.sh
-'
-
-# Best-effort: these need their service answering, and a slow one must not fail
-# the start. All idempotent, so the next run picks up whatever was missed.
-POST_START_HOOKS='
-postgres-bootstrap.sh
-headscale-init.sh
-beszel-agent:beszel-agent-bootstrap.sh
-dockhand:dockhand-oidc-bootstrap.sh
-nextcloud:nextcloud-oidc-bootstrap.sh
-pihole-bootstrap.sh
-qbittorrent:qbittorrent-bootstrap.sh
-prowlarr:prowlarr-bootstrap.sh
-kapowarr:kapowarr-bootstrap.sh
-uptime-kuma:uptime-kuma-bootstrap.sh
-kavita:kavita-oidc-bootstrap.sh
-kavita:kavita-library-bootstrap.sh
-shelfmark:shelfmark-settings-bootstrap.sh
-audiobookshelf:audiobookshelf-bootstrap.sh
-open-webui:open-webui-bootstrap.sh
-homepage-widgets-bootstrap.sh
-'
-
-# run_hooks <blocking|tolerant> <list>
-run_hooks() {
-    _mode="$1"
-    _list="$2"
-
-    # Word splitting on the list is the parse; no entry contains whitespace.
-    # shellcheck disable=SC2086
-    for _entry in $_list; do
-        _service=""
-        _script="$_entry"
-        case "$_entry" in
-            *:*)
-                _service="${_entry%%:*}"
-                _script="${_entry#*:}"
-                ;;
-        esac
-
-        # Gate before the script is looked at: the unit's `run-if-enabled.sh
-        # <svc> <cmd>` returned 0 for a disabled service without reaching it.
-        if [ -n "$_service" ] && ! /bin/sh "$SCRIPT_DIR/run-if-enabled.sh" "$_service"; then
-            log "$_script skipped ($_service disabled)"
-            continue
-        fi
-
-        if [ ! -f "$SCRIPT_DIR/$_script" ]; then
-            hook_problem "$_script is missing"
-            continue
-        fi
-
-        run_hook /bin/sh "$SCRIPT_DIR/$_script"
-    done
-}
-
-# Both read the enclosing run_hooks' mode — the `-` prefix the unit's Exec*
-# lines carried, now carried by which list a hook is in.
-hook_problem() {
-    [ "$_mode" = tolerant ] || die "$1"
-    log "warning: $1 (continuing)"
-}
-
-run_hook() {
-    "$@" || hook_problem "$_script failed"
-}
-
 # `up -d` refuses when a network or volume *definition* changed: compose can
 # only apply that by removing the object, which needs the stack down. Without
 # the fallback an update aborts here, images pulled and host files applied.
@@ -168,12 +82,12 @@ start_containers() {
 # --- Run ---
 
 log "Preparing configuration..."
-run_hooks blocking "$PRE_START_HOOKS"
+/bin/sh "$SCRIPT_DIR/run-hooks.sh" pre-start
 
 log "Starting containers (only what changed is recreated)..."
 start_containers
 
 log "Running bootstraps..."
-run_hooks tolerant "$POST_START_HOOKS"
+/bin/sh "$SCRIPT_DIR/run-hooks.sh" post-start
 
 log "Stack is up"

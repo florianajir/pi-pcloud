@@ -61,6 +61,14 @@ services:
     # else in the stack depends on it being up.
     profiles: [ci-excluded]
 
+  stremio-lan:
+    # Wants an address on the LAN segment, which is a bridge here, and its
+    # pre-start hook checks STREMIO_IP against a subnet a runner does not have.
+    # Named here rather than left out of the selection: tests/ci-profiles.py
+    # computes what CI starts from this file, so "not selected" has to be said
+    # in the one place that says it for every other service too.
+    profiles: [ci-excluded]
+
   # --- open-webui: run without the excluded inference backend ---
   open-webui:
     # depends_on must be reset, not merged: compose would otherwise pull

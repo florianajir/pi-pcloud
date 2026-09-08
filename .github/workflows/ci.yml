@@ -97,7 +97,7 @@ jobs:
     name: Smoke Test Stack Startup
     runs-on: ubuntu-latest
     needs: validate
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       HOST_NAME: test.local
       ADMIN_USER: testuser
@@ -108,23 +108,27 @@ jobs:
       CLOUDFLARE_ZONE_ID: ci-zone-placeholder
       CLOUDFLARE_DNS_API_TOKEN: ci-token-placeholder
       COMPOSE_FILE: compose.yaml:compose.test.yaml
-      # Explicit list, NOT "all": profile lists merge across compose files, and
-      # compose.test.yaml marks CI-unfriendly services (gluetun, headscale,
-      # backrest, ...) with the ci-excluded profile — "all" would re-enable
-      # them. This list is every optional service except those and except
-      # services depending on them (headplane needs headscale; the gluetun
-      # tenants qbittorrent/stremio/kapowarr are out with gluetun), and
-      # reproduces exactly the service set CI started before profiles existed.
-      COMPOSE_PROFILES: >-
-        beszel,uptime-kuma,dockhand,n8n,n8n-runners,immich-machine-learning,
-        immich-server,nextcloud,comet,prowlarr,flaresolverr,kavita,
-        shelfmark,audiobookshelf,vaultwarden,system-tools,open-webui
       COMPOSE_ANSI: never
       COMPOSE_REMOVE_ORPHANS: "1"
       COMPOSE_PROGRESS: quiet
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      # Computed, never listed here: a hand-written list is how a newly added
+      # optional service ends up never started in CI with nothing to report it.
+      # tests/ci-profiles.py reads the merged render and picks one profile per
+      # service compose.test.yaml has not marked ci-excluded — and refuses when
+      # that selection would drag an excluded service in with it, which is how
+      # gluetun once joined the run through shelfmark's profile.
+      - name: Select the services CI can start
+        run: |
+          set -euo pipefail
+          profiles="$(DATA_LOCATION=/tmp/pi-pcloud-ci-data COMPOSE_PROFILES=all,stremio-lan,ci-excluded \
+            docker compose --env-file /dev/null config --format json \
+            | python3 tests/ci-profiles.py)"
+          echo "COMPOSE_PROFILES=${profiles}" >> "$GITHUB_ENV"
+          echo "CI will start these profiles: ${profiles}"
 
       - name: Create CI .env
         run: |
@@ -139,35 +143,32 @@ jobs:
           CLOUDFLARE_ZONE_ID=ci-zone-placeholder
           CLOUDFLARE_DNS_API_TOKEN=ci-token-placeholder
           DATA_LOCATION=/tmp/pi-pcloud-ci-data
+          # Defined but empty, which is what an install without native IPv6 or
+          # hairpin NAT has. Left out entirely, compose warns about both on
+          # every single call and buries the log it is meant to help read.
+          HOST_LAN_SUBNET6=
+          WAN_HAIRPIN_IP=
           EOF
+          # The same line a real install carries, so run-if-enabled.sh gates the
+          # hooks below on the selection rather than on its legacy fallback.
+          echo "COMPOSE_PROFILES=${COMPOSE_PROFILES}" >> .env
           rm -rf /tmp/pi-pcloud-ci-data
 
-      - name: Render generated configs for CI
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # scripts/run-hooks.sh, not a list of its own: CI kept one for a year and
+      # it drifted, so Prowlarr started here with no config.xml (the first-run
+      # wizard, not the External auth a real install gets) and ntfy and Uptime
+      # Kuma with no ntfy.env at all.
+      - name: Render generated configs, the way the boot sequence does
         run: |
           set -euo pipefail
-          sh ./scripts/authelia-pre-start.sh
-          sh ./scripts/headscale-pre-start.sh
-          # vaultwarden is in COMPOSE_PROFILES above, and its ADMIN_TOKEN digest is a
-          # bind-mounted file: without this the daemon would create a directory there.
-          sh ./scripts/vaultwarden-pre-start.sh
-          # Renders config/shelfmark/shelfmark.env and the download destinations.
-          # Its Prowlarr/qBittorrent blocks no-op here (neither has run yet), which
-          # is the degraded path worth exercising.
-          sh ./scripts/shelfmark-pre-start.sh
-          # Creates audiobookshelf's /config and /metadata, and the audiobook
-          # folder it shares with shelfmark.
-          sh ./scripts/audiobookshelf-pre-start.sh
-          # comet is in COMPOSE_PROFILES above. Without this its env_file is absent
-          # (required: false), CONFIGURE_PAGE_PASSWORD is unset, and Comet drops the
-          # /s/<PUBLIC_API_TOKEN>/ prefix that comet-public@docker routes on - so the
-          # smoke test would exercise a configuration no real install ever runs.
-          sh ./scripts/comet-pre-start.sh
-          # n8n and n8n-runners are both in COMPOSE_PROFILES above. Without this
-          # their env_file is absent (required: false), so N8N_RUNNERS_AUTH_TOKEN
-          # is unset on both sides and the runner cannot authenticate to the task
-          # broker - it never reports healthy. There is deliberately no default
-          # for it in compose.yaml any more.
-          sh ./scripts/n8n-pre-start.sh
+          sh ./scripts/run-hooks.sh pre-start
 
           # Make all generated files world-readable so docker compose (and the Docker
           # daemon) can open env_files regardless of the runner's umask or ownership.
@@ -181,19 +182,17 @@ jobs:
           test -f ./config/headscale/config.yaml
           test -f ./config/headscale/policy.hujson
 
-      - name: Log in to ghcr.io
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
       - name: Pull images
-        env:
-          # Override the job-wide quiet progress so a failing pull names its image.
-          COMPOSE_PROGRESS: plain
         run: |
           set -euo pipefail
+          # Deliberately no COMPOSE_PROGRESS override: plain progress prints one
+          # line per refresh per layer, which buries the log, and the job-wide
+          # quiet still lets the daemon's error name the image that failed.
+          #
+          # The runner's free space is printed because it has run out here
+          # before, on immich-machine-learning's torch layers, and "failed to
+          # register layer" reads like a registry fault until you see the disk.
+          df -h /
           for attempt in 1 2 3; do
             if docker compose pull --ignore-buildable --policy missing; then
               exit 0
@@ -205,33 +204,74 @@ jobs:
           echo "::error::Image pull failed after 3 attempts"
           exit 1
 
-      - name: Start stack and run smoke checks
+      - name: Start the stack
         run: |
           set -euo pipefail
           docker compose up -d --wait --wait-timeout 360 --pull missing --yes
           docker compose ps
 
-          docker compose exec -T traefik \
-            traefik healthcheck --ping >/dev/null
-          code=""
-          for _ in $(seq 1 12); do
-            code="$(docker compose exec -T nextcloud \
-              curl -sS -o /dev/null -w '%{http_code}' http://localhost/status.php | tr -d '\r\n')"
-            if [ "$code" = "200" ] || [ "$code" = "503" ]; then
-              break
-            fi
-            sleep 5
-          done
-          if [ "$code" != "200" ] && [ "$code" != "503" ]; then
-            echo "Unexpected Nextcloud status.php HTTP code after retries: $code" >&2
+          # A floor, not a count: a profile selection that half-breaks still
+          # starts *something*, and every check below would pass having looked
+          # at four containers.
+          started="$(docker compose ps --services | wc -l)"
+          echo "started ${started} services"
+          if [ "${started}" -lt 24 ]; then
+            echo "::error::only ${started} services started, expected at least 24"
             exit 1
           fi
-          docker compose exec -T immich-server \
-            curl -fsS http://localhost:2283/api/server/ping >/dev/null
+
+      # Nextcloud's CI healthcheck accepts 503 because the first database
+      # install takes longer than the start period, so `--wait` passing says
+      # nothing about whether it finished. This does: installed:true is the only
+      # answer that means the schema is in place.
+      - name: Check Nextcloud finished installing
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 24); do
+            body="$(docker compose exec -T nextcloud \
+              curl -fsS http://localhost/status.php 2>/dev/null || true)"
+            case "${body}" in
+              *'"installed":true'*)
+                echo "${body}"
+                exit 0
+                ;;
+            esac
+            sleep 5
+          done
+          echo "::error::Nextcloud never reported installed:true"
+          docker compose exec -T nextcloud curl -sS -i http://localhost/status.php || true
+          exit 1
+
+      # The one thing `up --wait` cannot see: every healthcheck it ran talked to
+      # a container on its own port, and none of them went through Traefik.
+      - name: Probe the reverse proxy
+        run: sh ./tests/routing-smoke.sh
+
+      # The other half of the boot sequence. Blocking, unlike on a real boot: a
+      # bootstrap that cannot finish is what this is here to catch, where on the
+      # Pi it is a slow service that the next start picks up.
+      - name: Run the bootstraps the boot sequence runs
+        env:
+          # headscale is ci-excluded, so there is no container for its init to
+          # talk to; pihole-bootstrap downloads twenty blocklists and updates
+          # gravity, which is a network flake looking for somewhere to happen.
+          HOOKS_SKIP: headscale-init.sh pihole-bootstrap.sh
+        run: sh ./scripts/run-hooks.sh post-start blocking
+
+      # Every one of them claims to be idempotent — they run on every single
+      # boot — and nothing has ever checked it. A second pass that changes
+      # something, or fails on what the first pass wrote, fails here.
+      - name: Run them again, to prove they are idempotent
+        env:
+          HOOKS_SKIP: headscale-init.sh pihole-bootstrap.sh
+        run: sh ./scripts/run-hooks.sh post-start blocking
 
       - name: Collect logs on failure
         if: failure()
-        run: docker compose logs --timestamps
+        run: |
+          df -h /
+          docker compose ps --all
+          docker compose logs --timestamps
 
       - name: Tear down stack
         if: always()
