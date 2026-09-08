@@ -132,6 +132,10 @@ preflight: check-env
 	@echo "✔ Docker OK"
 	@if mount | grep -q ' type cgroup2 '; then echo "✔ cgroup v2"; else echo "ℹ legacy cgroup"; fi
 	@if docker run --rm -m 32m busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0 sh -c 'cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null' | grep -qE '33554432|32'; then echo "✔ memory limits enforced"; else echo "⚠ memory limits NOT enforced"; fi
+	@# A host with IPv6 but no delegated prefix needs nothing - the allowlist entry
+	@# stays empty and everything runs over IPv4. A kernel with IPv6 compiled out or
+	@# switched off is the one that cannot start the stack as it stands.
+	@if [ -e /proc/net/if_inet6 ]; then echo "✔ kernel has IPv6"; else 		echo "⚠ kernel has no IPv6 (ipv6.disable=1?)"; 		echo "   Docker cannot create a network with an IPv6 subnet, and docker-proxy"; 		echo "   cannot bind [::]:443, so the stack will not start as it stands."; 		echo "   docs/NETWORKING.md, 'A host with no IPv6 at all', lists what to remove."; 	fi
 	@echo "Done"
 
 install: check-env install-system

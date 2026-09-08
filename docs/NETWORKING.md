@@ -264,6 +264,21 @@ Two steps, in this order — the reverse degrades remote access.
 Publishing before opening the pinhole makes every off-LAN client try IPv6 and fail. Left empty,
 public DNS keeps A records only while IPv6 still works from the LAN.
 
+#### A host with no IPv6 at all
+
+Having IPv6 but no delegated prefix needs nothing: `HOST_LAN_SUBNET6` stays empty, no IPv6 client is
+allowlisted, and everything runs over IPv4 as before.
+
+A kernel with IPv6 compiled out or switched off (`ipv6.disable=1`, no `/proc/net/if_inet6`) is a
+different case: Docker cannot create a network with an IPv6 subnet, and `docker-proxy` cannot bind
+`[::]:443`. `make preflight` reports it. Three edits make the stack IPv4-only again:
+
+- the three `"[::]:…"` entries in traefik's `ports:`
+- the `ingress6:` attachment in traefik's `networks:`, and the `ingress6:` network definition
+- `enable_ipv6` and the `fd00:31:242::/64` subnet on `egress_ddns`
+
+Nothing else in the stack has an IPv6 address, so nothing else has to change.
+
 **If the line later loses IPv6, unset it again.** ddns-updater can only publish an address it can
 observe, so it leaves the AAAA records at their last value and nothing reports that as wrong — its
 healthcheck compares each record against a resolver, which still agrees. Off-LAN clients then pay a
