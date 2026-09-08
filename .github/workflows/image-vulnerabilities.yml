@@ -20,6 +20,14 @@ on:
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
+  # TEMPORARY, to be removed before this merges. A schedule only fires on the
+  # default branch and workflow_dispatch is only offered there, so this is the
+  # only way to prove the whole path - list, scan, merge, upload - before it is
+  # the thing that is supposed to be watching.
+  pull_request:
+    paths:
+      - ".github/workflows/image-vulnerabilities.yml"
+      - "scripts/sarif-merge.py"
 
 concurrency:
   group: image-vulnerabilities
@@ -105,6 +113,12 @@ jobs:
           # --image-src remote, so Trivy streams what it needs from the registry
           # instead of `docker pull`ing thirty-four images into a runner that has
           # run out of disk on this stack's images before.
+          #
+          # </dev/null on the docker run: the loop is reading images.txt on
+          # stdin, and a docker subcommand that attaches stdin eats the rest of
+          # it and leaves one image scanned and a green run. `docker run` without
+          # -i does not, but `docker compose exec -T` does, and that cost this
+          # repository a silently truncated probe loop already.
           while read -r image; do
             slug="$(printf '%s' "${image}" | tr -c 'A-Za-z0-9._-' '_')"
             scanned=""
@@ -120,7 +134,7 @@ jobs:
                     --ignore-unfixed \
                     --format sarif \
                     --output "/out/${slug}.sarif" \
-                    --quiet "${image}"; then
+                    --quiet "${image}" </dev/null; then
                 scanned=1
                 break
               fi
