@@ -48,6 +48,17 @@ NO_SWAP = set()
 # Where the compose service name and the postgres role name differ.
 PG_ROLE_ALIAS = {"immich-server": "immich"}
 
+# Networks allowed an IPv6 subnet, and the reason each one is safe to have.
+# Everything else stays IPv4-only: an IPv6 address on a shared segment reaches
+# gluetun, whose network namespace qbittorrent, stremio and kapowarr share, and
+# their traffic would then leave outside the VPN tunnel on the residential
+# address. Named here rather than skipped by a rule, because the file reads as
+# an ordinary subnet either way.
+IPV6_NETWORKS = {
+    "ingress6": "traefik alone, and the IPv6 ingress",
+    "egress_ddns": "ddns-updater alone, which has to observe its own public v6 address",
+}
+
 # Floors, not just non-empty checks: a profile list that half-breaks still
 # renders *something*, and every assertion below would pass having inspected
 # four services. Raise these when the stack grows well past them, and never
@@ -91,6 +102,7 @@ def project(service):
     """
     return {
         "deploy_keys": sorted((service.get("deploy") or {}).keys()),
+        "ports": [port for port in (service.get("ports") or []) if isinstance(port, dict)],
         "mem_limit": bytes_of(service.get("mem_limit")),
         "mem_reservation": bytes_of(service.get("mem_reservation")),
         "memswap_limit": bytes_of(service.get("memswap_limit")),
@@ -204,6 +216,26 @@ def main():
             continue
         if "middlewares" not in spec:
             report("ROUTER", f"{router} ({spec['_service']}) is routed publicly with no middlewares")
+
+    # A bare "443:443" binds [::] as well as 0.0.0.0, and an IPv6 listener in
+    # front of a container with no IPv6 address is served by userland
+    # docker-proxy, which rewrites the client address to a Docker gateway one -
+    # inside ALLOW_IP_RANGES, so lan@docker admits every IPv6 caller. Measured.
+    for name, service in sorted(services.items()):
+        for port in service["ports"]:
+            if not port.get("host_ip"):
+                published = port.get("published") or port.get("target")
+                report("PORT", f"{name} publishes {published} with no host address, so it binds [::] too")
+
+    for name, network in sorted((config.get("networks") or {}).items()):
+        subnets = [
+            entry.get("subnet") or ""
+            for entry in ((network.get("ipam") or {}).get("config") or [])
+        ]
+        if not network.get("enable_ipv6") and not any(":" in subnet for subnet in subnets):
+            continue
+        if name not in IPV6_NETWORKS:
+            report("NETWORK", f"{name} enables IPv6, which would put gluetun's namespace outside the VPN")
 
     roles = postgres_roles(repo_dir)
     if roles is None:

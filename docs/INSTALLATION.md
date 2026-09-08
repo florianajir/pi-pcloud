@@ -6,6 +6,7 @@
 - A **domain on Cloudflare** (free tier) and an API token with `Zone → DNS → Edit` on it — dashboard → **API Tokens** → Create token.
 - **Docker and the Compose plugin.** The installer offers to install them if missing.
 - Your router forwarding **`443/tcp`** to the Pi. Optionally `41641/udp` and `3478/udp` for direct VPN links.
+- **For IPv6, a firewall rule rather than a forward** — nothing is translated. Allow inbound `443/tcp` (and `443/udp`) to the Pi in your router's IPv6 firewall, then set `IPV6_PUBLIC_RECORDS=1`. Optional; IPv6 works from the LAN either way. Do not open the Pi wholesale — see [Networking → IPv6](NETWORKING.md#ipv6).
 
 ## Guided install
 

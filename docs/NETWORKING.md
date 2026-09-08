@@ -175,33 +175,115 @@ closing the tab is not enough.
 
 ### IPv6
 
-The stack is IPv4-only by design, and two things follow from that as soon as the router starts
-announcing IPv6.
+Traefik serves `80`, `443/tcp` and `443/udp` over IPv6, and it is the **only** container with an
+IPv6 address. That is the design: nothing else has one, so nothing else is reachable over IPv6
+whatever the router's firewall says.
 
-**A client can be taken off Pi-hole without its DNS settings changing.** The router advertises
-itself as a resolver in its Router Advertisements (RDNSS), and an IPv6-capable client uses that list
-even when Pi-hole is set by hand for IPv4 — measured on iOS, where the manual per-network DNS entry
-did not displace it. The client resolves through the router, gets the WAN address and lands on the
-hairpin `403` above. The same thing is visible from the Pi itself: `/etc/resolv.conf` picks up the
-router's global and link-local addresses alongside its IPv4 one. `WAN_HAIRPIN_IP` covers this case,
-which is the main reason to prefer it over per-device DNS.
+**Why one address rather than a dual-stack `frontend`.** A v6 subnet on `frontend` would hand a
+global-egress address to `gluetun`, whose namespace `qbittorrent`, `stremio` and `kapowarr` share —
+their traffic would leave outside the tunnel, on the residential address, and nothing here blocks
+that (`FIREWALL_OUTBOUND_SUBNETS` is unset). Two smaller regressions follow it: healthchecks that
+dial `localhost` can start resolving `::1` against a v4-only listener, and `internalapi-allow` and
+Nextcloud's `TRUSTED_PROXIES` are single `/32`s that would stop matching. So Traefik joins one extra
+network, `ingress6`, of which it is the sole member.
 
-**Every published port is bound to `0.0.0.0` explicitly.** A bare `"443:443"` also binds `[::]`,
-and because no Docker network here has an IPv6 subnet, that listener is served by userland
-`docker-proxy` — which replaces the client's address with a Docker gateway address. `ALLOW_IP_RANGES`
-contains `172.30.0.0/16`, so `lan@docker` admitted **every** IPv6 caller. Measured on this host: an
-IPv6 request to the Pi's global address returned `302` and logged `"ClientHost":"172.30.12.1"`,
-where the same request over the IPv4 hairpin correctly returned `403`. Only the router's IPv6
-firewall was holding that shut. The same rewrite would make Pi-hole an open resolver
-(`FTLCONF_dns_listeningMode` is `all`) and would have Headscale's STUN server report a Docker
-address back to its clients.
+**What that buys.** With a v6 subnet on the network Docker programs an `ip6tables` DNAT rule instead
+of falling back to userland `docker-proxy`, so the client's real address survives. Measured here:
 
-Doing IPv6 properly means the daemon (`"ipv6": true`, `"ip6tables": true`) plus a subnet on every
-network that needs one, which restores the real source address and would let the allowlist carry
-the delegated prefix instead. It is worth having — IPv6 has no NAT, so the hairpin problem
-disappears outright, and a LAN client reaches a global address directly over the local link without
-the router's firewall being involved — but it is a daemon-wide change and the delegated prefix is
-not guaranteed stable. Until then, v4-only is what keeps the allowlist meaningful.
+| | logged `ClientHost` | verdict on a gated route |
+|---|---|---|
+| `[::]` served by docker-proxy | `172.30.12.1` (a Docker gateway) | `302` — **admitted**, `ALLOW_IP_RANGES` contains `172.30.0.0/16` |
+| DNAT to `ingress6` | `2001:db8:1:200:…` (the caller) | `403` off-prefix, `302` from the LAN prefix |
+
+Only the router's IPv6 firewall was holding the first row shut. Hence every port is written out per
+family (`"0.0.0.0:443:443"` *and* `"[::]:443:443"`) rather than left bare.
+
+**One daemon key, and no sysctl.** Both IPv6 subnets are pinned, so no IPv6 `default-address-pools`
+entry is needed. `install.sh` does write `"ip6tables": true` — it has been the default since Docker
+27, but the `[::]` publishes rest on it, so it is stated rather than inherited; on a host that
+already has a `daemon.json` the installer warns instead of rewriting it, and warns too when the
+running daemon is old enough to default it off. `net.ipv6.conf.all.forwarding` is already set for
+Tailscale, and NetworkManager processes Router Advertisements in user space, so the RA-derived
+address is renewed regardless of the kernel's `accept_ra` — setting it would be a knob nothing
+reads.
+
+**Addressing.** Both subnets are ULAs (`fd00::/8` — the counterpart of `172.30.0.0/16`) mirroring
+the IPv4 numbering: `172.30.15.0/24` → `fd00:30:15::/64`, `172.31.242.0/24` → `fd00:31:242::/64`.
+RFC 4193 asks for a random Global ID; mnemonic numbering is chosen instead because these prefixes
+have to be read in an allowlist. The asymmetry is preserved: `egress_*` sits in `fd00:31:*`, outside
+the allowlist, as its `172.31.*` sits outside `172.30.0.0/16`.
+
+**The allowlist gains two kinds of entry.** Two fixed members in `ALLOW_IP_RANGES` — `::1/128` and
+`fd7a:115c:a1e0::/48`, the counterparts of `127.0.0.1/32` and `100.64.0.0/10` — and
+`HOST_LAN_SUBNET6`, appended separately because the ISP owns it and it changes when the line
+reconnects.
+
+`172.30.0.0/16` gets **no** IPv6 counterpart, deliberately. Traefik is the only container with an
+IPv6 address and it never calls itself, so the sole source that could arrive from `fd00:30:15::/64`
+is the bridge gateway — which is precisely what `docker-proxy` substitutes when the IPv6 DNAT is
+missing. Allowlisting it would turn that failure into an open door rather than a `403`. The cost is
+that a request to `[::1]` is refused where `127.0.0.1` is admitted; nothing in the stack makes one. `wan-allowlist-sync.sh` reads it off the LAN interface's routing table on
+the same 15-minute timer as `WAN_HAIRPIN_IP`, refusing anything that is not global unicast
+(`2000::/3`) or longer than a `/64`. It admits what `192.168.1.0/24` admits: every device on your
+LAN. A source address cannot be forged through a TCP handshake, so only devices actually on the link
+present one from that range.
+
+**The hairpin problem does not exist here.** With no NAT a LAN client reaches the Pi's global
+address over the local link, so there is nothing to SNAT and no `403`. `WAN_HAIRPIN_IP` is IPv4 only.
+
+#### What stays IPv4, and why
+
+- **Pi-hole's `:53`.** `FTLCONF_dns_listeningMode` is `all`, so FTL answers any source it can see,
+  and IPv6 has no NAT in front of it: an open resolver as soon as the router's firewall is opened
+  past `:443`. No client could use it anyway — the router advertises **itself** as the IPv6 resolver
+  (RDNSS) and cannot be told otherwise (measured on iOS, where the manual per-network DNS entry did
+  not displace it), and Headscale pushes an IPv4 nameserver. Filtering ads over IPv6 on the LAN is a
+  limitation of the router, not of this stack.
+- **Headscale's STUN `:3478`.** It has no IPv6 address, so a `[::]` publish would fall back to
+  docker-proxy and report a Docker gateway address to its own clients.
+- **Pi-hole's answers for `*.<HOST_NAME>`.** `address=/<HOST_NAME>/<lan-ip>` configures an A record
+  only, and dnsmasq then answers AAAA for those names from config with `NODATA-IPv6` rather than
+  forwarding (measured in `pihole.log`). A LAN client using Pi-hole keeps the IPv4 path, which
+  works; one the router took off Pi-hole resolves publicly and, with AAAA published, reaches the Pi
+  directly over the link instead of hairpinning into a `403`.
+- **The `internal:` app segments and the `lan` macvlan.** East-west traffic already has an IPv4 path
+  to both ends, and a macvlan would need a subnet carved from the delegated prefix, which is not
+  stable.
+- **Unbound's transport** (`do-ip6: no`). A real improvement, independent of this, and out of scope.
+
+#### Making it reachable from the internet
+
+Two steps, in this order — the reverse degrades remote access.
+
+1. **Allow inbound `443/tcp` (and `443/udp` for HTTP/3) to the Pi in the router's IPv6 firewall.**
+   A firewall rule, not a port forward: nothing is translated, so the rule names a device and a
+   port. **Name the port, never just the Pi** — `sshd` listens on `[::]:22` and `tailscaled` on
+   `41641/udp`, and with no NAT in front of them a wholesale rule publishes SSH to the internet.
+2. **Set `IPV6_PUBLIC_RECORDS=1`**, which adds the AAAA records to ddns-updater's configuration.
+
+Publishing before opening the pinhole makes every off-LAN client try IPv6 and fail. Left empty,
+public DNS keeps A records only while IPv6 still works from the LAN.
+
+#### A host with no IPv6 at all
+
+Having IPv6 but no delegated prefix needs nothing: `HOST_LAN_SUBNET6` stays empty, no IPv6 client is
+allowlisted, and everything runs over IPv4 as before.
+
+A kernel with IPv6 compiled out or switched off (`ipv6.disable=1`, no `/proc/net/if_inet6`) is a
+different case: Docker cannot create a network with an IPv6 subnet, and `docker-proxy` cannot bind
+`[::]:443`. `make preflight` reports it. Three edits make the stack IPv4-only again:
+
+- the three `"[::]:…"` entries in traefik's `ports:`
+- the `ingress6:` attachment in traefik's `networks:`, and the `ingress6:` network definition
+- `enable_ipv6` and the `fd00:31:242::/64` subnet on `egress_ddns`
+
+Nothing else in the stack has an IPv6 address, so nothing else has to change.
+
+**If the line later loses IPv6, unset it again.** ddns-updater can only publish an address it can
+observe, so it leaves the AAAA records at their last value and nothing reports that as wrong — its
+healthcheck compares each record against a resolver, which still agrees. Off-LAN clients then pay a
+connection timeout against a dead address on every visit. `HOST_LAN_SUBNET6` emptying itself on the
+15-minute timer is the signal to watch for.
 
 ## Casting to a DLNA renderer
 
@@ -237,6 +319,10 @@ a media server that serves files, not this.
 
 Containers use Docker's embedded resolver (`127.0.0.11`), which forwards to the host's configuration. Two exceptions pin public resolvers directly in `compose.yaml` (`dns: 1.1.1.1`): **`prowlarr`** and **`flaresolverr`**, so indexer lookups neither depend on nor are filtered by Pi-hole.
 
+**`ddns-updater` is a third**, at the application level (`RESOLVER_ADDRESS: 1.1.1.1:53`) since only the names in its own settings need it. It looks a name up *before* writing it, so the first AAAA publication seeds a `NODATA` into the router's negative cache, and its healthcheck — which verifies each record by resolving it — then reports a mismatch on a correct record. Measured: `any.<HOST_NAME>` returned nothing through the router and the right address at `1.1.1.1`, five failed checks before the resolver was pinned.
+
+Unrelated to IPv6 and not worth engineering around: when an address genuinely changes, the old one stays cached for its TTL, so ddns-updater reads unhealthy for a few minutes. That now applies to a prefix change too.
+
 ## DNS on the VPN
 
 Headscale pushes DNS to every client (`config/headscale/config.yaml`):
@@ -257,22 +343,23 @@ Since Pi-hole resolves `*.<HOST_NAME>` to the Pi, every service works from the V
 | `dns_internal` | `172.30.53.0/24`, no gateway | Pi-hole, Unbound | Nothing else can query Unbound |
 | `dockhand` | `172.30.13.0/24` (Traefik `.250`) | Traefik, Dockhand | Dockhand reads the Docker socket, so `:3000` is a path to every container on the host; it is not left on a segment with ~20 neighbours. Also on `ntfy`, for its OOM/unhealthy notifications |
 | `vaultwarden_web` | `172.30.14.0/24` (Traefik `.250`) | Traefik, Vaultwarden | The vault has no east-west consumer at all. Traefik's address is static here because Vaultwarden's `extra_hosts` names it by number, so the OIDC discovery call resolves |
-| `egress_unbound`, `egress_immich`, `egress_ddns` | `172.31.240-242.0/24` | one container each | Outbound-only internet access. One shared `dns_egress` used to hold Unbound and immich-machine-learning, which let the model downloader open `unbound:5335` for no functional reason. Pinned outside `172.30.0.0/16` on purpose: these have unrestricted egress and no peer, and an address inside `ALLOW_IP_RANGES` would be a hairpin route to every LAN-only service |
+| `egress_unbound`, `egress_immich`, `egress_ddns` | `172.31.240-242.0/24`; `egress_ddns` also `fd00:31:242::/64` | one container each | Outbound-only internet access. One shared `dns_egress` used to hold Unbound and immich-machine-learning, which let the model downloader open `unbound:5335` for no functional reason. Pinned outside `172.30.0.0/16` on purpose: these have unrestricted egress and no peer, and an address inside `ALLOW_IP_RANGES` would be a hairpin route to every LAN-only service, and the IPv6 numbering keeps that asymmetry. `egress_ddns` has IPv6 because ddns-updater has to observe its own public v6 address to publish an AAAA |
 | `lan` | macvlan on `HOST_LAN_PARENT` | Pi-hole, Stremio (`stremio-lan` profile only) | Direct LAN presence — DNS, and SSDP/mDNS cast discovery |
 | `n8n_runners` | bridge | n8n, n8n-runners | Task-runner traffic |
+| `ingress6` | `172.30.15.0/24` + `fd00:30:15::/64` (Traefik `.250` / `::250`) | Traefik only | The IPv6 ingress, and the stack's only IPv6 address — so the IPv6 DNAT can only ever target it, Docker programming those rules per address family. Which network serves the *v4* publishes is an unpinned tie-break, which is why the `/24` is pinned inside `172.30.0.0/16` too. See [IPv6](#ipv6) |
 
 ## Ports
 
-| Port | Protocol | Service | Scope |
-|------|----------|---------|-------|
-| 80 | TCP | Traefik | HTTP → HTTPS redirect only |
-| 443 | TCP | Traefik | HTTPS for every web service |
-| 443 | UDP | Traefik | HTTP/3 (QUIC). `--entrypoints.websecure.http3=true` advertises it via `Alt-Svc`, which browsers cache for ~30 days; without the UDP listener every connection retried QUIC, timed out and fell back |
-| 53 | TCP/UDP | Pi-hole | Host + macvlan IP, for LAN and VPN clients |
-| 3478 | UDP | Headscale | STUN, via the embedded DERP relay |
-| 41641 | UDP | Tailscale (host network) | WireGuard |
+| Port | Protocol | Family | Service | Scope |
+|------|----------|--------|---------|-------|
+| 80 | TCP | IPv4 + IPv6 | Traefik | HTTP → HTTPS redirect only |
+| 443 | TCP | IPv4 + IPv6 | Traefik | HTTPS for every web service |
+| 443 | UDP | IPv4 + IPv6 | Traefik | HTTP/3 (QUIC). `--entrypoints.websecure.http3=true` advertises it via `Alt-Svc`, which browsers cache for ~30 days; without the UDP listener every connection retried QUIC, timed out and fell back |
+| 53 | TCP/UDP | IPv4 only | Pi-hole | Host + macvlan IP, for LAN and VPN clients. IPv6 would be an open resolver with no client — see [IPv6](#what-stays-ipv4-and-why) |
+| 3478 | UDP | IPv4 only | Headscale | STUN, via the embedded DERP relay. IPv6 would report a Docker address to its own clients |
+| 41641 | UDP | IPv4 + IPv6 | Tailscale (host network) | WireGuard. `tailscaled` binds a socket in each family; unlike the rows above this is the host's own listener, not a Docker publish |
 
-Each of these is published on `0.0.0.0` rather than as a bare port, so Docker does not also open an IPv6 listener alongside it — see [IPv6](#ipv6) for why that is load-bearing rather than cosmetic.
+Each is written out per family (`"0.0.0.0:443:443"`, `"[::]:443:443"`) rather than left as a bare `"443:443"`, which binds both: an IPv6 listener is only safe once the container behind it has an IPv6 address to DNAT to, and only Traefik has one. See [IPv6](#ipv6).
 
 Everything else — Postgres `5432`, Redis `6379`, LDAP `3890`, every app port — is `expose`-only inside Docker networks and never published on the host.
 
@@ -327,9 +414,21 @@ network's gateway, `172.30.11.1`.
 ddns-updater maintains exactly two records against your zone, pointed at your current public IP.
 
 ```
-<HOST_NAME>      A   <your-public-ip>
-*.<HOST_NAME>    A   <your-public-ip>
+<HOST_NAME>      A   <your-public-ipv4>
+*.<HOST_NAME>    A   <your-public-ipv4>
 ```
+
+With `IPV6_PUBLIC_RECORDS=1` it maintains four, the same two names in both families:
+
+```
+<HOST_NAME>      AAAA   <the-pi's-global-ipv6>
+*.<HOST_NAME>    AAAA   <the-pi's-global-ipv6>
+```
+
+Note what the AAAA points at: the Pi itself, not the router. With no NAT there is no WAN address to
+publish — which is also why a LAN client resolving publicly still reaches it over the local link.
+Only set this once the router permits inbound `443`; see
+[IPv6](#making-it-reachable-from-the-internet).
 
 Nothing else is created automatically. The one case for adding a record by hand is a device that
 cannot be pointed at Pi-hole — see [above](#devices-that-cannot-be-pointed-at-pi-hole). Because

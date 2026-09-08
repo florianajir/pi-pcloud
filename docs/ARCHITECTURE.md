@@ -95,7 +95,10 @@ Containers only share a network when they have to talk:
 
 ```mermaid
 flowchart TB
-    subgraph frontend["frontend — 172.30.11.0/24"]
+    subgraph ingress6_net["ingress6 — 172.30.15.0/24 + fd00:30:15::/64"]
+        TraefikV6["traefik (::250) — the only IPv6 address in the stack"]
+    end
+    subgraph frontend["frontend — 172.30.11.0/24, IPv4 only"]
         Traefik["traefik (.250)"]
         Services["every routed service"]
         Gluetun["gluetun + qbittorrent,\nkapowarr, stremio\n(shared namespace)"]
@@ -115,12 +118,13 @@ flowchart TB
         PH_LAN["pihole's own LAN IP"]
     end
 
+    TraefikV6 -.->|same container| Traefik
     Traefik --> Services
     Traefik -->|forward-auth| AutheliaB
     Services --> App
 ```
 
-The effect: a compromised app container cannot query Unbound directly, cannot reach LLDAP, and cannot see another app's database traffic. The full table of networks, subnets and members is in [Networking](NETWORKING.md#network-isolation).
+The effect: a compromised app container cannot query Unbound directly, cannot reach LLDAP, and cannot see another app's database traffic. `frontend` stays IPv4-only for a related reason: an IPv6 subnet there would give gluetun a global-egress address, and the three containers sharing its namespace would leave the tunnel — so Traefik carries the stack's only IPv6 address, on a network of its own. The full table of networks, subnets and members is in [Networking](NETWORKING.md#network-isolation).
 
 ## Where the data is
 

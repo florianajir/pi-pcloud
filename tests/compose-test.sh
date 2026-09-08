@@ -94,6 +94,15 @@ none "every Postgres-backed service owns a role" POSTGRES
 # policy for months while every container sat at the default cpu.weight.
 none "every resource key is one the kernel actually reads" RESOURCE
 
+# The IPv6 allowlist bypass this stack shipped once: a bare "443:443" also binds
+# [::], and without an IPv6 address behind it docker-proxy rewrites every client
+# source into ALLOW_IP_RANGES.
+none "every published port names a host address" PORT
+
+# An IPv6 subnet on a shared network reaches gluetun, and the three containers
+# sharing its namespace would then leave the VPN tunnel.
+none "only the two single-member networks enable IPv6" NETWORK
+
 # A rendering that half-breaks still returns something, and every check above
 # would pass having inspected four services.
 none "the rendered stack is the expected size" FLOOR
@@ -140,6 +149,12 @@ catches "a public router with no middlewares" ROUTER '{"services": {"exposed": {
 catches "a Postgres-backed service with no role" POSTGRES '{"services":{
   "newthing": {"image": "x:1", "depends_on": {"postgres": {"condition": "service_started"}}}
 }}'
+
+catches "a bare port that also binds [::]" PORT '{"services": {"exposed": {"image": "x:1",
+  "ports": [{"mode": "ingress", "target": 443, "published": "443", "protocol": "tcp"}]}}}'
+
+catches "IPv6 on a network gluetun sits on" NETWORK '{"services": {"x": {"image": "x:1"}},
+  "networks": {"frontend": {"enable_ipv6": true, "ipam": {"config": [{"subnet": "fd00:30:11::/64"}]}}}}'
 
 catches "a rendering that came back nearly empty" FLOOR '{"services": {"lonely": {"image": "x:1"}}}'
 

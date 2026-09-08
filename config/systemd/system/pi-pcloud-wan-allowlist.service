@@ -1,5 +1,5 @@
 [Unit]
-Description=Keep the lan@docker allowlist in step with the WAN address
+Description=Keep the lan@docker allowlist in step with the addresses the ISP owns
 After=docker.service pi-pcloud.service
 Requires=docker.service
 

@@ -73,7 +73,7 @@ under real pressure — see
 
 ### Network
 
-Defaults suit a `192.168.1.0/24` LAN. The installer auto-detects all of these.
+Defaults suit a `192.168.1.0/24` LAN. The installer auto-detects all of these except the two IPv6 entries, owned by a systemd timer and an explicit opt-in.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
@@ -83,10 +83,14 @@ Defaults suit a `192.168.1.0/24` LAN. The installer auto-detects all of these.
 | `PIHOLE_IP` | `192.168.1.250` | Pi-hole's own LAN address — in the subnet, outside the DHCP range |
 | `STREMIO_IP` | `192.168.1.251` | Only for the `stremio-lan` profile — Stremio's own LAN address, so it can discover cast renderers. Same constraints as `PIHOLE_IP`. The installer derives it from the detected subnet on a `/24`; on any other subnet it warns and you set it by hand. An `.env` from before this variable existed has no line for it — `stremio-lan-pre-start.sh` refuses the start and names the fix rather than letting Compose fail with "Invalid address" |
 | `PIHOLE_DNS_UPSTREAMS` | `172.30.53.53#5335;1.1.1.1;9.9.9.9` | Semicolon-separated. dnsmasq load-balances across all of them rather than treating the first as primary, so the public resolvers do see a share of normal traffic — leave only the Unbound entry to stop that. See [Networking](NETWORKING.md#the-dns-pipeline) |
-| `ALLOW_IP_RANGES` | `127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16` | Comma-separated CIDRs allowed to reach the services |
-| `WAN_HAIRPIN_IP` | *(empty)* | Appended to `ALLOW_IP_RANGES`. Set it to your line's public address as a `/32` if your router hairpins — see [Networking](NETWORKING.md#routers-that-cannot-set-the-dhcp-dns-option). Maintained by `pi-pcloud-wan-allowlist.timer` once set, so leave it to the timer rather than editing it back |
+| `ALLOW_IP_RANGES` | `127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd7a:115c:a1e0::/48` | Comma-separated CIDRs allowed to reach the services, both families |
+| `HOST_LAN_SUBNET6` | *(empty)* | Appended to `ALLOW_IP_RANGES`: the IPv6 prefix your ISP delegates to the LAN. No fixed default is possible, so `pi-pcloud-wan-allowlist.timer` reads it off `HOST_LAN_PARENT` and keeps it current — leave it to the timer. Empty means no IPv6 client is allowlisted. See [Networking](NETWORKING.md#ipv6) |
+| `IPV6_PUBLIC_RECORDS` | *(empty)* | Any non-empty value publishes AAAA records for `<HOST_NAME>` and `*.<HOST_NAME>` — Compose can only test for emptiness, so `0` and `false` enable it too; use `1`, and empty to disable. Set it **after** allowing inbound `443/tcp` to the Pi in your router's IPv6 firewall — a firewall rule, not a port forward. Empty leaves public DNS as A records only, IPv6 still working from the LAN |
+| `WAN_HAIRPIN_IP` | *(empty)* | Appended to `ALLOW_IP_RANGES`. IPv4 only — an IPv6 client is never hairpinned. Set it to your line's public address as a `/32` if your router hairpins — see [Networking](NETWORKING.md#routers-that-cannot-set-the-dhcp-dns-option). Maintained by `pi-pcloud-wan-allowlist.timer` once set, so leave it to the timer rather than editing it back |
 
-`ALLOW_IP_RANGES` in order: localhost, your home LAN (**adjust to your network**), the Tailscale allocation, and the Docker internal networks. It drives Traefik's `lan` middleware — see [Security](SECURITY.md#per-service-protection).
+`ALLOW_IP_RANGES` in order: localhost, your home LAN (**adjust to your network**), the Tailscale allocation, and the Docker internal networks — then the same four for IPv6, except the LAN, which `HOST_LAN_SUBNET6` carries instead. `fd7a:115c:a1e0::/48` is the tailnet's IPv6 prefix. The Docker networks have no IPv6 counterpart on purpose: only Traefik has an IPv6 address and it never calls itself, so the one source that could come from `ingress6` is its gateway — which is what `docker-proxy` substitutes when the IPv6 DNAT is missing, and allowlisting it would turn that failure into an open door. It drives Traefik's `lan` middleware — see [Security](SECURITY.md#per-service-protection).
+
+Three services read it, and one does not pick up a later edit: qBittorrent's `WebUI\AuthSubnetWhitelist` is written only when its config file is created. Harmless — it is reached through Traefik, which has the current list.
 
 ### S3 storage
 

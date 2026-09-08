@@ -291,8 +291,15 @@ network that lands outside it makes Traefik answer a bare 403 with nothing in th
 logs to explain it. `install.sh` writes `/etc/docker/daemon.json` with a
 `172.30.128.0/17` base in `/24` chunks: 128 networks, all inside the allowlist,
 and starting at `.128` so auto-allocation can never collide with the subnets
-`compose.yaml` pins by hand (`172.30.11/12/13/14/53`). On an existing host the
+`compose.yaml` pins by hand (`172.30.11/12/13/14/15/53`). On an existing host the
 installer says what to add rather than rewriting the file.
+
+No IPv6 pool is needed alongside it: both IPv6 subnets are pinned in
+`compose.yaml`, so nothing is auto-allocated. The file does gain `"ip6tables":
+true`, stated rather than inherited, because the `[::]` publishes depend on it -
+without it the daemon programs no IPv6 DNAT and `docker-proxy` rewrites every
+client address. On a host that already has a `daemon.json` the installer only
+warns, as it does for the address pool.
 
 ## Accepted risks
 
@@ -336,15 +343,31 @@ stack, and 2FA on every family device was judged the larger cost.
 `lan@docker`, so a compromised one can reach any `lan`-gated router through
 Traefik. Narrowing it means pinning static addresses for Uptime Kuma's probes and
 the tailnet and host gateways; the services behind those routers each have their
-own login, so the gain was judged smaller than the breakage risk.
+own login, so the gain was judged smaller than the breakage risk. It has no IPv6
+counterpart: only Traefik has an IPv6 address and it never calls itself, so the
+one source that could come from `ingress6` is its gateway - the address
+`docker-proxy` substitutes when the IPv6 DNAT is missing. Admitting it would turn
+that failure into an open door instead of a `403`.
 
-This is also why every published port is bound to `0.0.0.0` explicitly. A bare
-`"443:443"` binds `[::]` too, and with no IPv6 subnet on any Docker network that
-listener goes through userland `docker-proxy`, which rewrites the client address
-to a Docker gateway one - inside the range above, so the allowlist admitted every
-IPv6 caller. See [Networking → IPv6](NETWORKING.md#ipv6) for the measurement.
+**`HOST_LAN_SUBNET6` allowlists a globally routable prefix.** It admits what
+`192.168.1.0/24` admits - every device on your LAN. Being routable where private
+IPv4 is not changes nothing: a source address cannot be forged through a TCP
+handshake, so only devices actually on the link present one from that range. Same
+staleness risk as `WAN_HAIRPIN_IP` below, bounded by the same 15-minute timer.
 
-**`WAN_HAIRPIN_IP` allowlists the line's own public address.** It is how a LAN
+**The IPv6 surface is one container, by construction.** Traefik alone has an IPv6
+address, so no other *container* is reachable over IPv6 whatever the router
+allows - a stronger guarantee than a firewall rule, because there is nothing to
+reach. `:53` and `:3478` stay IPv4-only to keep it that way; see
+[Networking → IPv6](NETWORKING.md#ipv6) for the measurements behind both.
+
+That does **not** extend to the host, which is the reason the router rule has to
+name `443` and not the Pi. `sshd` listens on `[::]:22` and `tailscaled` on
+`41641/udp` in both families, and IPv6 has no NAT in front of either. A rule
+opened wholesale to the Pi publishes SSH to the internet.
+
+**`WAN_HAIRPIN_IP` allowlists the line's own public address.** IPv4 only: with no
+NAT, an IPv6 client is never hairpinned. It is how a LAN
 client that resolves through the router instead of Pi-hole gets past `lan@docker`:
 the router hairpins the connection back inside with the source SNAT'd to its WAN
 address. Only a connection that left the LAN is hairpinned, so on a line whose

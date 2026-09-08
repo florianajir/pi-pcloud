@@ -48,9 +48,23 @@ curl -k -o /dev/null -w '%{http_code}\n' -H "Host: vault.<HOST_NAME>" https://12
 curl -k -o /dev/null -w '%{http_code}\n' https://vault.<HOST_NAME>/                        # 403 = allowlist
 ```
 
+**IPv4 works and IPv6 gives 403.** The `"ClientHost"` is a global IPv6 address the allowlist does not cover. `HOST_LAN_SUBNET6` admits your LAN's prefix and the same timer maintains it; empty is the normal cause. Compare the two families:
+
+```bash
+# --resolve, because Pi-hole answers AAAA for *.<HOST_NAME> with NODATA (below),
+# so a plain `curl -6` on a LAN client fails to resolve rather than reporting a status.
+PI6=$(ip -6 addr show scope global | awk '/inet6/{print $2}' | cut -d/ -f1 | head -1)   # on the Pi
+curl -4 -sk -o /dev/null -w 'v4=%{http_code}\n' --resolve homepage.<HOST_NAME>:443:<HOST_LAN_IP> https://homepage.<HOST_NAME>/
+curl -6 -sk -o /dev/null -w 'v6=%{http_code}\n' --resolve "homepage.<HOST_NAME>:443:[$PI6]" https://homepage.<HOST_NAME>/
+```
+
+The reverse split — IPv6 timing out from **outside** while IPv4 works — is the router's IPv6 firewall, not the stack: publishing AAAA does not open inbound `443`.
+
 A split verdict means the client resolved the public address instead of the Pi-hole one and hairpinned back with the WAN source. This is stack-wide, not per-service: every router carries `lan`, so check a second hostname before suspecting one container. Browser DNS-over-HTTPS ("Secure DNS") is a common trigger, since it silently bypasses Pi-hole even on the LAN — see [DNS](#dns).
 
 **A service returns a generic 404 from Traefik.** Its router is gone. For qBittorrent, Prowlarr, Kapowarr and Stremio the usual cause is **gluetun being unhealthy** — they share its network namespace, so when it drops, all of their Traefik routes vanish at once rather than erroring individually. `docker compose ps gluetun` and `docker compose logs gluetun`.
+
+**`dig AAAA` returns nothing for a stack hostname on the LAN.** Expected: Pi-hole has an A record for `*.<HOST_NAME>` and dnsmasq answers AAAA for those names with `NODATA-IPv6` rather than forwarding, so LAN clients using it take the IPv4 path deliberately. See [Networking → IPv6](NETWORKING.md#what-stays-ipv4-and-why).
 
 **Nothing resolves from outside.** Check that DNS points at your public IP and that 443 is forwarded:
 
@@ -96,6 +110,8 @@ Add the domain to the `ALLOW_LISTS` in `scripts/pihole-bootstrap.sh`, not only i
 **Services unreachable from the VPN.** Verify the client got a `100.64.x.x` address (`tailscale ip`) and that DNS is accepted (`tailscale dns status`). Then `nslookup nextcloud.<HOST_NAME>` should return the Pi's LAN IP.
 
 **Connections relay instead of going direct.** Forward `41641/udp` (WireGuard) and `3478/udp` (STUN) on your router. Without them traffic still works, but rides the embedded DERP relay.
+
+**`netcheck.runProbe: named node "999" has no v6 address`, every 5 minutes.** Expected. `999` is Headscale's embedded DERP region, whose `derp.server` block advertises `ipv4` and no `ipv6`, so a client with working IPv6 probes it over IPv6 and finds nothing. Advertising one would mean publishing `[::]:3478`, which Headscale has no IPv6 address to DNAT to — see [Networking → IPv6](NETWORKING.md#what-stays-ipv4-and-why). Relaying is unaffected; the public DERP regions all answer.
 
 **A node shows offline while the device is connected.** "Last seen" lags by design — check `tailscale status` on the device itself before trusting the list.
 

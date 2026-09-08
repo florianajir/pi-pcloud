@@ -95,8 +95,17 @@ services:
     networks:
       - egress_ddns
     environment:
+      # It looks a name up *before* writing it, so the first AAAA publication
+      # seeds a NODATA into the router's negative cache and the healthcheck then
+      # reports a mismatch on a record that is correct.
+      RESOLVER_ADDRESS: 1.1.1.1:53
+      # ip_version on every entry: the default is "ipv4 or ipv6", i.e. whichever
+      # the lookup returns first, so an unpinned entry *replaces* the A record
+      # with an AAAA instead of adding one. One entry carries one family.
+      # `:+` so an empty switch adds nothing rather than a comma, which would
+      # make CONFIG invalid JSON.
       CONFIG: >-
-        {"settings":[ {"provider":"cloudflare","zone_identifier":"${CLOUDFLARE_ZONE_ID}","domain":"${HOST_NAME}","token":"${CLOUDFLARE_DNS_API_TOKEN}","ttl":1,"proxied":false}, {"provider":"cloudflare","zone_identifier":"${CLOUDFLARE_ZONE_ID}","domain":"*.${HOST_NAME}","token":"${CLOUDFLARE_DNS_API_TOKEN}","ttl":1,"proxied":false} ]}
+        {"settings":[ {"provider":"cloudflare","zone_identifier":"${CLOUDFLARE_ZONE_ID}","domain":"${HOST_NAME}","token":"${CLOUDFLARE_DNS_API_TOKEN}","ttl":1,"proxied":false,"ip_version":"ipv4"}, {"provider":"cloudflare","zone_identifier":"${CLOUDFLARE_ZONE_ID}","domain":"*.${HOST_NAME}","token":"${CLOUDFLARE_DNS_API_TOKEN}","ttl":1,"proxied":false,"ip_version":"ipv4"}${IPV6_PUBLIC_RECORDS:+, {"provider":"cloudflare","zone_identifier":"${CLOUDFLARE_ZONE_ID}","domain":"${HOST_NAME}","token":"${CLOUDFLARE_DNS_API_TOKEN}","ttl":1,"proxied":false,"ip_version":"ipv6"}, {"provider":"cloudflare","zone_identifier":"${CLOUDFLARE_ZONE_ID}","domain":"*.${HOST_NAME}","token":"${CLOUDFLARE_DNS_API_TOKEN}","ttl":1,"proxied":false,"ip_version":"ipv6"}} ]}
     volumes:
       - ddns_data:/updater/data
     cpu_shares: *cpu-prio-normal
@@ -354,12 +363,12 @@ services:
       # can opt out of it. Vaultwarden needs to (see its labels), so the frame policy
       # lives here and is attached per router instead.
       - "traefik.http.middlewares.frame-deny.headers.frameDeny=true"
-      # WAN_HAIRPIN_IP is appended and not merged into ALLOW_IP_RANGES: it is
-      # the one entry that expires, and wan-allowlist-sync.sh owns it. `:+` so
-      # an empty value adds nothing rather than a trailing comma, which Traefik
-      # rejects as an invalid CIDR - taking every router that references the
-      # middleware offline with it. What it fixes: docs/NETWORKING.md.
-      - "traefik.http.middlewares.lan.ipallowlist.sourcerange=${ALLOW_IP_RANGES:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16}${WAN_HAIRPIN_IP:+,${WAN_HAIRPIN_IP}}"
+      # HOST_LAN_SUBNET6 and WAN_HAIRPIN_IP are appended rather than merged into
+      # ALLOW_IP_RANGES: they expire with what the ISP hands out, and
+      # wan-allowlist-sync.sh owns both. `:+` so an empty value adds nothing
+      # rather than a trailing comma, which Traefik rejects as an invalid CIDR -
+      # taking every router referencing the middleware offline with it.
+      - "traefik.http.middlewares.lan.ipallowlist.sourcerange=${ALLOW_IP_RANGES:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd7a:115c:a1e0::/48}${HOST_LAN_SUBNET6:+,${HOST_LAN_SUBNET6}}${WAN_HAIRPIN_IP:+,${WAN_HAIRPIN_IP}}"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.average=10"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.burst=20"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.period=1s"
@@ -381,16 +390,18 @@ services:
       - "traefik.http.middlewares.internalapi-allow.ipallowlist.sourcerange=172.30.11.240/32"
       - "traefik.http.routers.internalapi.middlewares=internalapi-allow@docker"
     ports:
-      # 0.0.0.0 and not a bare port, which also binds [::]: with no IPv6 subnet
-      # on any network here, that listener goes through userland docker-proxy,
-      # which rewrites the source to a Docker gateway address - inside
-      # ALLOW_IP_RANGES, so lan@docker admitted every IPv6 caller. Measured, not
-      # theoretical; see docs/NETWORKING.md#ipv6.
+      # Both families spelled out, never a bare port. An IPv6 listener is only
+      # safe once the container has an IPv6 address to DNAT to - without one,
+      # docker-proxy rewrites the source to a Docker gateway address, inside
+      # ALLOW_IP_RANGES. That is what `ingress6` is for. docs/NETWORKING.md#ipv6.
       - "0.0.0.0:80:80"
+      - "[::]:80:80"
       - "0.0.0.0:443:443"
+      - "[::]:443:443"
       # http3=true advertises Alt-Svc, which browsers cache for ~30 days; without
       # this listener they retry QUIC and time out. Also needs a router forward.
       - "0.0.0.0:443:443/udp"
+      - "[::]:443:443/udp"
     expose:
       - 8080
     volumes:
@@ -408,6 +419,13 @@ services:
         ipv4_address: 172.30.13.250
       vaultwarden_web:
         ipv4_address: 172.30.14.250
+      # The DNAT target for the [::] ports above, and necessarily so: Docker
+      # programs DNAT per address family, and this is the only endpoint with an
+      # IPv6 address. Which network serves the *v4* publishes is an unpinned
+      # tie-break, harmless because every candidate sits in 172.30.0.0/16.
+      ingress6:
+        ipv4_address: 172.30.15.250
+        ipv6_address: fd00:30:15::250
     healthcheck:
       <<: *healthcheck-fast
       test: ["CMD", "traefik", "healthcheck", "--ping"]
@@ -633,9 +651,11 @@ services:
       - 53
       - 8082
     ports:
-      # v4-only like traefik's, plus one reason specific to DNS: behind
-      # FTLCONF_dns_listeningMode "all", an IPv6 listener is an open resolver,
-      # and every query through it is attributed to the Docker gateway.
+      # v4-only where traefik is dual-stack. listeningMode is "all", so FTL
+      # answers any source it can see, and IPv6 has no NAT in front of it: an
+      # open resolver as soon as the router's firewall is opened past :443. And
+      # no client could use it anyway - the router advertises itself as the IPv6
+      # resolver (RDNSS) and cannot be told otherwise. docs/NETWORKING.md#ipv6.
       - "0.0.0.0:53:53/tcp"
       - "0.0.0.0:53:53/udp"
     environment:
@@ -881,9 +901,9 @@ services:
       - 9090
       - 50443
     ports:
-      # v4-only: stun_listen_addr is 0.0.0.0:3478, so an IPv6 client arriving
-      # through docker-proxy would be told its address is a Docker gateway -
-      # worse than finding no v6 STUN endpoint at all. docs/NETWORKING.md#ipv6.
+      # v4-only: headscale has no IPv6 address, so a [::] publish would fall
+      # back to docker-proxy and STUN would report a Docker gateway address to
+      # its own clients - worse than advertising none. docs/NETWORKING.md#ipv6.
       - "0.0.0.0:3478:3478/udp"
     volumes:
       - ./config/headscale:/etc/headscale:ro
@@ -1090,7 +1110,7 @@ services:
       - OVERWRITEPROTOCOL=https
       - OVERWRITECLIURL=https://nextcloud.${HOST_NAME:-pi.lan}
       - TRUSTED_PROXIES=172.30.11.250/32
-      - ALLOW_IP_RANGES=${ALLOW_IP_RANGES:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16}
+      - ALLOW_IP_RANGES=${ALLOW_IP_RANGES:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd7a:115c:a1e0::/48}
       - FORWARDED_FOR_HEADERS=HTTP_X_FORWARDED_FOR
       - NEXTCLOUD_MAINTENANCE_WINDOW_START=${NEXTCLOUD_MAINTENANCE_WINDOW_START:-2}
       - NEXTCLOUD_DEFAULT_PHONE_REGION=${NEXTCLOUD_DEFAULT_PHONE_REGION:-FR}
@@ -2703,12 +2723,18 @@ networks:
         - subnet: 172.31.241.0/24
   # ddns-updater had no `networks:` key at all, which put it on the implicit
   # <project>_default: invisible here, holding a zone-scoped Cloudflare token.
+  #
+  # The one egress network with IPv6: ddns-updater discovers the address it
+  # publishes by asking an echo service, and the ULA is masqueraded to the
+  # host's global address - the one inbound traffic arrives on.
   egress_ddns:
     driver: bridge
     name: egress_ddns
+    enable_ipv6: true
     ipam:
       config:
         - subnet: 172.31.242.0/24
+        - subnet: fd00:31:242::/64
   frontend:
     driver: bridge
     name: frontend
@@ -2788,3 +2814,20 @@ networks:
     ipam:
       config:
         - subnet: 172.30.14.0/24
+  # Traefik alone, so it holds the stack's only IPv6 address and nothing else is
+  # reachable over IPv6 however wide the router's firewall is opened. A v6 subnet
+  # on `frontend` instead would hand one to gluetun - whose namespace
+  # qbittorrent, stremio and kapowarr share - and their traffic would leave
+  # outside the tunnel, on the residential address.
+  #
+  # The /24 is pinned inside 172.30.0.0/16 because Docker may pick this network
+  # for the IPv4 publishes too - measured - and a host-originated request would
+  # then reach Traefik from a gateway outside the allowlist: `backup`'s trap.
+  ingress6:
+    driver: bridge
+    name: ingress6
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.30.15.0/24
+        - subnet: fd00:30:15::/64
