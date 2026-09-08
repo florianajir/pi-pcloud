@@ -20,14 +20,6 @@ on:
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
-  # TEMPORARY, to be removed before this merges. A schedule only fires on the
-  # default branch and workflow_dispatch is only offered there, so this is the
-  # only way to prove the whole path - list, scan, merge, upload - before it is
-  # the thing that is supposed to be watching.
-  pull_request:
-    paths:
-      - ".github/workflows/image-vulnerabilities.yml"
-      - "scripts/sarif-merge.py"
 
 concurrency:
   group: image-vulnerabilities
