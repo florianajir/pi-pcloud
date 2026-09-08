@@ -5,7 +5,20 @@ set -eu
 
 OUTPUT_FILE="${PROJECT_DIR}/config/ntfy/ntfy.env"
 OUTPUT_DIR="$(dirname "$OUTPUT_FILE")"
-NTFY_IMAGE="${NTFY_IMAGE:-binwiederhier/ntfy:v2.17.0}"
+# The image this hook shells into for `ntfy user hash` and `ntfy token
+# generate`, read from the rendered compose file rather than pinned a second
+# time here. The second pin sat at v2.17.0 while the server moved to v2.28.0 -
+# harmless, because both outputs are format-stable, but it is a tag nobody
+# bumps and a whole extra image pulled on every fresh host.
+#
+# Piped straight into jq: the render inlines the contents of every env_file, so
+# only the image name is ever read out of it. Lazy on purpose - the expansion
+# below runs this only when NTFY_IMAGE is not already set.
+resolve_ntfy_image() {
+    compose config --format json 2>/dev/null | jq -r '.services.ntfy.image // empty'
+}
+NTFY_IMAGE="${NTFY_IMAGE:-$(resolve_ntfy_image)}"
+[ -n "$NTFY_IMAGE" ] || die "could not read ntfy's image out of the compose files"
 # Built by compose from config/backrest/Dockerfile, which installs apache2-utils.
 BCRYPT_IMAGE="${BCRYPT_IMAGE:-pi-backrest:local}"
 # One topic per reading mode, so each can be muted, scheduled or given its own

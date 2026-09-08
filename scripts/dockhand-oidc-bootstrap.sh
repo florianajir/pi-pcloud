@@ -874,10 +874,22 @@ main() {
 
     dockhand_cookie=""
     if [ "$auth_enabled" = "true" ]; then
-        dockhand_cookie="$(authenticate_dockhand || true)"
-        if [ -z "$dockhand_cookie" ]; then
+        # Asked before any login is attempted, because configuring OIDC is what
+        # removes the local provider: from the second boot onwards there is no
+        # local login left to use, and trying anyway printed
+        # "WARNING: Dockhand local API login is unavailable" on every single
+        # start. The endpoint is public - verify_dockhand_provider_visibility
+        # reads it with no cookie at the end of this same script - so this costs
+        # one request and turns an alarm back into a fact.
+        if verify_dockhand_provider_visibility; then
             used_db_fallback="true"
-            log "Local Dockhand login is disabled or unavailable; using direct database bootstrap"
+            log "Local Dockhand login is closed, which is how this script leaves it; reconciling through the database"
+        else
+            dockhand_cookie="$(authenticate_dockhand || true)"
+            if [ -z "$dockhand_cookie" ]; then
+                used_db_fallback="true"
+                log "Local Dockhand login is disabled or unavailable; using direct database bootstrap"
+            fi
         fi
     else
         ensure_dockhand_local_admin_user "" || {

@@ -76,6 +76,16 @@ ensure_user_oidc_app() {
     return 1
 }
 
+# Unconditional, and it has to stay that way. `occ user_oidc:provider <id>
+# --output=json` returns id, identifier, clientId, discoveryEndpoint, scope and
+# settings - and no client secret, because Nextcloud does not hand it back. So
+# there is no way to compare the one field most likely to have changed, and
+# skipping the write when everything readable matches would leave a regenerated
+# Authelia client secret sitting in authelia-config/secrets/ while Nextcloud
+# kept the old one. SSO would break with nothing to say why.
+#
+# Rewriting every boot is the propagation path, not an oversight: it looks like
+# a missing idempotence check in the log and it is load-bearing.
 configure_provider() {
     local client_secret="$1"
     local discovery_uri="https://auth.${HOST_NAME}/.well-known/openid-configuration"
@@ -100,7 +110,7 @@ configure_provider() {
         --bearer-provisioning=0 \
         >/dev/null
 
-    log "OIDC provider '$OIDC_PROVIDER_ID' configured"
+    log "OIDC provider '$OIDC_PROVIDER_ID' reasserted (the client secret cannot be read back to compare)"
 }
 
 verify_provider() {
