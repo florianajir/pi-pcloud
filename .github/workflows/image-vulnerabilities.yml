@@ -179,7 +179,13 @@ jobs:
       # a category per image, and a category whose image came back clean would
       # never be uploaded again — leaving every alert it ever raised open,
       # describing a CVE patched months ago.
-      - name: Merge the scans into one run
+      # CRITICAL alone, measured rather than chosen: HIGH and CRITICAL together
+      # came to 4886 findings over 1050 CVEs on this stack, four images
+      # accounting for 93% of them, and GitHub keeps 5000 results per upload.
+      # Four thousand individually tracked alerts is a list, not an alert. The
+      # HIGH counts are in the summary below, per image, which is the grain at
+      # which any of this is actionable: the fix is a newer tag or nothing.
+      - name: Merge the criticals into one run
         run: |
           set -euo pipefail
           set -- sarif/*.sarif
@@ -187,7 +193,7 @@ jobs:
             echo "::error::no image could be scanned; refusing to upload an empty run over the last one"
             exit 1
           fi
-          python3 scripts/sarif-merge.py trivy.sarif "$@"
+          python3 scripts/sarif-merge.py --keep-tag CRITICAL trivy.sarif "$@"
 
       - name: Upload to code scanning
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v4
@@ -196,41 +202,41 @@ jobs:
           category: trivy-images
 
       # So a glance at the run answers "which bump is worth making" without
-      # opening the Security tab.
+      # opening the Security tab. Counted from the per-image scans rather than
+      # from the uploaded run, because that one carries only the criticals.
       - name: Summarise
         if: always()
         run: |
           set -euo pipefail
-          [ -f trivy.sarif ] || exit 0
+          set -- sarif/*.sarif
+          [ -e "$1" ] || exit 0
           {
-            echo "## Fixable HIGH and CRITICAL vulnerabilities"
+            echo "## Fixable vulnerabilities in the OS packages of each image"
             echo
             echo "| image | critical | high |"
             echo "|---|---:|---:|"
-            # Severity looked up by rule id, not by ruleIndex: an offset is
-            # only meaningful inside the run that produced it, and this file was
-            # assembled from thirty-four of them.
-            jq -r '
-              .runs[0] as $run
-              | ($run.tool.driver.rules
-                 | map({key: .id,
-                        value: ((.properties.tags // [])
-                                | map(select(. == "CRITICAL" or . == "HIGH")) | first // "HIGH")})
-                 | from_entries) as $severity
-              | [$run.results[]
-                 | {image: .locations[0].physicalLocation.artifactLocation.uri,
-                    severity: ($severity[.ruleId] // "HIGH")}]
+            # Severity read off the rule the finding names, not off its index:
+            # an index only means something inside the run that produced it.
+            jq -sr '
+              [ .[]
+                | .runs[0] as $run
+                | ($run.tool.driver.rules
+                   | map({key: .id,
+                          value: (((.properties.tags // []) | index("CRITICAL")) != null)})
+                   | from_entries) as $critical
+                | $run.results[]
+                | {image: .locations[0].physicalLocation.artifactLocation.uri,
+                   critical: ($critical[.ruleId] // false)} ]
               | group_by(.image)
               | map({image: .[0].image,
-                     critical: (map(select(.severity == "CRITICAL")) | length),
-                     high: (map(select(.severity == "HIGH")) | length)})
+                     critical: (map(select(.critical)) | length),
+                     high: (map(select(.critical | not)) | length)})
               | sort_by(-.critical, -.high)
               | .[] | "| \(.image) | \(.critical) | \(.high) |"
-            ' trivy.sarif
+            ' "$@"
             echo
-            jq -r '.runs[0]
-                   | "\(.results | length) findings over \(.tool.driver.rules | length) distinct vulnerabilities."' \
-              trivy.sarif
+            jq -sr '[.[] | .runs[0].results | length] | add // 0
+                    | "\(.) findings in total. Only the criticals are uploaded as alerts."' "$@"
             if [ -s unscanned.txt ]; then
               echo
               echo "### Not scanned"

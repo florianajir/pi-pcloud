@@ -160,6 +160,64 @@ refuses "a result pointing at a rule its file never defined" \
 jq 'del(.runs[0].tool.driver.rules[0].id)' "$WORK/a.sarif" >"$WORK/noid.sarif"
 refuses "a rule with no id to dedupe on" "has no id" "$WORK/noid.sarif"
 
+# --- --keep-tag, which is how the upload stays an alert rather than a list ---
+#
+# Measured on this stack: HIGH and CRITICAL together are 4886 findings over 1050
+# CVEs, four images accounting for 93%. That is a list, not an alert, so only
+# CRITICAL is uploaded and the per-image counts for both go in the run summary.
+
+# graded <uri> <CVE=SEVERITY>... : one run, one rule and one result per pair.
+graded() {
+    _uri="$1"
+    shift
+    python3 -c '
+import json, sys
+uri = sys.argv[1]
+pairs = [p.split("=", 1) for p in sys.argv[2:]]
+rules = [
+    {"id": cve, "name": "OsPackageVulnerability",
+     "properties": {"tags": ["vulnerability", "security", sev]}}
+    for cve, sev in pairs
+]
+results = [
+    {"ruleId": cve, "ruleIndex": i, "level": "error",
+     "message": {"text": f"Vulnerability {cve}"},
+     "locations": [{"physicalLocation": {"artifactLocation": {"uri": uri}}}]}
+    for i, (cve, sev) in enumerate(pairs)
+]
+print(json.dumps({"version": "2.1.0",
+                  "runs": [{"tool": {"driver": {"name": "Trivy", "rules": rules}},
+                            "results": results}]}))
+' "$_uri" "$@"
+}
+
+graded "some/image" CVE-100=HIGH CVE-200=CRITICAL CVE-300=HIGH >"$WORK/mixed.sarif"
+graded "other/image" CVE-400=CRITICAL CVE-100=HIGH >"$WORK/mixed2.sarif"
+
+python3 "$MERGE" "$WORK/all.sarif" "$WORK/mixed.sarif" "$WORK/mixed2.sarif" >/dev/null
+ok "without the flag every severity is kept" \
+    "$(jq -r '.runs[0].results | length' "$WORK/all.sarif")" 5
+
+python3 "$MERGE" --keep-tag CRITICAL "$WORK/crit.sarif" "$WORK/mixed.sarif" "$WORK/mixed2.sarif" >/dev/null
+ok "with it only the tagged findings survive" \
+    "$(jq -r '.runs[0].results | length' "$WORK/crit.sarif")" 2
+ok "and the rules nothing points at are gone" \
+    "$(jq -r '.runs[0].tool.driver.rules | length' "$WORK/crit.sarif")" 2
+ok "the survivors are the right ones" \
+    "$(jq -r '[.runs[0].results[].ruleId] | sort | join(",")' "$WORK/crit.sarif")" \
+    CVE-200,CVE-400
+ok "and each still resolves to its own rule" "$(mismatches "$WORK/crit.sarif")" 0
+
+# A tag nothing carries has to give an empty run rather than an error: a week
+# where every image is clean of criticals still has to upload, or last week's
+# alerts stay open.
+python3 "$MERGE" --keep-tag CRITICAL "$WORK/none.sarif" "$WORK/mixed.sarif" >/dev/null 2>&1 || true
+python3 "$MERGE" --keep-tag NOTHING "$WORK/none.sarif" "$WORK/mixed.sarif" >/dev/null
+ok "a tag nothing carries still produces an uploadable run" \
+    "$(jq -r '.runs[0].results | length' "$WORK/none.sarif")" 0
+ok "and takes every rule with it" \
+    "$(jq -r '.runs[0].tool.driver.rules | length' "$WORK/none.sarif")" 0
+
 # --- a run GitHub would silently truncate -----------------------------------
 #
 # The first real run of the image scan produced 5444 results and GitHub kept
