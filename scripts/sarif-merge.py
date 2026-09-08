@@ -23,6 +23,14 @@ findings with whatever rule happened to sit at that offset.
 import json
 import sys
 
+# GitHub accepts 5000 results per upload and silently drops the rest, so a run
+# over the limit is not a big report — it is an arbitrary subset of one, and
+# whichever findings fell off the end are invisible. Refused rather than
+# truncated: the answer is to narrow what is scanned, and a loud failure is the
+# only thing that will make anyone do it. Left at GitHub's own number, with room
+# to see it coming.
+MAX_RESULTS = 4900
+
 
 def load_run(path):
     """The single run in a SARIF file, or a reason it cannot be used."""
@@ -87,6 +95,12 @@ def main():
 
     if driver is None:
         problems.append("no usable run in any input file")
+
+    if len(results) > MAX_RESULTS:
+        problems.append(
+            f"{len(results)} results is past the {MAX_RESULTS} this can upload: GitHub keeps the first 5000 "
+            f"of any run and discards the rest without saying so. Narrow the scan instead."
+        )
 
     if problems:
         print("\n".join(problems), file=sys.stderr)

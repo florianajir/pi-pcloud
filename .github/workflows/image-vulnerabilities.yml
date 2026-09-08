@@ -57,8 +57,16 @@ jobs:
       PLATFORM: linux/arm64
       # Only what a tag bump can actually fix. A vulnerability with no upstream
       # fix is not an action, and this exists to say which bumps are worth
-      # making; unfixed base-OS CVEs would bury that in a list nobody reads.
+      # making; unfixed CVEs would bury that in a list nobody reads.
       SEVERITY: HIGH,CRITICAL
+      # OS packages only, measured rather than assumed. Scanning the language
+      # dependencies vendors bundle produced 5444 findings over 1279 CVEs, of
+      # which flaresolverr, uptime-kuma and shelfmark alone were 82% - three
+      # images with large Node and Python trees whose contents nobody here can
+      # patch except by taking a newer tag, which dependabot already offers.
+      # GitHub keeps 5000 results per upload and drops the rest silently, so
+      # that report was also an arbitrary subset of itself.
+      PKG_TYPES: os
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
@@ -130,6 +138,7 @@ jobs:
                     --image-src remote \
                     --platform "${PLATFORM}" \
                     --scanners vuln \
+                    --pkg-types "${PKG_TYPES}" \
                     --severity "${SEVERITY}" \
                     --ignore-unfixed \
                     --format sarif \
@@ -143,7 +152,27 @@ jobs:
             if [ -z "${scanned}" ]; then
               echo "${image}" >> unscanned.txt
               echo "::warning::could not scan ${image} after 3 attempts"
+              continue
             fi
+
+            # Trivy's SARIF puts the *image* in the finding's location only for
+            # OS packages; anything found in a bundled dependency gets the path
+            # inside the image instead, and the first run of this workflow
+            # reported findings against `app/node_modules/axios/package.json`
+            # with nothing to say which of thirty-four images that was.
+            #
+            # Rewritten to the image's repository, without the tag or digest, so
+            # every finding names the image it came from and the alert keeps its
+            # identity across a bump. The tag is in compose.yaml; a location
+            # that carried it would close and reopen every alert on every bump.
+            repo="${image%%@*}"
+            repo="${repo%:*}"
+            tmp="$(mktemp)"
+            jq --arg repo "${repo}" \
+              '.runs[0].results |= map(
+                 .locations[0].physicalLocation.artifactLocation.uri = $repo)' \
+              "sarif/${slug}.sarif" > "${tmp}"
+            mv "${tmp}" "sarif/${slug}.sarif"
           done < images.txt
 
       # One run, one category, one upload. Uploading a file per image would mean

@@ -160,5 +160,40 @@ refuses "a result pointing at a rule its file never defined" \
 jq 'del(.runs[0].tool.driver.rules[0].id)' "$WORK/a.sarif" >"$WORK/noid.sarif"
 refuses "a rule with no id to dedupe on" "has no id" "$WORK/noid.sarif"
 
+# --- a run GitHub would silently truncate -----------------------------------
+#
+# The first real run of the image scan produced 5444 results and GitHub kept
+# 5000 of them, discarding the rest without a word. A report that is an
+# arbitrary subset of itself is worse than a failure, because it reads as
+# complete.
+
+# huge <path> <count> : one run carrying <count> distinct findings.
+huge() {
+    python3 -c '
+import json, sys
+count = int(sys.argv[2])
+rules = [{"id": f"CVE-9000-{n}", "name": "OsPackageVulnerability"} for n in range(count)]
+results = [
+    {"ruleId": rule["id"], "ruleIndex": n, "level": "error",
+     "message": {"text": "generated"},
+     "locations": [{"physicalLocation": {"artifactLocation": {"uri": "some/image"}}}]}
+    for n, rule in enumerate(rules)
+]
+with open(sys.argv[1], "w") as handle:
+    json.dump({"version": "2.1.0",
+               "runs": [{"tool": {"driver": {"name": "Trivy", "rules": rules}}, "results": results}]},
+              handle)
+' "$1" "$2"
+}
+
+huge "$WORK/toobig.sarif" 5200
+refuses "a run past what GitHub will keep" "GitHub keeps the first 5000" "$WORK/toobig.sarif"
+
+# And the limit is a ceiling, not a target: a large run that still fits passes.
+huge "$WORK/big.sarif" 4800
+python3 "$MERGE" "$WORK/big.out.sarif" "$WORK/big.sarif" >/dev/null
+ok "a large run that still fits is uploaded" \
+    "$(jq -r '.runs[0].results | length' "$WORK/big.out.sarif")" 4800
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 [ "$fail" -eq 0 ]
