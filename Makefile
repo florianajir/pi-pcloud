@@ -1,4 +1,4 @@
-.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env print-required-vars test lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit
+.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env print-required-vars test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit
 
 REQUIRED_ENV_VARS := HOST_NAME TIMEZONE EMAIL ADMIN_USER PASSWORD HOST_LAN_IP CLOUDFLARE_DNS_API_TOKEN CLOUDFLARE_ZONE_ID
 
@@ -77,7 +77,8 @@ help:
 	@echo "  headscale-register <key> Register a headscale node"
 	@echo "  headscale-reset  Reset all Headscale nodes, preauth keys, and IP allocations"
 	@echo "  check-env        Validate required .env variables"
-	@echo "  test             Run the installer, check-env, CLI, service, start-sequence and compose-invariant suites (no host changes)"
+	@echo "  test             Run the installer, check-env, CLI, service, start-sequence, compose-invariant and routing suites (no host changes)"
+	@echo "  smoke            Probe the running stack through Traefik: every router loaded, LAN admitted, outside refused"
 	@echo "  lint             Run every static check CI runs (shell, YAML, Python, Dockerfiles, workflows, secrets)"
 	@echo "  pg-upgrade to=<image> Migrate Postgres to a new major (dump/restore, old data kept)"
 	@echo "  rotate-password       Rotate PASSWORD after a leak (LLDAP admin + Authelia only, no Postgres)"
@@ -119,6 +120,18 @@ test:
 	@sh tests/services-test.sh
 	@sh tests/stack-up-test.sh
 	@sh tests/compose-test.sh
+	@sh tests/routing-test.sh
+
+# Needs a running stack, which is why it is not part of `test`: it asks Traefik
+# for the routing table it actually loaded, then checks each router answers a
+# LAN address and refuses one outside the allowlist. CI runs the same script
+# after `up --wait`.
+#
+# For the outside half it creates a throwaway network outside the allowlist and
+# attaches Traefik and the probe container to it for the duration, then removes
+# it. Nothing is restarted and no configuration is written.
+smoke:
+	@sh tests/routing-smoke.sh
 
 # The same script CI runs, so a green local run means a green CI run. Gates
 # whose tool is missing are reported as skipped; CI adds LINT_STRICT=1 to make

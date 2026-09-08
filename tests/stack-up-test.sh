@@ -1,8 +1,10 @@
 #!/bin/sh
 # Tests for scripts/stack-up.sh, the start sequence shared by the systemd unit
-# and `make update`.
+# and `make update`, and for scripts/run-hooks.sh, which declares the hooks that
+# sequence runs. CI runs the same two phases against the stack it starts, so the
+# list has to have exactly one home.
 #
-# Everything runs against a throwaway copy of the script with stub hooks and a
+# Everything runs against a throwaway copy of the scripts with stub hooks and a
 # stub `docker` on PATH, so no container, no systemd and no host change.
 # Run with `make test`.
 set -eu
@@ -10,6 +12,7 @@ set -eu
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$TESTS_DIR")"
 SCRIPT="$REPO_DIR/scripts/stack-up.sh"
+HOOKS="$REPO_DIR/scripts/run-hooks.sh"
 UNIT="$REPO_DIR/config/systemd/system/pi-pcloud.service"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -40,9 +43,10 @@ lacks() {
     esac
 }
 
-# The entries the script declares, in order: "script.sh" or "service:script.sh".
+# The entries run-hooks.sh declares, in order: "script.sh" or
+# "service:script.sh".
 hook_entries() {
-    grep -oE '^[a-z0-9-]*:?[a-z0-9-]+\.sh$' "$SCRIPT"
+    grep -oE '^[a-z0-9-]*:?[a-z0-9-]+\.sh$' "$HOOKS"
 }
 
 # --- the sequence is complete -----------------------------------------------
@@ -58,9 +62,14 @@ for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*-bootstrap.s
         pass=$((pass + 1))
     else
         fail=$((fail + 1))
-        printf 'FAIL %s is in scripts/ but stack-up.sh never runs it\n' "$name"
+        printf 'FAIL %s is in scripts/ but run-hooks.sh never runs it\n' "$name"
     fi
 done
+
+# And exactly one home for it: a list left behind in stack-up.sh would be the
+# one the boot path used while CI kept running the other.
+ok "stack-up.sh declares no hook list of its own" \
+    "$(grep -cE '^[a-z0-9-]*:?[a-z0-9-]+\.sh$' "$SCRIPT" || true)" 0
 
 # The unit must go through the script, or boot and update drift apart again.
 contains "the unit starts the stack through stack-up.sh" \
@@ -69,7 +78,7 @@ contains "the unit starts the stack through stack-up.sh" \
 # --- a sandbox that runs the real script ------------------------------------
 
 mkdir -p "$WORK/scripts" "$WORK/bin"
-cp "$SCRIPT" "$REPO_DIR/scripts/lib.sh" "$REPO_DIR/scripts/run-if-enabled.sh" "$WORK/scripts/"
+cp "$SCRIPT" "$HOOKS" "$REPO_DIR/scripts/lib.sh" "$REPO_DIR/scripts/run-if-enabled.sh" "$WORK/scripts/"
 
 # One stub per declared hook, announcing itself so the run is a transcript.
 hook_entries | sed 's/.*://' | sort -u | while read -r name; do
@@ -243,6 +252,62 @@ printf 'error: pull access denied for ghcr.io/nope\n' >"$WORK/fail-up"
 run_rc all
 ok       "an unrelated failure stops the start" "$rc" 1
 lacks    "without taking the stack down"        "$out" "DOCKER compose down"
+
+# --- what a caller other than the boot path may ask for ---------------------
+#
+# CI runs the same two phases, and needs two things the unit does not: a hook it
+# cannot satisfy at all left out (there is no headscale container on a runner),
+# and the bootstraps held to the same standard as the pre-starts, because there a
+# bootstrap that cannot finish is the thing under test.
+
+# The cases above left two stubs broken on purpose; put every one of them back,
+# so what follows tests run-hooks.sh and not the wreckage of an earlier case.
+hook_entries | sed 's/.*://' | sort -u | while read -r name; do
+    printf '#!/bin/sh\necho "HOOK %s"\n' "$name" >"$WORK/scripts/$name"
+done
+
+# run_hooks <compose-profiles> <phase> [mode] : as run_rc, for run-hooks.sh.
+run_hooks() {
+    printf 'COMPOSE_PROFILES=%s\n' "$1" >"$WORK/.env"
+    shift
+    out="$(env -u COMPOSE_PROFILES sh "$WORK/scripts/run-hooks.sh" "$@" 2>&1)" && rc=0 || rc=$?
+}
+
+run_hooks all pre-start
+ok       "the pre-start phase runs on its own"   "$rc" 0
+contains "and runs the pre-start hooks"          "$out" "HOOK authelia-pre-start.sh"
+lacks    "and only those"                        "$out" "HOOK postgres-bootstrap.sh"
+
+run_hooks all post-start
+ok       "the post-start phase runs on its own"  "$rc" 0
+contains "and runs the bootstraps"               "$out" "HOOK postgres-bootstrap.sh"
+lacks    "and only those"                        "$out" "HOOK authelia-pre-start.sh"
+
+run_hooks all sideways
+ok       "an unknown phase is refused"           "$rc" 1
+contains "and named"                             "$out" "pre-start|post-start"
+
+run_hooks all post-start sideways
+ok       "an unknown mode is refused"            "$rc" 1
+contains "and named"                             "$out" "blocking or tolerant"
+
+# HOOKS_SKIP leaves one out entirely — and says so, so a list that grew stays
+# visible in the log it was added to keep quiet.
+out="$(HOOKS_SKIP=postgres-bootstrap.sh env -u COMPOSE_PROFILES \
+    sh "$WORK/scripts/run-hooks.sh" post-start 2>&1)"
+lacks    "a skipped hook does not run"           "$out" "HOOK postgres-bootstrap.sh"
+contains "and the skip is logged"                "$out" "postgres-bootstrap.sh skipped (HOOKS_SKIP)"
+contains "the rest still run"                    "$out" "HOOK homepage-widgets-bootstrap.sh"
+
+# The mode the caller asks for wins: the same failing bootstrap that must not
+# stop a boot has to fail a CI run.
+printf '#!/bin/sh\nexit 1\n' >"$WORK/scripts/pihole-bootstrap.sh"
+run_hooks all post-start
+ok       "a failed bootstrap is tolerated by default" "$rc" 0
+run_hooks all post-start blocking
+ok       "and fatal when the caller asks for blocking" "$rc" 1
+contains "and named"                                   "$out" "pihole-bootstrap.sh failed"
+printf '#!/bin/sh\necho "HOOK pihole-bootstrap.sh"\n' >"$WORK/scripts/pihole-bootstrap.sh"
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 [ "$fail" -eq 0 ]

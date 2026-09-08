@@ -192,6 +192,74 @@ leaked="$(printf '%s' '{"services": {"leaky": {
     | python3 "$TESTS_DIR/compose-invariants.py" "$REPO_DIR" | grep -c "$canary" || true)"
 ok "no value reaches a finding, only names" "$leaked" 0
 
+# --- the service set CI starts is computed, not maintained -------------------
+#
+# The workflow used to carry that list by hand, and a hand-written list is how a
+# newly added optional service ends up never started in CI with nothing to
+# report it. Rendered with every profile enabled, ci-excluded included, so each
+# service is present carrying the profiles both compose files gave it.
+
+ci_errors="$(mktemp)"
+trap 'rm -f "$render_errors" "$ci_errors"' EXIT
+
+ci_profiles="$(DATA_LOCATION=/nonexistent/compose-test COMPOSE_PROFILES=all,stremio-lan,ci-excluded \
+    docker compose --env-file /dev/null -f "$REPO_DIR/compose.yaml" -f "$REPO_DIR/compose.test.yaml" \
+    config --format json 2>"$render_errors" \
+    | python3 "$TESTS_DIR/ci-profiles.py" 2>"$ci_errors")" || true
+
+if [ -n "$ci_profiles" ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1))
+    printf 'FAIL the profile list CI starts could not be computed\n'
+    sed 's/^/  /' "$ci_errors"
+    sed 's/^/  /' "$render_errors"
+fi
+
+profile_lines() { printf '%s' "$ci_profiles" | tr ',' '\n'; }
+
+ok "the computed list asks for the optional services" \
+    "$(profile_lines | grep -cx 'nextcloud')" 1
+ok "and for none compose.test.yaml excludes" \
+    "$(profile_lines | grep -cxE 'gluetun|qbittorrent|stremio|stremio-lan|llama-cpp|parakeet|piper|headplane')" 0
+ok "and never for the catch-all, which would re-enable them" \
+    "$(profile_lines | grep -cx 'all')" 0
+
+# --- and it must refuse a selection that is not sound -----------------------
+#
+# Same reasoning as the catches() block above: a computation that quietly
+# returned a short list, or stopped noticing a collision, reads exactly like a
+# clean stack. So hand it renderings that are wrong on purpose.
+
+refuses() {
+    _label="$1"
+    _needle="$2"
+    _json="$3"
+    _got="$(printf '%s' "$_json" | python3 "$TESTS_DIR/ci-profiles.py" 2>&1 >/dev/null || true)"
+    case "$_got" in
+        *"$_needle"*) pass=$((pass + 1)) ;;
+        *)
+            fail=$((fail + 1))
+            printf 'FAIL %s\n  got  [%s]\n  want [*%s*]\n' "$_label" "$_got" "$_needle"
+            ;;
+    esac
+}
+
+# The failure this pays for: gluetun once listed `shelfmark` among its profiles,
+# so asking for the book search also started the VPN container CI has no
+# credentials for, and the run died six minutes later on an unhealthy container.
+refuses "a ci-excluded service sharing a profile with a selected one" \
+    "is ci-excluded but carries profile" '{"services": {
+  "shelfmark": {"image": "x:1", "profiles": ["shelfmark", "all"]},
+  "gluetun": {"image": "x:1", "profiles": ["gluetun", "shelfmark", "all", "ci-excluded"]}
+}}'
+
+refuses "a selection that came back nearly empty" \
+    "expected at least" '{"services": {"lonely": {"image": "x:1", "profiles": ["lonely"]}}}'
+
+refuses "a service reachable only through the catch-all" \
+    "cannot ask for it on its own" '{"services": {"vague": {"image": "x:1", "profiles": ["all"]}}}'
+
 printf '%s\n' "$out" | grep '^CHECKED ' | sed 's/^CHECKED/compose-test.sh: checked/'
 printf '\ncompose-test.sh: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
