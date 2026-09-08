@@ -55,6 +55,13 @@ cleanup() {
     rm -rf "$WORK"
 }
 trap cleanup EXIT
+# A step timeout in CI, or a Ctrl-C on a local run, arrives as a signal. Without
+# these the EXIT trap never runs, and the throwaway network stays attached to
+# Traefik at an address the allowlist does not admit until somebody notices.
+# Each handler exits, which is what runs cleanup — it is idempotent either way.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 pass=0
 fail=0
@@ -107,17 +114,28 @@ fi
 
 # --- half one: the routing table Traefik actually loaded ---------------------
 
-API_SERVICE="$(awk '$1 == "APIPROBE" { print $2 }' "$RECORDS")"
-API_URL="$(awk '$1 == "APIPROBE" { print $3 }' "$RECORDS")"
-if [ -z "$API_SERVICE" ] || [ -z "$API_URL" ]; then
-    die "no APIPROBE record; traefik-routers.py should have refused rather than emitted none"
-fi
+# api@internal is reachable only from the addresses the allowlist on its own
+# router admits, so the request has to come from a container pinned to one of
+# them. wget rather than curl: today that container is Homepage's, whose image
+# ships busybox. A widened allowlist admits more than one, and not all of them
+# ship an HTTP client, so each candidate is tried in turn.
+grep '^APIPROBE ' "$RECORDS" >/dev/null \
+    || die "no APIPROBE record; traefik-routers.py should have refused rather than emitted none"
 
-# api@internal is reachable from exactly one address (the allowlist on its own
-# router says which), so the request has to come from that container. wget, not
-# curl: that container is Homepage's, and its image ships busybox.
-if ! compose exec -T "$API_SERVICE" wget -q -O - "$API_URL/api/http/routers" >"$WORK/routers.json" 2>"$WORK/api-errors"; then
-    printf '%s: could not read %s from %s\n' "$(basename "$0")" "$API_URL/api/http/routers" "$API_SERVICE" >&2
+API_READ=""
+API_TRIED=""
+while read -r kind service url; do
+    [ "$kind" = APIPROBE ] || continue
+    API_TRIED="$API_TRIED $service"
+    if compose exec -T "$service" wget -q -O - "$url/api/http/routers" \
+        </dev/null >"$WORK/routers.json" 2>>"$WORK/api-errors"; then
+        API_READ="$service"
+        break
+    fi
+done <"$RECORDS"
+
+if [ -z "$API_READ" ]; then
+    printf '%s: could not read Traefik'"'"'s runtime API from any of:%s\n' "$(basename "$0")" "$API_TRIED" >&2
     sed 's/^/  /' "$WORK/api-errors" >&2
     exit 1
 fi
@@ -130,6 +148,17 @@ fi
 
 # --- half two: the ip allowlist, from both sides -----------------------------
 
+# A run killed between the connect and the disconnect leaves the network behind,
+# and every run after it would then die here. Clear it rather than telling the
+# reader to: nothing else uses this name.
+if docker network inspect "$OUTSIDE_NET" >/dev/null 2>&1; then
+    printf '  clearing a %s left behind by an earlier run\n' "$OUTSIDE_NET"
+    for _cid in $(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$OUTSIDE_NET" 2>/dev/null); do
+        docker network disconnect -f "$OUTSIDE_NET" "$_cid" >/dev/null 2>&1 || true
+    done
+    docker network rm "$OUTSIDE_NET" >/dev/null 2>&1 || true
+fi
+
 docker network create --subnet "$OUTSIDE_SUBNET" "$OUTSIDE_NET" >/dev/null \
     || die "could not create $OUTSIDE_NET on $OUTSIDE_SUBNET (ROUTING_SMOKE_SUBNET overrides)"
 NET_CREATED=1
@@ -141,11 +170,16 @@ ATTACHED="$TRAEFIK_CID"
 docker network connect "$OUTSIDE_NET" "$PROBER_CID" >/dev/null
 ATTACHED="$ATTACHED $PROBER_CID"
 
+# `docker compose exec` attaches stdin even under -T, and the loop below is
+# reading the record file on stdin — so an exec without this eats the rest of
+# it, and the whole file probes one router and reports a pass. </dev/null on
+# every exec is half the fix; the count after the loop is the other half.
+#
 # probe <target> <host> <path> : the HTTP status, or 000 when nothing answered.
 probe() {
     _code="$(compose exec -T "$PROBER" curl -sS -k -o /dev/null \
         --max-time "$TIMEOUT" --connect-to "$2:443:$1:443" \
-        -w '%{http_code}' "https://$2$3" 2>/dev/null | tr -d '\r\n')" || _code=""
+        -w '%{http_code}' "https://$2$3" </dev/null 2>/dev/null | tr -d '\r\n')" || _code=""
     case "$_code" in
         [0-9][0-9][0-9]) printf '%s' "$_code" ;;
         *) printf '000' ;;
@@ -156,12 +190,14 @@ probe() {
 # backend's own 404 is a different thing entirely and not this test's business.
 traefik_own_404() {
     compose exec -T "$PROBER" curl -sS -k --max-time "$TIMEOUT" \
-        --connect-to "$2:443:$1:443" "https://$2$3" 2>/dev/null \
+        --connect-to "$2:443:$1:443" "https://$2$3" </dev/null 2>/dev/null \
         | head -c 64 | grep -q '404 page not found'
 }
 
+probed=0
 while read -r kind router host path gate; do
     [ "$kind" = PROBE ] || continue
+    probed=$((probed + 1))
 
     inside="$(probe traefik "$host" "$path")"
     outside="$(probe "$OUTSIDE_IP" "$host" "$path")"
@@ -191,6 +227,15 @@ while read -r kind router host path gate; do
         ok "$router: $host answers $outside from outside, as a public route should"
     fi
 done <"$RECORDS"
+
+# Every record has to have been reached. A loop that stops early still reports
+# only passes, which is the one failure this file could not otherwise see.
+declared_probes="$(grep -c '^PROBE ' "$RECORDS" || true)"
+if [ "$probed" = "$declared_probes" ]; then
+    ok "all $probed routers named in the records were probed"
+else
+    no "only $probed of $declared_probes routers were probed; the loop stopped early"
+fi
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -95,6 +95,41 @@ ok "who reads the runtime API, and where, is derived from the allowlist" \
     "$(printf '%s\n' "$records" | grep '^APIPROBE ')" \
     "APIPROBE reader http://172.30.11.250:8080"
 
+# --- a router that names no entrypoint is served on all of them --------------
+#
+# Traefik reads an absent `entrypoints` as every entrypoint, and
+# tests/compose-invariants.py classifies such a router as public. Read as
+# internal here it would be left out of the probes entirely, and the two
+# checkers would disagree about the same field.
+
+records="$(project 10.199.0.250 "$(render '"everywhere": {"image": "x:1", "labels": {
+  "traefik.http.routers.everywhere.rule": "Host(`everywhere.test`)",
+  "traefik.http.routers.everywhere.middlewares": "lan@docker"}}')")"
+ok "a router with no entrypoints is probed" \
+    "$(printf '%s\n' "$records" | grep -c '^PROBE everywhere everywhere.test / lan$')" 1
+
+# --- the API allowlist is a range, not a string ------------------------------
+#
+# It is a /32 today. Compared as text, widening it by one bit would refuse the
+# whole file and fail the smoke test on a configuration that works.
+
+# /29 rather than /28: the wider range would reach .250 and offer Traefik
+# itself, which is true but noise for what this case is about.
+records="$(project 10.199.0.250 \
+    "$(render | sed 's|172.30.11.240/32|172.30.11.240/29|')")"
+ok "a widened API allowlist still names the reader" \
+    "$(printf '%s\n' "$records" | grep '^APIPROBE ')" \
+    "APIPROBE reader http://172.30.11.250:8080"
+
+# A range wide enough for two pinned containers names both, because not every
+# image in the stack ships an HTTP client and the caller tries them in turn
+# rather than giving up on whichever sorted first.
+records="$(project 10.199.0.250 "$(render '"second-reader": {"image": "x:1",
+  "networks": {"frontend": {"ipv4_address": "172.30.11.241"}}}' \
+    | sed 's|172.30.11.240/32|172.30.11.240/29|')")"
+ok "and every container it admits is offered" \
+    "$(printf '%s\n' "$records" | grep -c '^APIPROBE ')" 2
+
 # --- middlewares that are not an allowlist are not a gate --------------------
 
 records="$(project 10.199.0.250 "$(render '"open": {"image": "x:1", "labels": {

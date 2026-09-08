@@ -91,6 +91,15 @@ def host_and_path(rule):
     return host, (path or "/")
 
 
+def admitted(address, networks):
+    """True when `address` sits in any of `networks`."""
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(parsed.version == network.version and parsed in network for network in networks)
+
+
 def outside_verdict(address, ranges):
     """(is `address` outside every range?, how many ranges did not parse)."""
     outside = True
@@ -143,7 +152,11 @@ def main():
     published = {}
     for name, router in routers.items():
         entrypoints = {e.strip() for e in (router.get("entrypoints") or "").split(",") if e.strip()}
-        if entrypoints - INTERNAL_ENTRYPOINTS:
+        # No entrypoints at all means every entrypoint, which is how Traefik
+        # reads it and how tests/compose-invariants.py classifies it. Treating
+        # the empty set as internal would leave a router that is reachable from
+        # the LAN out of the probes entirely.
+        if not entrypoints or entrypoints - INTERNAL_ENTRYPOINTS:
             published[name] = router
         out.append(f"ROUTER {name}")
 
@@ -188,31 +201,39 @@ def main():
     # API's own router carries: whichever container is pinned to the single
     # address it admits is the one container that can ask.
     api_gates = [m for m in middlewares_of(routers.get(API_ROUTER, {})) if m in allowlists]
-    api_admits = {entry.strip().split("/", 1)[0] for gate in api_gates for entry in allowlists[gate]}
-    api_service = api_net = api_host = None
+    api_admits = []
+    for gate in api_gates:
+        for entry in allowlists[gate]:
+            try:
+                api_admits.append(ipaddress.ip_network(entry.strip(), strict=False))
+            except ValueError:
+                findings.append(f"a range on {gate} is not valid CIDR")
+
+    # Containment, not a string match on the address: the allowlist is a /32
+    # today, and comparing text would refuse the whole file the day it is
+    # widened by one bit. A wider range can admit more than one container, so
+    # every candidate is emitted and the caller tries them in turn.
+    api_port = next((labels[API_PORT_LABEL] for labels in labels_by_service.values() if API_PORT_LABEL in labels), None)
+    api_rule_label = f"traefik.http.routers.{API_ROUTER}.rule"
+    api_probes = []
     for name, service in sorted(services.items()):
         for net, address in sorted(pinned_addresses(service).items()):
-            if address in api_admits:
-                api_service, api_net = name, net
-                break
-        if api_service:
-            break
+            if not admitted(address, api_admits):
+                continue
+            # The API answers wherever Traefik itself sits on that network.
+            api_host = next(
+                (
+                    pinned_addresses(services[other]).get(net)
+                    for other, labels in sorted(labels_by_service.items())
+                    if api_rule_label in labels
+                ),
+                None,
+            )
+            if api_host and api_port:
+                api_probes.append(f"APIPROBE {name} http://{api_host}:{api_port}")
 
-    # The API answers wherever Traefik itself sits on that same network.
-    api_rule_label = f"traefik.http.routers.{API_ROUTER}.rule"
-    if api_net:
-        api_host = next(
-            (
-                pinned_addresses(services[name]).get(api_net)
-                for name, labels in sorted(labels_by_service.items())
-                if api_rule_label in labels
-            ),
-            None,
-        )
-    api_port = next((labels[API_PORT_LABEL] for labels in labels_by_service.values() if API_PORT_LABEL in labels), None)
-
-    if api_service and api_host and api_port:
-        out.append(f"APIPROBE {api_service} http://{api_host}:{api_port}")
+    if api_probes:
+        out.extend(api_probes)
     else:
         findings.append(f"could not work out who reads Traefik's {API_ROUTER} API, or where")
 

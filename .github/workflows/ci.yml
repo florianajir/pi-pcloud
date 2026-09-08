@@ -174,6 +174,17 @@ jobs:
           # daemon) can open env_files regardless of the runner's umask or ownership.
           chmod -R a+rX /tmp/pi-pcloud-ci-data
 
+          # Nextcloud's PHP runs as uid 33 and has to write its own config.php
+          # during the install. On a real host these three already belong to the
+          # project owner; here Docker would create them root:root and the
+          # install fails with `Cannot write into "config" directory!`, which is
+          # what it has been doing silently since this job was written. After the
+          # chmod above, which cannot touch a directory it does not own.
+          sudo install -d -m 0755 -o 33 -g 33 \
+            /tmp/pi-pcloud-ci-data/nextcloud \
+            /tmp/pi-pcloud-ci-data/nextcloud-config \
+            /tmp/pi-pcloud-ci-data/nextcloud-themes
+
           # Guard against bind-mount path type mismatches in CI
           test -f ./config/headplane/config.yaml
           test ! -d ./config/headplane/config.yaml
@@ -220,37 +231,21 @@ jobs:
             exit 1
           fi
 
-      # Nextcloud's CI healthcheck accepts 503 because the first database
-      # install takes longer than the start period, so `--wait` passing says
-      # nothing about whether it finished. This does: installed:true is the only
-      # answer that means the schema is in place.
-      - name: Check Nextcloud finished installing
-        run: |
-          set -euo pipefail
-          for _ in $(seq 1 24); do
-            body="$(docker compose exec -T nextcloud \
-              curl -fsS http://localhost/status.php 2>/dev/null || true)"
-            case "${body}" in
-              *'"installed":true'*)
-                echo "${body}"
-                exit 0
-                ;;
-            esac
-            sleep 5
-          done
-          echo "::error::Nextcloud never reported installed:true"
-          docker compose exec -T nextcloud curl -sS -i http://localhost/status.php || true
-          exit 1
-
       # The one thing `up --wait` cannot see: every healthcheck it ran talked to
       # a container on its own port, and none of them went through Traefik.
       - name: Probe the reverse proxy
+        timeout-minutes: 8
         run: sh ./tests/routing-smoke.sh
 
       # The other half of the boot sequence. Blocking, unlike on a real boot: a
       # bootstrap that cannot finish is what this is here to catch, where on the
       # Pi it is a slow service that the next start picks up.
+      # Capped: between them these carry about twenty-seven minutes of retry
+      # budget, waiting on services that are healthy here — so one that cannot
+      # reach its own would burn the job's timeout instead of failing, and the
+      # log would say nothing about which.
       - name: Run the bootstraps the boot sequence runs
+        timeout-minutes: 10
         env:
           # headscale is ci-excluded, so there is no container for its init to
           # talk to; pihole-bootstrap downloads twenty blocklists and updates
@@ -262,6 +257,7 @@ jobs:
       # boot — and nothing has ever checked it. A second pass that changes
       # something, or fails on what the first pass wrote, fails here.
       - name: Run them again, to prove they are idempotent
+        timeout-minutes: 10
         env:
           HOOKS_SKIP: headscale-init.sh pihole-bootstrap.sh
         run: sh ./scripts/run-hooks.sh post-start blocking

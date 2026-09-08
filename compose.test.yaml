@@ -81,29 +81,39 @@ services:
     environment:
       - ENABLE_OPENAI_API=false
 
-  # --- nextcloud: replace host bind mounts with named volumes for CI ---
-  # The host directories do not pre-exist in CI, so Docker creates them root:root
-  # and www-data (uid 33) cannot write to them; named volumes get the ownership
-  # right. start_period is extended because the first DB install takes >30s.
+  # --- nextcloud: production's own mounts, with the ownership CI has to give ---
+  #
+  # These used to be replaced by named volumes, on the reasoning that Docker
+  # creates a missing bind source root:root and www-data (uid 33) cannot write
+  # to it. Named volumes did not fix that for `config`: the image's
+  # /var/www/html is empty, so there is nothing at /var/www/html/config to seed
+  # the volume's ownership from, and it came out root:root all the same. Worse,
+  # custom.config.php is bind-mounted *inside* that directory, so the entrypoint
+  # sees a non-empty config/ and skips the rsync that would have chowned it.
+  #
+  # Nextcloud has therefore never installed in CI. It logged `Cannot write into
+  # "config" directory!` four times and served 503 from status.php forever,
+  # which the healthcheck below used to accept as "still initialising the DB" —
+  # so every Nextcloud check in this job has been passing on an empty shell
+  # since the day it was written.
+  #
+  # The workflow pre-creates the three directories owned by uid 33 instead, and
+  # the mounts are production's, which is the arrangement worth testing anyway.
   nextcloud:
-    volumes: !override
-      - nextcloud_html:/var/www/html
-      - nextcloud_ci_data:/var/www/html/data
-      - nextcloud_ci_config:/var/www/html/config
-      - nextcloud_ci_themes:/var/www/html/themes
-      - ./config/nextcloud/custom.config.php:/var/www/html/config/custom.config.php:ro
-      - ./config/nextcloud/security-headers.conf:/etc/apache2/conf-enabled/security-headers.conf:ro
     healthcheck:
-      # Accept both 200 (ready) and 503 (still initialising DB) as healthy for CI.
+      # installed:true, not a status code: 503 is what a Nextcloud that cannot
+      # write its own config answers, and accepting it is what hid this.
       test:
         [
           "CMD-SHELL",
-          "curl -sS -o /dev/null -w '%{http_code}' http://localhost/status.php | grep -qE '^(200|503)$'",
+          "curl -fsS http://localhost/status.php | grep -q '\"installed\":true'",
         ]
-      interval: 30s
+      interval: 20s
       timeout: 10s
-      retries: 5
-      start_period: 60s
+      retries: 8
+      # The install, the four occ calls its post-installation hooks make, and
+      # the external storage they mount all happen inside this window.
+      start_period: 120s
 
   # --- postgres: replace host bind mount with a named volume for CI ---
   # ./data/postgres18 may hold production data initialised with a different
@@ -184,6 +194,3 @@ networks:
 
 volumes:
   postgres_ci_data:
-  nextcloud_ci_data:
-  nextcloud_ci_config:
-  nextcloud_ci_themes:
