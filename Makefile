@@ -77,7 +77,7 @@ help:
 	@echo "  headscale-register <key> Register a headscale node"
 	@echo "  headscale-reset  Reset all Headscale nodes, preauth keys, and IP allocations"
 	@echo "  check-env        Validate required .env variables"
-	@echo "  test             Run the installer, check-env, CLI, service, start-sequence, compose-invariant and routing suites (no host changes)"
+	@echo "  test             Run every suite: installer, check-env, CLI, services, start sequence, compose invariants, routing and SARIF merge (no host changes)"
 	@echo "  smoke            Probe the running stack through Traefik: every router loaded, LAN admitted, outside refused"
 	@echo "  lint             Run every static check CI runs (shell, YAML, Python, Dockerfiles, workflows, secrets)"
 	@echo "  pg-upgrade to=<image> Migrate Postgres to a new major (dump/restore, old data kept)"
@@ -121,6 +121,7 @@ test:
 	@sh tests/stack-up-test.sh
 	@sh tests/compose-test.sh
 	@sh tests/routing-test.sh
+	@sh tests/sarif-merge-test.sh
 
 # Needs a running stack, which is why it is not part of `test`: it asks Traefik
 # for the routing table it actually loaded, then checks each router answers a
