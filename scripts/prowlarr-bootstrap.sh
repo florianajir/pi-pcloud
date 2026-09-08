@@ -140,8 +140,28 @@ wait_for_prowlarr() {
     return 1
 }
 
+# Whether qBittorrent is part of the current selection. Asked of compose rather
+# than of the running container, so a qBittorrent that is merely down does not
+# make this script tear its own registration out and put it back; and asked at
+# all because Prowlarr validates a download client when it is created, so
+# registering one that is not in the stack answers HTTP 400. That warning has
+# been in every CI run's log, and in the log of anyone who runs without the
+# download stack.
+qbittorrent_selected() {
+    compose config --services 2>/dev/null | grep -qx qbittorrent
+}
+
 ensure_download_client() {
     local user password schema payload code existing current id updated
+
+    # Before anything is read or written: an existing registration is left
+    # exactly as it is, because disabling the profile is not a request to
+    # unconfigure Prowlarr.
+    if ! qbittorrent_selected; then
+        log "qbittorrent is not enabled; leaving Prowlarr's download client alone"
+        return 0
+    fi
+
     user="$(get_env_value ADMIN_USER)"
     password="$(get_env_value PASSWORD)"
     [ -n "$user" ] && [ -n "$password" ] || { log "WARNING: ADMIN_USER/PASSWORD not set; skipping download client"; return 0; }
