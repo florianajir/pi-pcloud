@@ -368,7 +368,7 @@ services:
       # wan-allowlist-sync.sh owns both. `:+` so an empty value adds nothing
       # rather than a trailing comma, which Traefik rejects as an invalid CIDR -
       # taking every router referencing the middleware offline with it.
-      - "traefik.http.middlewares.lan.ipallowlist.sourcerange=${ALLOW_IP_RANGES:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd00:30:15::/64,fd7a:115c:a1e0::/48}${HOST_LAN_SUBNET6:+,${HOST_LAN_SUBNET6}}${WAN_HAIRPIN_IP:+,${WAN_HAIRPIN_IP}}"
+      - "traefik.http.middlewares.lan.ipallowlist.sourcerange=${ALLOW_IP_RANGES:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd7a:115c:a1e0::/48}${HOST_LAN_SUBNET6:+,${HOST_LAN_SUBNET6}}${WAN_HAIRPIN_IP:+,${WAN_HAIRPIN_IP}}"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.average=10"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.burst=20"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.period=1s"
@@ -419,8 +419,10 @@ services:
         ipv4_address: 172.30.13.250
       vaultwarden_web:
         ipv4_address: 172.30.14.250
-      # The DNAT target for the [::] ports above, and the stack's only IPv6
-      # address.
+      # The DNAT target for the [::] ports above, and necessarily so: Docker
+      # programs DNAT per address family, and this is the only endpoint with an
+      # IPv6 address. Which network serves the *v4* publishes is an unpinned
+      # tie-break, harmless because every candidate sits in 172.30.0.0/16.
       ingress6:
         ipv4_address: 172.30.15.250
         ipv6_address: fd00:30:15::250
@@ -1108,7 +1110,7 @@ services:
       - OVERWRITEPROTOCOL=https
       - OVERWRITECLIURL=https://nextcloud.${HOST_NAME:-pi.lan}
       - TRUSTED_PROXIES=172.30.11.250/32
-      - ALLOW_IP_RANGES=${ALLOW_IP_RANGES:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd00:30:15::/64,fd7a:115c:a1e0::/48}
+      - ALLOW_IP_RANGES=${ALLOW_IP_RANGES:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd7a:115c:a1e0::/48}
       - FORWARDED_FOR_HEADERS=HTTP_X_FORWARDED_FOR
       - NEXTCLOUD_MAINTENANCE_WINDOW_START=${NEXTCLOUD_MAINTENANCE_WINDOW_START:-2}
       - NEXTCLOUD_DEFAULT_PHONE_REGION=${NEXTCLOUD_DEFAULT_PHONE_REGION:-FR}
@@ -2818,8 +2820,9 @@ networks:
   # qbittorrent, stremio and kapowarr share - and their traffic would leave
   # outside the tunnel, on the residential address.
   #
-  # Docker publishes both families from this network (measured), so the /24 has
-  # to be inside ALLOW_IP_RANGES too: the same trap `backup` documents.
+  # The /24 is pinned inside 172.30.0.0/16 because Docker may pick this network
+  # for the IPv4 publishes too - measured - and a host-originated request would
+  # then reach Traefik from a gateway outside the allowlist: `backup`'s trap.
   ingress6:
     driver: bridge
     name: ingress6

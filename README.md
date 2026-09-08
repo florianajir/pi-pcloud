@@ -69,7 +69,7 @@ You don't have to run all of it. Core infrastructure always starts; every other 
 | **Storage** | NVMe SSD HAT recommended (MicroSD degrades fast under continuous I/O) |
 | **Domain** | A domain on Cloudflare (free tier) + an API token with `Zone → DNS → Edit` |
 | **Software** | Docker and the Compose plugin — the installer offers to add them |
-| **Router** | Forward `443/tcp`. Optionally `443/udp` for HTTP/3, and `41641/udp` + `3478/udp` for direct VPN links. For IPv6, allow inbound `443/tcp` to the Pi in the IPv6 firewall — there is nothing to forward |
+| **Router** | Forward `443/tcp`. Optionally `443/udp` for HTTP/3, and `41641/udp` + `3478/udp` for direct VPN links. For IPv6, allow inbound `443/tcp` (and `443/udp`) to the Pi in the IPv6 firewall — there is nothing to forward |
 | **Off-site backup** | An S3-compatible bucket (optional but recommended) |
 
 ## Everyday use

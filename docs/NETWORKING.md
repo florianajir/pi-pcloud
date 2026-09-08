@@ -198,12 +198,14 @@ of falling back to userland `docker-proxy`, so the client's real address survive
 Only the router's IPv6 firewall was holding the first row shut. Hence every port is written out per
 family (`"0.0.0.0:443:443"` *and* `"[::]:443:443"`) rather than left bare.
 
-**No daemon change, and no sysctl.** `ip6tables` has been on by default since Docker 27, and both
-IPv6 subnets are pinned, so no IPv6 `default-address-pools` entry is needed either —
-`/etc/docker/daemon.json` is untouched and Docker is never restarted.
-`net.ipv6.conf.all.forwarding` is already set for Tailscale, and NetworkManager processes Router
-Advertisements in user space, so the RA-derived address is renewed regardless of the kernel's
-`accept_ra` — setting it would be a knob nothing reads.
+**One daemon key, and no sysctl.** Both IPv6 subnets are pinned, so no IPv6 `default-address-pools`
+entry is needed. `install.sh` does write `"ip6tables": true` — it has been the default since Docker
+27, but the `[::]` publishes rest on it, so it is stated rather than inherited; on a host that
+already has a `daemon.json` the installer warns instead of rewriting it, and warns too when the
+running daemon is old enough to default it off. `net.ipv6.conf.all.forwarding` is already set for
+Tailscale, and NetworkManager processes Router Advertisements in user space, so the RA-derived
+address is renewed regardless of the kernel's `accept_ra` — setting it would be a knob nothing
+reads.
 
 **Addressing.** Both subnets are ULAs (`fd00::/8` — the counterpart of `172.30.0.0/16`) mirroring
 the IPv4 numbering: `172.30.15.0/24` → `fd00:30:15::/64`, `172.31.242.0/24` → `fd00:31:242::/64`.
@@ -211,10 +213,16 @@ RFC 4193 asks for a random Global ID; mnemonic numbering is chosen instead becau
 have to be read in an allowlist. The asymmetry is preserved: `egress_*` sits in `fd00:31:*`, outside
 the allowlist, as its `172.31.*` sits outside `172.30.0.0/16`.
 
-**The allowlist gains two kinds of entry.** Three fixed members in `ALLOW_IP_RANGES` — `::1/128`,
-`fd00:30:15::/64`, `fd7a:115c:a1e0::/48`, the counterparts of `127.0.0.1/32`, `172.30.0.0/16` and
-`100.64.0.0/10` — and `HOST_LAN_SUBNET6`, appended separately because the ISP owns it and it changes
-when the line reconnects. `wan-allowlist-sync.sh` reads it off the LAN interface's routing table on
+**The allowlist gains two kinds of entry.** Two fixed members in `ALLOW_IP_RANGES` — `::1/128` and
+`fd7a:115c:a1e0::/48`, the counterparts of `127.0.0.1/32` and `100.64.0.0/10` — and
+`HOST_LAN_SUBNET6`, appended separately because the ISP owns it and it changes when the line
+reconnects.
+
+`172.30.0.0/16` gets **no** IPv6 counterpart, deliberately. Traefik is the only container with an
+IPv6 address and it never calls itself, so the sole source that could arrive from `fd00:30:15::/64`
+is the bridge gateway — which is precisely what `docker-proxy` substitutes when the IPv6 DNAT is
+missing. Allowlisting it would turn that failure into an open door rather than a `403`. The cost is
+that a request to `[::1]` is refused where `127.0.0.1` is admitted; nothing in the stack makes one. `wan-allowlist-sync.sh` reads it off the LAN interface's routing table on
 the same 15-minute timer as `WAN_HAIRPIN_IP`, refusing anything that is not global unicast
 (`2000::/3`) or longer than a `/64`. It admits what `192.168.1.0/24` admits: every device on your
 LAN. A source address cannot be forged through a TCP handshake, so only devices actually on the link
@@ -255,6 +263,12 @@ Two steps, in this order — the reverse degrades remote access.
 
 Publishing before opening the pinhole makes every off-LAN client try IPv6 and fail. Left empty,
 public DNS keeps A records only while IPv6 still works from the LAN.
+
+**If the line later loses IPv6, unset it again.** ddns-updater can only publish an address it can
+observe, so it leaves the AAAA records at their last value and nothing reports that as wrong — its
+healthcheck compares each record against a resolver, which still agrees. Off-LAN clients then pay a
+connection timeout against a dead address on every visit. `HOST_LAN_SUBNET6` emptying itself on the
+15-minute timer is the signal to watch for.
 
 ## Casting to a DLNA renderer
 
@@ -317,7 +331,7 @@ Since Pi-hole resolves `*.<HOST_NAME>` to the Pi, every service works from the V
 | `egress_unbound`, `egress_immich`, `egress_ddns` | `172.31.240-242.0/24`; `egress_ddns` also `fd00:31:242::/64` | one container each | Outbound-only internet access. One shared `dns_egress` used to hold Unbound and immich-machine-learning, which let the model downloader open `unbound:5335` for no functional reason. Pinned outside `172.30.0.0/16` on purpose: these have unrestricted egress and no peer, and an address inside `ALLOW_IP_RANGES` would be a hairpin route to every LAN-only service, and the IPv6 numbering keeps that asymmetry. `egress_ddns` has IPv6 because ddns-updater has to observe its own public v6 address to publish an AAAA |
 | `lan` | macvlan on `HOST_LAN_PARENT` | Pi-hole, Stremio (`stremio-lan` profile only) | Direct LAN presence — DNS, and SSDP/mDNS cast discovery |
 | `n8n_runners` | bridge | n8n, n8n-runners | Task-runner traffic |
-| `ingress6` | `172.30.15.0/24` + `fd00:30:15::/64` (Traefik `.250` / `::250`) | Traefik only | The IPv6 ingress, and the stack's only IPv6 address. Docker publishes **both** families from here (measured), so the `/24` is pinned inside `172.30.0.0/16` too. See [IPv6](#ipv6) |
+| `ingress6` | `172.30.15.0/24` + `fd00:30:15::/64` (Traefik `.250` / `::250`) | Traefik only | The IPv6 ingress, and the stack's only IPv6 address — so the IPv6 DNAT can only ever target it, Docker programming those rules per address family. Which network serves the *v4* publishes is an unpinned tie-break, which is why the `/24` is pinned inside `172.30.0.0/16` too. See [IPv6](#ipv6) |
 
 ## Ports
 

@@ -250,6 +250,25 @@ DOCKER_ADDRESS_POOL_JSON='{
   "ip6tables": true
 }'
 
+# 0 when the version cannot be read, which reads as "old" and warns rather than
+# staying quiet about the one thing this check exists for.
+docker_server_major() {
+    local major=""
+    major="$(docker version --format '{{.Server.Version}}' 2>/dev/null | cut -d. -f1)"
+    case "$major" in
+        ''|*[!0-9]*) major=0 ;;
+    esac
+    printf '%s' "$major"
+}
+
+warn_ip6tables() {
+    log "WARNING: $1"
+    log "  Traefik's [::] publishes then go through userland docker-proxy, which"
+    log "  rewrites the client address to a Docker gateway one - so lan@docker sees"
+    log "  a source it cannot judge. Add \"ip6tables\": true and restart Docker, or"
+    log "  drop the [::] entries from traefik's ports in compose.yaml."
+}
+
 ensure_docker_address_pool() {
     local f=/etc/docker/daemon.json
 
@@ -262,11 +281,14 @@ ensure_docker_address_pool() {
             log "  as an unexplained 403 from Traefik. Add these keys and restart Docker:"
             printf '%s\n' "$DOCKER_ADDRESS_POOL_JSON" >&2
         fi
+        # Absent is the case that matters, and the one a grep for `false` never
+        # sees: this file is what an earlier run of this installer wrote, so
+        # every upgraded host lands here with no ip6tables key at all. That is
+        # only safe while the daemon defaults it on, which it has since 27.
         if grep -qE '"ip6tables"[[:space:]]*:[[:space:]]*false' "$f"; then
-            log "WARNING: $f disables ip6tables."
-            log "  Traefik's [::] publishes then go through userland docker-proxy, which"
-            log "  rewrites the client address to one inside ALLOW_IP_RANGES - so lan@docker"
-            log "  admits every IPv6 caller. Set it true, or drop the [::] ports."
+            warn_ip6tables "$f disables ip6tables."
+        elif ! grep -q '"ip6tables"' "$f" && [ "$(docker_server_major)" -lt 27 ]; then
+            warn_ip6tables "$f sets no ip6tables key, and this daemon defaults it off."
         fi
         return 0
     fi

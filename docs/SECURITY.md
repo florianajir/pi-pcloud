@@ -295,8 +295,11 @@ and starting at `.128` so auto-allocation can never collide with the subnets
 installer says what to add rather than rewriting the file.
 
 No IPv6 pool is needed alongside it: both IPv6 subnets are pinned in
-`compose.yaml`, so nothing is auto-allocated. `/etc/docker/daemon.json` gained
-nothing for IPv6.
+`compose.yaml`, so nothing is auto-allocated. The file does gain `"ip6tables":
+true`, stated rather than inherited, because the `[::]` publishes depend on it -
+without it the daemon programs no IPv6 DNAT and `docker-proxy` rewrites every
+client address. On a host that already has a `daemon.json` the installer only
+warns, as it does for the address pool.
 
 ## Accepted risks
 
@@ -340,8 +343,11 @@ stack, and 2FA on every family device was judged the larger cost.
 `lan@docker`, so a compromised one can reach any `lan`-gated router through
 Traefik. Narrowing it means pinning static addresses for Uptime Kuma's probes and
 the tailnet and host gateways; the services behind those routers each have their
-own login, so the gain was judged smaller than the breakage risk. `fd00:30:15::/64`
-is there for the same reason, but covers one container rather than every one.
+own login, so the gain was judged smaller than the breakage risk. It has no IPv6
+counterpart: only Traefik has an IPv6 address and it never calls itself, so the
+one source that could come from `ingress6` is its gateway - the address
+`docker-proxy` substitutes when the IPv6 DNAT is missing. Admitting it would turn
+that failure into an open door instead of a `403`.
 
 **`HOST_LAN_SUBNET6` allowlists a globally routable prefix.** It admits what
 `192.168.1.0/24` admits - every device on your LAN. Being routable where private

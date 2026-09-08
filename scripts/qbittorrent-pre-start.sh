@@ -33,7 +33,7 @@ main() {
     [ -n "$user" ] || die "ADMIN_USER is not set in .env"
 
     allow_ip_ranges="$(get_env_value ALLOW_IP_RANGES)"
-    allow_ip_ranges="${allow_ip_ranges:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd00:30:15::/64,fd7a:115c:a1e0::/48}"
+    allow_ip_ranges="${allow_ip_ranges:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd7a:115c:a1e0::/48}"
     # qBittorrent INI format uses ", " (comma + space) as the list separator
     allow_ip_ranges_ini="$(printf '%s' "$allow_ip_ranges" | sed 's/,/, /g')"
 

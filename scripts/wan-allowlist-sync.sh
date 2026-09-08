@@ -57,8 +57,9 @@ is_lan_prefix6() {
         ''|*[!0-9]*) return 1 ;;
     esac
     # Anything longer than a /64 is a host route, not a range neighbours draw
-    # from. The lower bound is loose on purpose: /48 and /56 are both delegated.
-    [ "$len" -ge 32 ] && [ "$len" -le 64 ]
+    # from; anything shorter than the /48 an ISP delegates to a site is a chunk
+    # of its allocation, and allowlisting that admits other customers.
+    [ "$len" -ge 48 ] && [ "$len" -le 64 ]
 }
 
 # Whether the live label already carries $2 as one of its comma-separated
@@ -66,9 +67,24 @@ is_lan_prefix6() {
 # that failed last time leaves the two out of step, and keying off .env alone
 # would then short-circuit every later run and leave the stale range live
 # indefinitely.
+# Whether the live label still carries a member this key owns, used when the
+# value has been cleared and there is no desired string left to look for. The
+# fixed members of ALLOW_IP_RANGES hold no global unicast, so a match can only
+# have come from HOST_LAN_SUBNET6.
+label_has_owned_member() {
+    local label="$1"
+    local test_fn="$2"
+    local member=""
+
+    for member in $(printf '%s' "$label" | tr ',' ' '); do
+        "$test_fn" "$member" && return 0
+    done
+    return 1
+}
+
 label_has_member() {
     case "$1" in
-        *",$2,"*|*",$2") return 0 ;;
+        "$2"|"$2,"*|*",$2,"*|*",$2") return 0 ;;
     esac
     return 1
 }
@@ -170,6 +186,15 @@ lan_prefixes6() {
         out="${out:+$out,}$candidate"
     done
 
+    # Empty is only believed when a second, independent source agrees. A route
+    # table can lose the on-link prefix for a moment - an RA gap, a link flap, a
+    # NetworkManager restart - and clearing on that recreates Traefik twice and
+    # 403s every LAN IPv6 client in between. An address outlives those.
+    if [ -z "$out" ] && ip -6 addr show dev "$parent" scope global 2>/dev/null | grep -q inet6; then
+        log "WARNING: $parent has a global IPv6 address but no on-link prefix route, leaving HOST_LAN_SUBNET6 as it is"
+        return 1
+    fi
+
     printf '%s' "$out"
 }
 
@@ -185,17 +210,29 @@ NEEDS_APPLY=""
 # Only called with a value the caller could actually determine, so an empty one
 # means the source is genuinely gone and the entry has to be cleared - leaving it
 # would keep allowlisting a range nothing on the link uses any more.
+#
+# $3 names a predicate matching the label members this key owns. Without it the
+# clearing path could only compare .env against itself, and a `compose up` that
+# failed after .env was cleared would leave the dead range live in Traefik with
+# nothing left to notice it - the same trap label_has_member exists to avoid on
+# the path below.
 sync_key() {
     local key="$1"
     local desired="$2"
+    local owns="${3:-}"
     local current=""
 
     current="$(get_env_value_clean "$key")"
 
     if [ -z "$desired" ]; then
-        [ -n "$current" ] || return 0
-        write_env_key "$key" ""
-        log "$key: $current -> <unset>"
+        if [ -z "$current" ]; then
+            [ -n "$owns" ] || return 0
+            label_has_owned_member "$APPLIED" "$owns" || return 0
+            log "$key is unset but traefik still carries it - reapplying"
+        else
+            write_env_key "$key" ""
+            log "$key: $current -> <unset>"
+        fi
         NEEDS_APPLY=1
         return 0
     fi
@@ -215,7 +252,7 @@ if HAIRPIN_IP="$(desired_hairpin_ip)"; then
     sync_key WAN_HAIRPIN_IP "$HAIRPIN_IP"
 fi
 if PREFIXES6="$(lan_prefixes6)"; then
-    sync_key HOST_LAN_SUBNET6 "$PREFIXES6"
+    sync_key HOST_LAN_SUBNET6 "$PREFIXES6" is_lan_prefix6
 fi
 
 [ -n "$NEEDS_APPLY" ] || exit 0

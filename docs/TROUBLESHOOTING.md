@@ -51,8 +51,11 @@ curl -k -o /dev/null -w '%{http_code}\n' https://vault.<HOST_NAME>/             
 **IPv4 works and IPv6 gives 403.** The `"ClientHost"` is a global IPv6 address the allowlist does not cover. `HOST_LAN_SUBNET6` admits your LAN's prefix and the same timer maintains it; empty is the normal cause. Compare the two families:
 
 ```bash
-curl -4 -sk -o /dev/null -w 'v4=%{http_code}\n' https://homepage.<HOST_NAME>/
-curl -6 -sk -o /dev/null -w 'v6=%{http_code}\n' https://homepage.<HOST_NAME>/
+# --resolve, because Pi-hole answers AAAA for *.<HOST_NAME> with NODATA (below),
+# so a plain `curl -6` on a LAN client fails to resolve rather than reporting a status.
+PI6=$(ip -6 addr show scope global | awk '/inet6/{print $2}' | cut -d/ -f1 | head -1)   # on the Pi
+curl -4 -sk -o /dev/null -w 'v4=%{http_code}\n' --resolve homepage.<HOST_NAME>:443:<HOST_LAN_IP> https://homepage.<HOST_NAME>/
+curl -6 -sk -o /dev/null -w 'v6=%{http_code}\n' --resolve "homepage.<HOST_NAME>:443:[$PI6]" https://homepage.<HOST_NAME>/
 ```
 
 The reverse split — IPv6 timing out from **outside** while IPv4 works — is the router's IPv6 firewall, not the stack: publishing AAAA does not open inbound `443`.
