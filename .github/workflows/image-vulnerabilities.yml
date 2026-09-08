@@ -1,0 +1,210 @@
+name: Image vulnerabilities
+
+# Alerting, not a gate. Every image in compose.yaml is pinned, and a CVE
+# published after the pin was chosen is news rather than a reason to redden a
+# pull request that changed something else. So this runs on a schedule and
+# reports, and nothing in CI waits on it.
+#
+# What it covers that nothing else does: dependabot raises a pull request when a
+# newer tag exists, and never says that the tag you are on has a fixable
+# vulnerability. That is the gap, and it is the only one — hadolint reads the
+# Dockerfiles, gitleaks and GitGuardian look for secrets, CodeQL reads the
+# Python and JavaScript.
+#
+# Findings land in code scanning rather than in an issue, because an alert there
+# closes by itself once the bump that fixes it lands. An issue would have to be
+# reconciled by hand.
+on:
+  # Monday, an hour before dependabot's daily run: the bumps and the reasons to
+  # want them then arrive together.
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: image-vulnerabilities
+  # Never cancelled: a scan half-way through has uploaded nothing, and the
+  # previous week's alerts would sit unrefreshed for another week.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+  security-events: write
+
+jobs:
+  scan:
+    name: Scan the images the stack runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Pinned by digest like everything in compose.yaml, and for a stronger
+      # reason than most: this reads the whole registry inventory and writes
+      # into this repository's code scanning results.
+      TRIVY: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+      # The stack runs on a Raspberry Pi. The amd64 variant of an image carries
+      # different package versions, so scanning it would report vulnerabilities
+      # this host does not have and miss the ones it does — and
+      # mvance/unbound-rpi publishes no amd64 variant at all.
+      PLATFORM: linux/arm64
+      # Only what a tag bump can actually fix. A vulnerability with no upstream
+      # fix is not an action, and this exists to say which bumps are worth
+      # making; unfixed base-OS CVEs would bury that in a list nobody reads.
+      SEVERITY: HIGH,CRITICAL
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - name: List the images the stack runs
+        run: |
+          set -euo pipefail
+          # Every profile, ci-excluded included: gluetun, headscale and tailscale
+          # run on the Pi even though a runner cannot start them, so they are
+          # exactly as worth scanning as the rest.
+          #
+          # Services compose builds are left out deliberately. What could carry
+          # a CVE is the base image their Dockerfile names, and dependabot
+          # already watches all five of those directories.
+          #
+          # Piped straight into jq: `docker compose config` inlines the contents
+          # of every env_file, so only image names are ever read out of it.
+          DATA_LOCATION=/nonexistent COMPOSE_PROFILES=all,stremio-lan,ci-excluded \
+            docker compose --env-file /dev/null -f compose.yaml config --format json \
+            | jq -r '.services | to_entries
+                     | map(select(.value.build == null) | .value.image)
+                     | unique | .[]' > images.txt
+
+          count="$(wc -l < images.txt)"
+          echo "${count} images to scan"
+          sed 's/^/  /' images.txt
+
+          # A floor, not a non-empty check: a render that half-breaks still
+          # yields something, and a scan of four images would upload a run that
+          # closes every alert the other thirty raised.
+          if [ "${count}" -lt 25 ]; then
+            echo "::error::only ${count} images in the render, expected at least 25"
+            exit 1
+          fi
+
+      # ghcr.io serves eight of these anonymously but rate-limits by IP, and a
+      # runner shares its address widely.
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Scan each of them
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          mkdir -p sarif
+          : > unscanned.txt
+
+          # --image-src remote, so Trivy streams what it needs from the registry
+          # instead of `docker pull`ing thirty-four images into a runner that has
+          # run out of disk on this stack's images before.
+          while read -r image; do
+            slug="$(printf '%s' "${image}" | tr -c 'A-Za-z0-9._-' '_')"
+            scanned=""
+            for attempt in 1 2 3; do
+              if docker run --rm \
+                  -v "${PWD}/.trivy:/root/.cache/trivy" \
+                  -v "${PWD}/sarif:/out" \
+                  "${TRIVY}" image \
+                    --image-src remote \
+                    --platform "${PLATFORM}" \
+                    --scanners vuln \
+                    --severity "${SEVERITY}" \
+                    --ignore-unfixed \
+                    --format sarif \
+                    --output "/out/${slug}.sarif" \
+                    --quiet "${image}"; then
+                scanned=1
+                break
+              fi
+              sleep "$((attempt * 20))"
+            done
+            if [ -z "${scanned}" ]; then
+              echo "${image}" >> unscanned.txt
+              echo "::warning::could not scan ${image} after 3 attempts"
+            fi
+          done < images.txt
+
+      # One run, one category, one upload. Uploading a file per image would mean
+      # a category per image, and a category whose image came back clean would
+      # never be uploaded again — leaving every alert it ever raised open,
+      # describing a CVE patched months ago.
+      - name: Merge the scans into one run
+        run: |
+          set -euo pipefail
+          set -- sarif/*.sarif
+          if [ ! -e "$1" ]; then
+            echo "::error::no image could be scanned; refusing to upload an empty run over the last one"
+            exit 1
+          fi
+          python3 scripts/sarif-merge.py trivy.sarif "$@"
+
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v4
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-images
+
+      # So a glance at the run answers "which bump is worth making" without
+      # opening the Security tab.
+      - name: Summarise
+        if: always()
+        run: |
+          set -euo pipefail
+          [ -f trivy.sarif ] || exit 0
+          {
+            echo "## Fixable HIGH and CRITICAL vulnerabilities"
+            echo
+            echo "| image | critical | high |"
+            echo "|---|---:|---:|"
+            # Severity looked up by rule id, not by ruleIndex: an offset is
+            # only meaningful inside the run that produced it, and this file was
+            # assembled from thirty-four of them.
+            jq -r '
+              .runs[0] as $run
+              | ($run.tool.driver.rules
+                 | map({key: .id,
+                        value: ((.properties.tags // [])
+                                | map(select(. == "CRITICAL" or . == "HIGH")) | first // "HIGH")})
+                 | from_entries) as $severity
+              | [$run.results[]
+                 | {image: .locations[0].physicalLocation.artifactLocation.uri,
+                    severity: ($severity[.ruleId] // "HIGH")}]
+              | group_by(.image)
+              | map({image: .[0].image,
+                     critical: (map(select(.severity == "CRITICAL")) | length),
+                     high: (map(select(.severity == "HIGH")) | length)})
+              | sort_by(-.critical, -.high)
+              | .[] | "| \(.image) | \(.critical) | \(.high) |"
+            ' trivy.sarif
+            echo
+            jq -r '.runs[0]
+                   | "\(.results | length) findings over \(.tool.driver.rules | length) distinct vulnerabilities."' \
+              trivy.sarif
+            if [ -s unscanned.txt ]; then
+              echo
+              echo "### Not scanned"
+              echo
+              sed 's/^/- /' unscanned.txt
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Last, so the findings are uploaded and summarised first. An image nobody
+      # scanned is a hole in the report, and a hole that says nothing is worse
+      # than a red run.
+      - name: Report the images that could not be scanned
+        run: |
+          set -euo pipefail
+          if [ -s unscanned.txt ]; then
+            echo "::error::these images were not scanned, so nothing here speaks for them:"
+            sed 's/^/  /' unscanned.txt
+            exit 1
+          fi
+          echo "every image in the render was scanned"
