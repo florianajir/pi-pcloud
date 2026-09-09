@@ -92,6 +92,12 @@ if printf '%s' "$cmd" | grep -qE "$READER_LEAD"'(printenv|env)([ \t]*$|[ \t]*['"
     deny 'A bare printenv/env dumps the whole environment. Name the one variable you need instead.'
 fi
 
+# occ config:*:get prints a key's raw value to stdout - no file path, so the
+# SECRETS check below misses it. This is how the Redis password leaked.
+if printf '%s' "$cmd" | grep -qE 'occ[ \t]+config:(system|app):get[ \t]+[^;&|]*(redis|password|secret|token|dbpassword|apikey|api_key|smtppassword|s3\.[a-z_]*key)'; then
+    deny 'occ config:*:get prints the raw stored value - this key looks secret-shaped.'
+fi
+
 # Anything that prints file content. sed/awk/grep/jq are in here deliberately:
 # a targeted extraction is exactly how the Kavita TokenKey leaked - the redaction
 # keyed on the wrong field name, matched nothing, and printed the file whole.
