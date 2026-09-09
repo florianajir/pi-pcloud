@@ -170,8 +170,7 @@ GROUPS = [
             "pi-llama-cpp",
             "pi-piper",
             "pi-litellm",
-            # The only check agentgateway gets: its image is distroless, so
-            # compose.yaml can declare no healthcheck for it.
+            # agentgateway's only check: distroless, so it has no healthcheck.
             "pi-agentgateway",
         ],
     },

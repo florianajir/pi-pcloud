@@ -24,9 +24,9 @@
 # a list that grew stays visible in the log it was added to hide from.
 #
 # An entry is "script.sh", or "service:script.sh" to gate it on that optional
-# service being selected in COMPOSE_PROFILES. The gate may name several
-# services, comma-separated, for a script whose service is started by more than
-# one profile - litellm runs whenever open-webui does, so its hook has to too.
+# service being selected in COMPOSE_PROFILES. It may name several, comma-
+# separated, for a service more than one profile starts - litellm runs whenever
+# open-webui does, so its hook has to too.
 #
 # Host-only, never mounted into a container, so sourcing lib.sh is fine here.
 

@@ -162,10 +162,8 @@ contains "the selected service's hook runs"   "$out" "HOOK qbittorrent-pre-start
 contains "and so does its bootstrap"          "$out" "HOOK qbittorrent-bootstrap.sh"
 lacks    "an unselected service is skipped"   "$out" "HOOK prowlarr-pre-start.sh"
 
-# litellm carries open-webui's profile as well as its own, so compose starts it
-# whenever the chat runs while COMPOSE_PROFILES names only open-webui. A hook
-# gated on the service's own name alone was skipped on exactly those boots, and
-# the proxy came up with no master key.
+# litellm carries open-webui's profile as well as its own, so a hook gated on
+# its own name alone was skipped on exactly the boots that start it.
 out="$(run open-webui)"
 contains "a hook gated on two profiles runs on either" "$out" "HOOK litellm-pre-start.sh"
 lacks    "and still gates an unrelated service"        "$out" "HOOK kavita-pre-start.sh"

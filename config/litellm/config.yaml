@@ -5,12 +5,11 @@
 model_list:
   - model_name: gemma-4-e2b-it
     litellm_params:
-      # openai/ selects the OpenAI-compatible transport; the name after it is
-      # the alias llama-server answers to (LLAMA_ARG_ALIAS in compose.yaml).
+      # openai/ selects the OpenAI-compatible transport; the rest is
+      # LLAMA_ARG_ALIAS in compose.yaml.
       model: openai/gemma-4-e2b-it
       api_base: http://llama-cpp:8080/v1
-      # Required by the client library, ignored by llama-server: it runs
-      # unauthenticated on the internal ai network.
+      # Required by the client library, ignored by llama-server.
       api_key: llama-cpp
 
 litellm_settings:
@@ -19,7 +18,6 @@ litellm_settings:
   # Clients send sampling fields llama-server never implemented; without this a
   # single unknown key is a 400 for the whole request.
   drop_params: true
-  # What an Authelia user gets on first SSO login: their own keys and their own
-  # spend, nothing else. PROXY_ADMIN_ID in compose.yaml promotes the one admin.
+  # What an Authelia user gets on first login; PROXY_ADMIN_ID promotes the admin.
   default_internal_user_params:
     user_role: internal_user

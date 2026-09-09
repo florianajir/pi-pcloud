@@ -33,9 +33,8 @@ case "$DEFAULT_LANGUAGE" in
 esac
 
 LITELLM_URL="http://litellm:4000/v1"
-# The file compose exports LITELLM_MASTER_KEY and OPENAI_API_KEY from, so this
-# cannot disagree with what either container was started with. Hex, which is
-# what makes it safe to splice into the SQL below.
+# The same file compose exports both containers' keys from, so this cannot
+# disagree with them. Hex, which is what makes it safe to splice into SQL.
 LITELLM_KEY_FILE="$(resolve_data_location_path)/litellm/secrets/master_key"
 # Must match model_name in config/litellm/config.yaml, which is in turn
 # LLAMA_ARG_ALIAS in compose.yaml.
@@ -161,9 +160,8 @@ connection_present() {
          );" 2>/dev/null | tr -d ' \r\n'
 }
 
-# The key is a full-privilege LiteLLM credential, so it never reaches argv:
-# read from the file, checked to be the hex generate_secret produces, and only
-# then spliced into a SQL literal.
+# A full-privilege LiteLLM credential, so it never reaches argv - and it is
+# checked to be hex before being spliced into a SQL literal.
 litellm_key() {
     local key=""
 
@@ -180,9 +178,8 @@ add_connection() {
 
     # api_base_urls, api_keys and api_configs are parallel: the config for a URL
     # is looked up by its index in the URL list, so all three have to grow
-    # together. api_keys is padded first in case it is short, then the real key
-    # is appended at the index this URL lands on - LiteLLM rejects a call
-    # without one.
+    # together. api_keys is padded first in case it is short, then the key is
+    # appended at the index this URL lands on - LiteLLM rejects a call without.
     psql_owui -q <<SQL
 DO \$\$
 DECLARE

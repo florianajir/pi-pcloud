@@ -220,13 +220,11 @@ services:
       - ${DATA_LOCATION:-./data}/lldap/backups:/userdata/lldap/backups
       - ${DATA_LOCATION:-./data}/authelia-config:/userdata/authelia-config
       - ${DATA_LOCATION:-./data}/open-webui/backups:/userdata/open-webui/backups
-      # The salt key rides along: without it the provider credentials in the dump
-      # below cannot be decrypted. Read-only parent, writable backups child, like
-      # vaultwarden's pair above.
+      # The salt key rides along: without it the credentials in the dump below
+      # cannot be decrypted. Read-only parent, writable backups child, as above.
       - ${DATA_LOCATION:-./data}/litellm:/userdata/litellm:ro
       - ${DATA_LOCATION:-./data}/litellm/backups:/userdata/litellm/backups
-      # Its config overlay and request log; small, and the only copy of the MCP
-      # targets added through the UI.
+      # The only copy of the MCP targets added through its UI.
       - ${DATA_LOCATION:-./data}/agentgateway:/userdata/agentgateway:ro
       # Open WebUI's uploads and vector store; without this a DB restore points
       # at blobs that were never snapshotted.
@@ -2561,14 +2559,11 @@ services:
       # turns up no endpoint of its own.
       - WEBUI_AUTH_SIGNOUT_REDIRECT_URL=https://auth.${HOST_NAME:-pi.lan}/logout?rd=https%3A%2F%2Fai.${HOST_NAME:-pi.lan}%2Fauth
       - DATABASE_URL=postgresql://open-webui:${PASSWORD}@postgres/open-webui
-      # Through LiteLLM rather than llama-cpp directly, so the chat's usage is
-      # recorded alongside every other caller's and a model added in LiteLLM
-      # appears here without touching this file.
-      #
-      # The master key rather than a virtual one: a virtual key can only be
-      # minted after LiteLLM is up, which is after this container is created.
-      # OPENAI_API_KEY is exported by the entrypoint above, from the file the
-      # proxy reads it from - so a rotation cannot leave the two disagreeing.
+      # Through LiteLLM, so a model added there appears here without touching
+      # this file. The master key rather than a virtual one: a virtual key can
+      # only be minted after LiteLLM is up, which is after this container is
+      # created. The entrypoint above reads it from the file the proxy reads, so
+      # a rotation cannot leave the two disagreeing.
       - ENABLE_OPENAI_API=true
       - OPENAI_API_BASE_URL=http://litellm:4000/v1
       # No Ollama in the stack; left on, this probes localhost:11434 on every
@@ -2591,9 +2586,8 @@ services:
     volumes:
       - open_webui_data:/app/backend/data
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_open-webui_secret.txt:/run/secrets/oidc_open-webui_secret:ro
-      # The whole directory, for the reason given on the litellm service. It also
-      # carries the salt key, which this container has no use for and which
-      # unlocks nothing the master key above does not already administer.
+      # The whole directory, for the reason given on the litellm service. The
+      # salt key comes with it, and unlocks nothing the master key does not.
       - ${DATA_LOCATION:-./data}/litellm/secrets:/run/secrets/litellm:ro
     depends_on:
       postgres:
@@ -2639,9 +2633,8 @@ services:
     <<: *service-defaults
     image: ghcr.io/berriai/litellm:v1.100.0
     container_name: pi-litellm
-    # open-webui is in this list because it no longer talks to llama-cpp
-    # directly: enabling the chat without this proxy would leave it with no
-    # models at all. Same shape as flaresolverr under prowlarr.
+    # open-webui, because the chat has no models without this proxy now. Same
+    # shape as flaresolverr under prowlarr.
     profiles: ["litellm", "open-webui", "all"]
     networks:
       - frontend
@@ -2650,16 +2643,12 @@ services:
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
     expose:
       - 4000
-    # The three values that cannot come from `environment:`, all files: the OIDC
-    # client secret Authelia's pre-start generates, and the salt key and master
-    # key from scripts/litellm-pre-start.sh - see its header for why neither is
-    # PASSWORD.
+    # Three values that cannot come from `environment:`, all files - see
+    # scripts/litellm-pre-start.sh for why two of them are not PASSWORD.
     #
     # Plain assignments under `-e`, not `export X=$(cat ...)`: export is a
-    # command, so its own success masks a failed substitution and the proxy came
-    # up with the master key "sk-" and an empty salt key. This way a missing file
-    # is a container that exits, which is visible in the log and self-heals as
-    # soon as the pre-start hook has run.
+    # command, so its own success masks a failed substitution, and the proxy came
+    # up with the master key "sk-" and an empty salt key. Measured both ways.
     entrypoint: ["bash", "-euc", "GENERIC_CLIENT_SECRET=$(cat /run/secrets/oidc_litellm_secret); LITELLM_SALT_KEY=$(cat /run/secrets/litellm/salt_key); LITELLM_MASTER_KEY=sk-$(cat /run/secrets/litellm/master_key); export GENERIC_CLIENT_SECRET LITELLM_SALT_KEY LITELLM_MASTER_KEY; exec docker/prod_entrypoint.sh --config /etc/litellm/config.yaml --port 4000"]
     environment:
       - TZ=${TIMEZONE:-Europe/Paris}
@@ -2671,9 +2660,8 @@ services:
       # What the SSO redirect URI is built from; without it LiteLLM sends the
       # browser back to the container's own address.
       - PROXY_BASE_URL=https://llm.${HOST_NAME:-pi.lan}
-      # Matched against GENERIC_USER_ID_ATTRIBUTE below, so whoever signs in
-      # with this Authelia username is promoted to proxy_admin on every login.
-      # Everyone else gets the role in config/litellm/config.yaml.
+      # Matched against GENERIC_USER_ID_ATTRIBUTE below: this account is
+      # promoted to proxy_admin, everyone else gets config/litellm's role.
       - PROXY_ADMIN_ID=${ADMIN_USER:-admin}
       - GENERIC_CLIENT_ID=litellm
       # Written out rather than discovered: LiteLLM's generic provider takes the
@@ -2687,11 +2675,10 @@ services:
     volumes:
       - ./config/litellm/config.yaml:/etc/litellm/config.yaml:ro
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_litellm_secret.txt:/run/secrets/oidc_litellm_secret:ro
-      # The directory, not the two files inside it: Docker materialises a
-      # *directory* at a missing bind-mount source, and a directory where a
-      # secret file belongs is a trap nothing recovers from - `[ -s ]` in the
-      # pre-start hook reads it as already generated. An empty directory is
-      # merely empty, and the next hook run fills it in place.
+      # The directory, not the files inside it: Docker materialises a
+      # *directory* at a missing bind-mount source, and `[ -s ]` in the
+      # pre-start hook then reads that as already generated. An empty directory
+      # is merely empty, and the next hook run fills it in place.
       - ${DATA_LOCATION:-./data}/litellm/secrets:/run/secrets/litellm:ro
     depends_on:
       postgres:
@@ -2704,10 +2691,8 @@ services:
       # The image ships neither curl nor wget, and /health/liveliness is the one
       # health route that takes no credential.
       test: ["CMD", "python3", "-c", "import urllib.request as r; r.urlopen('http://localhost:4000/health/liveliness').read()"]
-      # Prisma applies the schema migrations on first start against a database
-      # that does not exist yet. start_interval so open-webui, which waits on
-      # this one being healthy, is not held to the 120s probe interval on a boot
-      # where it was ready in 60.
+      # Prisma migrates on first start. start_interval so open-webui, which
+      # waits on this being healthy, is not held to the 120s probe interval.
       start_period: 180s
       start_interval: 5s
     labels:
@@ -2739,9 +2724,8 @@ services:
     image: cr.agentgateway.dev/agentgateway:v1.5.0
     container_name: pi-agentgateway
     profiles: ["agentgateway", "all"]
-    # The image runs as 65532, which cannot write the SQLite overlay in a data
-    # directory the project owner has to stay able to read without sudo. 1000 is
-    # what every PUID in this file already assumes.
+    # The image runs as 65532, which cannot write a data directory the project
+    # owner must stay able to read; 1000 is what every PUID here assumes.
     user: "1000:1000"
     networks:
       - frontend
@@ -2764,16 +2748,14 @@ services:
       - ./config/agentgateway/config.yaml:/config.yaml:ro
       - ${DATA_LOCATION:-./data}/agentgateway:/data
     depends_on:
-      # Both, and both healthy: agentgateway fetches the OIDC discovery document
-      # at startup and exits when that fails, and the issuer resolves through
-      # Traefik (extra_hosts above), not to Authelia directly.
+      # Both healthy: it fetches the OIDC discovery document at startup and
+      # exits when that fails, and the issuer resolves through Traefik.
       authelia:
         condition: service_healthy
       traefik:
         condition: service_healthy
-    # No healthcheck: the image is distroless - /app/agentgateway, ld.so and a CA
-    # bundle - so there is no shell and no HTTP client to probe with, and the
-    # binary has no health subcommand. Uptime Kuma watches the container instead.
+    # No healthcheck: the image is distroless, so there is no shell and no HTTP
+    # client to probe with. Uptime Kuma watches the container instead.
     labels:
       - "homepage.group=AI"
       - "homepage.name=Agentgateway"

@@ -17,11 +17,10 @@
 # profiles) is everything treated as enabled.
 #
 # More than one service may be named, because COMPOSE_PROFILES records what was
-# *asked for* while compose starts more than that: a service listing another
-# service's name in its own `profiles:` runs whenever that one does - litellm
-# under open-webui, gluetun under qbittorrent. A hook belonging to such a
-# service has to name every profile that starts it, or it is skipped on exactly
-# the boots where its work is needed.
+# *asked for* while compose starts more: a service listing another's name in its
+# own `profiles:` runs whenever that one does - litellm under open-webui,
+# gluetun under qbittorrent. A hook on such a service has to name every profile
+# that starts it, or it is skipped on exactly the boots that need it.
 #
 # When COMPOSE_PROFILES is not set in the environment (a unit without
 # EnvironmentFile=, e.g. nextcloud-cron.service), it is read from the .env
@@ -78,9 +77,8 @@ profile_listed() {
     return 1
 }
 
-# service_enabled <profiles> <service>[,<service>...]: 0 if any of them is.
-# The split is its own loop rather than a wider IFS in profile_listed, so both
-# sides stay exact string comparisons of one name against one name.
+# service_enabled <profiles> <service>[,<service>...]: 0 if any of them is. Its
+# own loop rather than a wider IFS above, so both sides stay exact comparisons.
 service_enabled() {
     _wanted="$2"
 

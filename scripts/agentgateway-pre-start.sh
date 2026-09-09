@@ -1,33 +1,26 @@
 #!/bin/sh
-# Prepares the two things agentgateway cannot get for itself: a writable data
-# directory, and the two secrets its configuration file reads from the
-# environment.
+# Prepares what agentgateway cannot get for itself: a writable data directory,
+# and an env_file carrying the two secrets its config reads from the environment.
 #
-# config/agentgateway/config.yaml refers to ${UI_CLIENT_SECRET}, and the OIDC
-# client secret is a file that scripts/authelia-pre-start.sh generates - so
-# something has to carry it into the container's environment. agentgateway is a
-# distroless image with no shell, so the `export $(cat ...)` entrypoint trick the
-# other services use is not available here; an env_file is.
+# An env_file rather than the `export $(cat ...)` entrypoint the other services
+# use, because the image is distroless and has no shell to run it in.
 #
-# A pre-start hook (scripts/stack-up.sh), after authelia-pre-start.sh so the
-# client secret exists. Idempotent.
+# A pre-start hook, after authelia-pre-start.sh so the client secret exists.
+# Idempotent.
 
 set -eu
 
 . "$(dirname "$0")/lib.sh"
 
-# Not ENV_FILE: that name is lib.sh's path to .env, and resolve_data_location_path
-# below reads DATA_LOCATION out of it. Overwriting it made this script chown
-# ./data/agentgateway while compose mounted $DATA_LOCATION/agentgateway - and the
-# chown reported success, so nothing pointed at the directory agentgateway could
-# not write.
+# Not ENV_FILE: lib.sh uses that name for .env, and resolve_data_location_path
+# reads DATA_LOCATION out of it. Shadowing it made this chown ./data/agentgateway
+# while compose mounted $DATA_LOCATION/agentgateway, and report success.
 AGW_ENV_DIR="$PROJECT_DIR/config/agentgateway"
 AGW_ENV_FILE="$AGW_ENV_DIR/agentgateway.env"
 
-# The uid compose pins the container to, which is the one that has to be able to
-# write the SQLite overlay. Deliberately not fix_ownership's project owner: on a
-# host where those differ, chowning to the project owner reports success and
-# agentgateway still cannot open its database.
+# The uid compose pins the container to. Deliberately not fix_ownership's
+# project owner: where the two differ, that chown succeeds and the container
+# still cannot open its database.
 WRITER_UID="${WRITER_UID:-1000}"
 WRITER_GID="${WRITER_GID:-1000}"
 
@@ -41,9 +34,9 @@ main() {
     mkdir -p "$secrets_dir"
     safe_chmod 700 "$secrets_dir"
 
-    # AES-256-GCM key for the session cookie: agentgateway refuses to start
-    # unless it is exactly 64 hex characters, which generate_secret produces.
-    # Persisted rather than regenerated, or every start would log everyone out.
+    # AES-256-GCM: agentgateway refuses to start unless this is exactly 64 hex
+    # characters, which generate_secret produces. Persisted, or every start
+    # would log everyone out.
     if [ ! -s "$cookie_file" ]; then
         write_file_atomic "$cookie_file" generate_secret \
             || die "Failed to generate the agentgateway cookie secret"
@@ -64,8 +57,8 @@ main() {
         || die "Failed to write $AGW_ENV_FILE"
     safe_chmod 600 "$AGW_ENV_FILE"
 
-    # chown the directory only, never -R: its contents are a database
-    # agentgateway owns and a secret this script wrote 0600.
+    # The directory only, never -R: its contents are a database agentgateway
+    # owns and a secret this script wrote 0600.
     if [ "$(stat -c '%u:%g' "$data_dir" 2>/dev/null || echo unknown)" != "${WRITER_UID}:${WRITER_GID}" ]; then
         chown "${WRITER_UID}:${WRITER_GID}" "$data_dir" 2>/dev/null \
             || log "WARNING: could not chown $data_dir to ${WRITER_UID}:${WRITER_GID}; agentgateway cannot write its database"
