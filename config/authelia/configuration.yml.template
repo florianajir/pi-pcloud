@@ -370,7 +370,9 @@ __OIDC_PRIVATE_KEY__
         client_secret: '{{ secret "/config/secrets/oidc_vaultwarden_secret_hash" }}'
         public: false
         authorization_policy: one_factor
-        consent_mode: implicit
+        # offline_access forces explicit consent, so `implicit` never applied here.
+        consent_mode: pre-configured
+        pre_configured_consent_duration: '1y'
         # Vaultwarden derives this callback from its own DOMAIN setting; it is not
         # configurable, so it must match https://vault.__HOST_NAME__ exactly.
         redirect_uris:
@@ -415,7 +417,9 @@ __OIDC_PRIVATE_KEY__
         client_secret: '{{ secret "/config/secrets/oidc_kavita_secret_hash" }}'
         public: false
         authorization_policy: one_factor
-        consent_mode: implicit
+        # offline_access forces explicit consent, so `implicit` never applied here.
+        consent_mode: pre-configured
+        pre_configured_consent_duration: '1y'
         redirect_uris:
           - 'https://kavita.__HOST_NAME__/signin-oidc'
         # No `groups`: Kavita's role sync is off (see scripts/kavita-oidc-bootstrap.sh
