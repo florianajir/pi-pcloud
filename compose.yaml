@@ -1194,8 +1194,11 @@ services:
       - "homepage.widget.password={{HOMEPAGE_VAR_ADMIN_PASSWORD}}"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
+      # frame-deny@docker sends DENY, but Nextcloud's own check wants SAMEORIGIN
+      # exactly - same fix as Vaultwarden's vaultwarden-frame below.
+      - "traefik.http.middlewares.nextcloud-frame.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN"
       - "traefik.http.routers.nextcloud.rule=Host(`nextcloud.${HOST_NAME:-pi.lan}`)"
-      - "traefik.http.routers.nextcloud.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.nextcloud.middlewares=nextcloud-frame@docker,lan@docker"
       - "traefik.http.routers.nextcloud.entrypoints=websecure"
       - "traefik.http.routers.nextcloud.tls=true"
       - "traefik.http.routers.nextcloud.priority=10"
@@ -1221,7 +1224,7 @@ services:
       # and tailnet clients match the `lan` router instead and are unaffected.
       - "traefik.http.routers.nextcloud-public.rule=Host(`nextcloud.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/s/`) || PathPrefix(`/public.php`) || PathPrefix(`/avatar/guest/`) || PathPrefix(`/dist/`) || PathPrefix(`/js/`) || PathPrefix(`/themes/`) || PathPrefix(`/apps/files_sharing/publicpreview`) || PathRegexp(`^/core/(css|js|img|fonts|l10n|vendor)/`) || PathRegexp(`^/(apps|custom_apps)/[^/]+/(css|js|img|fonts|l10n|vendor|theme|favicon|icon|manifest)/`) || PathPrefix(`/remote.php/dav/calendars/`) || PathPrefix(`/remote.php/dav/public-calendars/`))"
       - "traefik.http.routers.nextcloud-public.entrypoints=websecure"
-      - "traefik.http.routers.nextcloud-public.middlewares=frame-deny@docker"
+      - "traefik.http.routers.nextcloud-public.middlewares=nextcloud-frame@docker"
       - "traefik.http.routers.nextcloud-public.tls=true"
       - "traefik.http.routers.nextcloud-public.priority=20"
       - "traefik.http.services.nextcloud.loadbalancer.server.port=80"
