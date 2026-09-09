@@ -370,9 +370,11 @@ __OIDC_PRIVATE_KEY__
         client_secret: '{{ secret "/config/secrets/oidc_vaultwarden_secret_hash" }}'
         public: false
         authorization_policy: one_factor
-        # offline_access forces explicit consent, so `implicit` never applied here.
-        consent_mode: pre-configured
-        pre_configured_consent_duration: '1y'
+        # Unavoidable: an authorization code flow that requests offline_access makes
+        # Authelia force explicit consent (oidc.RequesterRequiresExplicitConsent), which
+        # overrides this line. `pre-configured` does not help either - the override skips
+        # the pre-configured handler entirely, so nothing is ever remembered.
+        consent_mode: implicit
         # Vaultwarden derives this callback from its own DOMAIN setting; it is not
         # configurable, so it must match https://vault.__HOST_NAME__ exactly.
         redirect_uris:
@@ -417,9 +419,12 @@ __OIDC_PRIVATE_KEY__
         client_secret: '{{ secret "/config/secrets/oidc_kavita_secret_hash" }}'
         public: false
         authorization_policy: one_factor
-        # offline_access forces explicit consent, so `implicit` never applied here.
-        consent_mode: pre-configured
-        pre_configured_consent_duration: '1y'
+        # Unavoidable: an authorization code flow that requests offline_access makes
+        # Authelia force explicit consent (oidc.RequesterRequiresExplicitConsent), which
+        # overrides this line. `pre-configured` does not help either - the override skips
+        # the pre-configured handler entirely, so nothing is ever remembered.
+        # Kavita hardcodes the scope and upstream declined to change it (Kavita#4373).
+        consent_mode: implicit
         redirect_uris:
           - 'https://kavita.__HOST_NAME__/signin-oidc'
         # No `groups`: Kavita's role sync is off (see scripts/kavita-oidc-bootstrap.sh
