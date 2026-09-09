@@ -90,6 +90,27 @@ for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*bootstrap.sh
     fi
 done
 
+# The agentgateway LLM key is stored bare - 64 hex characters, no prefix - and
+# all three sides that present or compare it add `sk-` themselves. compose.yaml
+# shipped without it while the hook and the bootstrap had it, so the `strict`
+# apiKey policy 401'd every /v1 call and the model picker stayed empty on a
+# fresh install. Nothing fails loudly there: the gateway is healthy, Open WebUI
+# is healthy, the chat is simply modelless - and OPENAI_API_KEY is
+# PersistentConfig, so the wrong value outlives the fix to the environment.
+#
+# Matched literally, one assertion per side, because that is the point: a
+# refactor that moves any of the three should stop here and be re-checked
+# against the other two rather than pass on a pattern that still fits.
+contains "compose.yaml prefixes the key it hands Open WebUI" \
+    "$(grep -o 'OPENAI_API_KEY=[^;]*' "$REPO_DIR/compose.yaml")" \
+    'OPENAI_API_KEY=sk-$(cat /run/secrets/agentgateway_llm_key)'
+contains "the hook prefixes the key it writes for the gateway" \
+    "$(grep -o 'llm_api_key="[^"]*"[^"]*"' "$REPO_DIR/scripts/agentgateway-pre-start.sh")" \
+    'llm_api_key="sk-'
+contains "the bootstrap prefixes the key it stores in the database" \
+    "$(grep -o "printf 'sk-%s'" "$REPO_DIR/scripts/open-webui-bootstrap.sh")" \
+    "sk-%s"
+
 # And exactly one home for it: a list left behind in stack-up.sh would be the
 # one the boot path used while CI kept running the other.
 ok "stack-up.sh declares no hook list of its own" \

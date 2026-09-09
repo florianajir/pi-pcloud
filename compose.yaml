@@ -2536,7 +2536,13 @@ services:
     # Plain assignments under `-e`, not `export X=$(cat ...)`: export is a
     # command, so its own success masks a failed substitution, and the container
     # came up with the API key "sk-". Measured both ways.
-    entrypoint: ["bash", "-euc", "OAUTH_CLIENT_SECRET=$(cat /run/secrets/oidc_open-webui_secret); OPENAI_API_KEY=$(cat /run/secrets/agentgateway_llm_key); export OAUTH_CLIENT_SECRET OPENAI_API_KEY; exec bash start.sh"]
+    # The `sk-` prefix is not cosmetic: the secret file holds the bare 64 hex
+    # characters, and what the gateway's `strict` apiKey policy compares against
+    # is `sk-` + that, because agentgateway-pre-start.sh prefixes it when it
+    # writes LLM_API_KEY. Without it every /v1 call 401s and the model picker
+    # stays empty on a fresh install - OPENAI_API_KEY is PersistentConfig, so
+    # the wrong value is copied into the database on first start and stays.
+    entrypoint: ["bash", "-euc", "OAUTH_CLIENT_SECRET=$(cat /run/secrets/oidc_open-webui_secret); OPENAI_API_KEY=sk-$(cat /run/secrets/agentgateway_llm_key); export OAUTH_CLIENT_SECRET OPENAI_API_KEY; exec bash start.sh"]
     environment:
       - WEBUI_AUTH=true
       - ENABLE_LOGIN_FORM=false
@@ -2662,9 +2668,10 @@ services:
       # Expanded by agentgateway inside /config.yaml, not by Compose.
       - HOST_NAME=${HOST_NAME:-pi.lan}
     env_file:
-      # OIDC_COOKIE_SECRET and UI_CLIENT_SECRET, written by
+      # OIDC_COOKIE_SECRET, UI_CLIENT_SECRET and LLM_API_KEY, written by
       # scripts/agentgateway-pre-start.sh. Frozen at container creation, so a
-      # rotated secret needs `up -d`, not `restart`.
+      # rotated secret needs `up -d`, not `restart` - and LLM_API_KEY is the one
+      # that matters, since a stale copy here 401s every /v1 caller.
       - path: ./config/agentgateway/agentgateway.env
         required: false
     volumes:

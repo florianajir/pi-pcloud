@@ -82,7 +82,6 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **stremio-lan** | The same Stremio server on a LAN macvlan address instead of the VPN, for DLNA casting — mutually exclusive with `stremio` | users, LAN renderers |
 | **Open WebUI** | Local AI chat frontend — see [Local AI](AI.md) | users |
 | **Agentgateway** | LLM and MCP gateway in front of llama.cpp: one OpenAI-compatible endpoint, one MCP endpoint, virtual keys and token rate limits | Open WebUI, and any API or MCP client |
-| **Agentgateway** | MCP gateway — federates tool servers behind one endpoint, with a UI to add them | MCP clients, admins |
 | **llama.cpp / Piper / Parakeet / system-tools** | Inference, TTS, STT and the host-status tool | Agentgateway, Open WebUI |
 | **Homepage** | Dashboard with live widgets | users |
 | **Beszel** | Hardware metrics and threshold alerts | admins |

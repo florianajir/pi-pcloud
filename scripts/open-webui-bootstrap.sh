@@ -149,15 +149,74 @@ psql_owui() {
     compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d open-webui "$@"
 }
 
-# 't' when the connection is already registered, or when Open WebUI has not
-# persisted its connection list yet - a fresh install seeds it straight from
-# the compose environment, which already points at agentgateway.
-connection_present() {
+# Three states, not two. `absent` means Open WebUI has not persisted its
+# connection list yet, so the compose environment is what seeds it and there is
+# nothing to do here. `stale` means the URL is registered but the key stored
+# beside it is not the one the gateway now accepts - which `present` used to be
+# indistinguishable from, so a wrong or rotated key could never be repaired and
+# the only remedy was editing the database by hand.
+connection_state() {
+    local key="$1"
+
+    # Scalar subqueries inside a one-row derived table, not a join: both config
+    # rows are absent on a fresh install, and any join of two empty sides
+    # returns no row at all - which would read as "cannot query" and skip.
     psql_owui -tAc \
-        "SELECT coalesce(
-             (SELECT value::jsonb ? '$GATEWAY_URL' FROM config WHERE key = 'openai.api_base_urls'),
-             true
-         );" 2>/dev/null | tr -d ' \r\n'
+        "SELECT CASE
+             WHEN s.urls IS NULL THEN 'absent'
+             WHEN NOT (s.urls ? '$GATEWAY_URL') THEN 'missing'
+             WHEN coalesce(s.keys ->> (
+                 SELECT (ord - 1)::int
+                 FROM jsonb_array_elements_text(s.urls) WITH ORDINALITY AS t(val, ord)
+                 WHERE t.val = '$GATEWAY_URL'
+                 LIMIT 1
+             ), '') = '$key' THEN 'current'
+             ELSE 'stale'
+         END
+         FROM (SELECT
+                 (SELECT value::jsonb FROM config WHERE key = 'openai.api_base_urls') AS urls,
+                 (SELECT value::jsonb FROM config WHERE key = 'openai.api_keys') AS keys
+              ) s;" \
+        2>/dev/null | tr -d ' \r\n'
+}
+
+# The repair half of the above: overwrite the key at the URL's own index. The
+# arrays are parallel, so the index is looked up from the URL list rather than
+# assumed.
+update_connection_key() {
+    local key="$1"
+
+    psql_owui -q <<SQL
+DO \$\$
+DECLARE
+    target text := '$GATEWAY_URL';
+    urls   jsonb;
+    keys   jsonb;
+    idx    int;
+    stamp  bigint := extract(epoch from now())::bigint;
+BEGIN
+    SELECT value::jsonb INTO urls FROM config WHERE key = 'openai.api_base_urls';
+    IF urls IS NULL OR NOT (urls ? target) THEN
+        RETURN;
+    END IF;
+
+    SELECT ord - 1 INTO idx
+        FROM jsonb_array_elements_text(urls) WITH ORDINALITY AS t(val, ord)
+        WHERE t.val = target
+        LIMIT 1;
+
+    SELECT coalesce(value::jsonb, '[]'::jsonb) INTO keys FROM config WHERE key = 'openai.api_keys';
+    keys := coalesce(keys, '[]'::jsonb);
+    WHILE jsonb_array_length(keys) <= idx LOOP
+        keys := keys || to_jsonb(''::text);
+    END LOOP;
+
+    UPDATE config SET value = jsonb_set(keys, ARRAY[idx::text], to_jsonb('$key'::text))::json,
+            updated_at = stamp
+        WHERE key = 'openai.api_keys';
+END
+\$\$;
+SQL
 }
 
 # The credential every /v1 caller presents, so it never reaches argv - and it is
@@ -550,26 +609,34 @@ main() {
 
     wait_for_health_warning "pi-open-webui" 60 2 || true
 
-    case "$(connection_present)" in
-        t) ;;
-        f)
-            _key="$(gateway_key)" || _key=""
-            if [ -z "$_key" ]; then
-                log "WARNING: no readable agentgateway LLM API key; leaving the connection unregistered"
-            else
+    _key="$(gateway_key)" || _key=""
+    if [ -z "$_key" ]; then
+        log "WARNING: no readable agentgateway LLM API key; leaving the connection alone"
+    else
+        case "$(connection_state "$_key")" in
+            absent | current) ;;
+            missing)
                 log "Registering $GATEWAY_URL as an Open WebUI connection"
                 if add_connection "$_key"; then
                     changed=1
                 else
                     log "WARNING: failed to register the agentgateway connection"
                 fi
-            fi
-            ;;
-        *)
-            log "WARNING: could not read Open WebUI config table; skipping"
-            return 0
-            ;;
-    esac
+                ;;
+            stale)
+                log "Stored agentgateway key does not match the gateway's; correcting it"
+                if update_connection_key "$_key"; then
+                    changed=1
+                else
+                    log "WARNING: failed to correct the agentgateway connection key"
+                fi
+                ;;
+            *)
+                log "WARNING: could not read Open WebUI config table; skipping"
+                return 0
+                ;;
+        esac
+    fi
 
     if [ "$(marker_present "$DEFAULTS_MARKER" "$DEFAULTS_VERSION")" = "f" ]; then
         log "Seeding low-latency defaults (title/tags/follow-up generation off)"
