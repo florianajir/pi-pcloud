@@ -299,6 +299,21 @@ configure_oidc() {
         return 0
     }
     log "Configured Audiobookshelf OIDC against https://auth.${host_name}"
+
+    # The PATCH lands in the database, but OidcAuthStrategy.getClient() memoises
+    # its client for the life of the process (`if (!this.client)`) and captures
+    # the issuer metadata - end_session_endpoint among it - when it first builds
+    # one. So a running instance keeps serving the values it started with: that
+    # is why the logout URL set above did nothing until the container was
+    # restarted by hand. Only reached when the settings actually changed, since
+    # the comparison above returns early otherwise.
+    log "Restarting Audiobookshelf so it rebuilds its memoised OIDC client"
+    docker restart "$ABS_CONTAINER" >/dev/null 2>&1 || {
+        log "WARNING: could not restart Audiobookshelf; its OIDC client keeps the previous settings"
+        return 0
+    }
+    wait_for_http_endpoint "$ABS_URL/healthcheck" "Audiobookshelf HTTP API" "$MAX_RETRIES" "$RETRY_INTERVAL" \
+        || log "WARNING: Audiobookshelf did not come back in time; the library step may be skipped this run"
 }
 
 # --- Library ----------------------------------------------------------------
