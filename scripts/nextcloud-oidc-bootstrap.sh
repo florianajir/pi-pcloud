@@ -86,22 +86,15 @@ ensure_user_oidc_app() {
 #
 # Rewriting every boot is the propagation path, not an oversight: it looks like
 # a missing idempotence check in the log and it is load-bearing.
-# Authelia implements no OIDC logout mechanism at all - not RP-initiated,
-# front-channel or back-channel - so its discovery document carries no
-# end_session_endpoint. user_oidc then falls back to redirecting to the
-# Nextcloud root, where the still-valid Authelia cookie logs the user straight
-# back in: logging out appeared to reload the same page.
+# Authelia implements no OIDC logout, so this is its *portal* logout route
+# rather than an end_session_endpoint: the browser is redirected there carrying
+# the session cookie, which is what ends the session. `rd` is accepted because
+# it stays under the session cookie domain.
 #
-# Its *portal* logout route is not OIDC, but a browser redirected there does
-# carry the session cookie, so the session ends. `rd` sends the browser back
-# afterwards; nextcloud.$HOST_NAME sits under the session cookie domain, so
-# Authelia's safe-redirection check accepts it.
-#
-# The trailing `&ignored=` is load-bearing, not a typo. user_oidc appends
-# `?post_logout_redirect_uri=...&client_id=...` unconditionally, which would
-# otherwise land a second `?` inside the `rd` value and corrupt it; the empty
-# parameter absorbs that suffix and leaves `rd` clean. Keep `rd` percent-encoded
-# for the same reason.
+# The trailing `&ignored=` is load-bearing, not a typo: user_oidc appends
+# `?post_logout_redirect_uri=...&client_id=...` unconditionally, and without a
+# parameter to absorb it that second `?` lands inside `rd` and corrupts it.
+# Keep `rd` percent-encoded for the same reason.
 end_session_endpoint_uri() {
     local return_to="https%3A%2F%2Fnextcloud.${HOST_NAME}%2F"
 

@@ -244,13 +244,11 @@ main() {
         safe_chmod 600 "$IMMICH_OAUTH_CONFIG_FILE"
         log "Rendered immich-oauth-config.yaml to $IMMICH_OAUTH_CONFIG_FILE"
 
-        # Immich reads IMMICH_CONFIG_FILE at boot and caches it; there is no
-        # watcher. A bind-mounted file whose *content* changed is not a reason
-        # for compose to recreate the container either, so on an update the new
-        # values would sit on disk unread - which is how the OIDC logout URL
-        # stayed inert. Only reached when the render actually differed, and
-        # skipped on a fresh install where the container is not up yet and will
-        # read the new file when it starts.
+        # Immich reads IMMICH_CONFIG_FILE at boot and caches it, and a bind
+        # mount whose content changed is no reason for compose to recreate the
+        # container, so without this the new values sit on disk unread. Only
+        # reached when the render differed; a fresh install skips it and reads
+        # the file when it starts.
         if container_is_running "${IMMICH_CONTAINER:-pi-immich}"; then
             log "Restarting Immich so it re-reads the rendered OAuth config"
             docker restart "${IMMICH_CONTAINER:-pi-immich}" >/dev/null 2>&1 \

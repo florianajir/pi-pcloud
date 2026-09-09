@@ -250,19 +250,10 @@ configure_oidc() {
     # authOpenIDGroupClaim stays empty for the reason spelled out beside the
     # Authelia client: the claim is read as a role, and a user in none of
     # admin/user/guest is denied outright. Only `admin` exists in this stack.
-    # Authelia implements no OIDC logout mechanism, so its discovery document
-    # carries no end_session_endpoint and reading one from $e left this null -
-    # signing out of Audiobookshelf never touched the portal session. Its
-    # *portal* logout route is not OIDC, but the browser is redirected there
-    # with its session cookie, so the session actually ends; `rd` sends it on to
-    # the Audiobookshelf login page, which is under the session cookie domain
-    # and so passes Authelia's safe-redirection check.
-    #
-    # No placeholder parameter is needed to protect `rd` here, unlike the same
-    # URL in nextcloud-oidc-bootstrap.sh: Audiobookshelf hands this to
-    # openid-client, which parses the URL and merges its own query parameters
-    # instead of appending a second `?`. Its post_logout_redirect_uri and
-    # id_token_hint ride along and Authelia ignores both.
+    # Authelia implements no OIDC logout, so this is its *portal* logout route
+    # rather than the end_session_endpoint $e would have carried: the browser is
+    # redirected there with its session cookie, which is what ends the session.
+    # `rd` is accepted because it stays under the session cookie domain.
     local logout_url="https://auth.${host_name}/logout?rd=https%3A%2F%2Faudiobooks.${host_name}%2Flogin%2F"
 
     desired="$(printf '%s' "$current" | jq -c \
@@ -300,13 +291,10 @@ configure_oidc() {
     }
     log "Configured Audiobookshelf OIDC against https://auth.${host_name}"
 
-    # The PATCH lands in the database, but OidcAuthStrategy.getClient() memoises
-    # its client for the life of the process (`if (!this.client)`) and captures
-    # the issuer metadata - end_session_endpoint among it - when it first builds
-    # one. So a running instance keeps serving the values it started with: that
-    # is why the logout URL set above did nothing until the container was
-    # restarted by hand. Only reached when the settings actually changed, since
-    # the comparison above returns early otherwise.
+    # Not redundant: OidcAuthStrategy.getClient() memoises its client for the
+    # life of the process and captures the issuer metadata when it first builds
+    # one, so a PATCH alone leaves a running instance serving the values it
+    # started with. Only reached when the settings really changed.
     log "Restarting Audiobookshelf so it rebuilds its memoised OIDC client"
     docker restart "$ABS_CONTAINER" >/dev/null 2>&1 || {
         log "WARNING: could not restart Audiobookshelf; its OIDC client keeps the previous settings"
