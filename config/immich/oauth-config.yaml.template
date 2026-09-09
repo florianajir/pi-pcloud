@@ -5,7 +5,7 @@ oauth:
   clientSecret: '__OIDC_IMMICH_SECRET__'
   autoRegister: true
   autoLaunch: true
-  buttonText: 'Login with Authelia'
+  buttonText: 'Login'
   scope: 'openid profile email'
   signingAlgorithm: 'RS256'
   profileSigningAlgorithm: 'none'
