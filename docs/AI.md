@@ -2,7 +2,7 @@
 
 Open WebUI at `https://chat.<HOST_NAME>` is a full chat assistant running entirely on the Pi's CPU: text, images and audio in, speech out, plus a tool that lets the model report the machine's own health.
 
-The two hostnames say who they are for: `chat.` is the human UI, `llm.` is the gateway clients POST to. They used to be `ai.` and `agent.`, two synonyms for opposite things. `ai.<HOST_NAME>` still answers, as a 302 onto `chat.` so old bookmarks keep working; `agent.<HOST_NAME>` does not, since only admins ever typed it.
+The two hostnames say who they are for: `chat.` is the human UI, `llm.` is the gateway clients POST to. They used to be `ai.` and `agent.`, two synonyms for opposite things. Neither old name answers any more - there is no redirect, so a stale bookmark gets Traefik's 404.
 
 | Piece | Role | Network |
 |-------|------|---------|
