@@ -67,7 +67,7 @@ access_control:
         - 'qbittorrent.__HOST_NAME__'
         - 'prowlarr.__HOST_NAME__'
         - 'kapowarr.__HOST_NAME__'
-        - 'chat.__HOST_NAME__'
+        - 'ai.__HOST_NAME__'
       policy: one_factor
 
     - domain: 'headscale.__HOST_NAME__'
@@ -162,7 +162,7 @@ __OIDC_PRIVATE_KEY__
         - 'https://beszel.__HOST_NAME__'
         - 'https://dockhand.__HOST_NAME__'
         - 'https://headscale.__HOST_NAME__'
-        - 'https://chat.__HOST_NAME__'
+        - 'https://ai.__HOST_NAME__'
         - 'https://vault.__HOST_NAME__'
     clients:
       - client_id: nextcloud
@@ -305,7 +305,7 @@ __OIDC_PRIVATE_KEY__
         authorization_policy: one_factor
         consent_mode: implicit
         redirect_uris:
-          - 'https://chat.__HOST_NAME__/oauth/oidc/callback'
+          - 'https://ai.__HOST_NAME__/oauth/oidc/callback'
         scopes:
           - openid
           - profile

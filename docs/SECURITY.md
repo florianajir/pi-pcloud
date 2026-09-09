@@ -181,7 +181,7 @@ Authelia's rules in evaluation order (`config/authelia/configuration.yml.templat
 | Domain | Subject | Policy |
 |--------|---------|--------|
 | `auth.*` | — | bypass (the portal itself) |
-| `uptime.*`, `homepage.*`, `qbittorrent.*`, `prowlarr.*`, `kapowarr.*`, `chat.*` | any user | one_factor |
+| `uptime.*`, `homepage.*`, `qbittorrent.*`, `prowlarr.*`, `kapowarr.*`, `ai.*` | any user | one_factor |
 | `headscale.*` path `/admin` | `admin` group | two_factor |
 | `backrest.*`, `pihole.*`, `traefik.*`, `lldap.*` | `admin` group | two_factor |
 | anything else | — | **deny** |

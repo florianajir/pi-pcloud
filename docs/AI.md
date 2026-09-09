@@ -1,8 +1,13 @@
 # Local AI
 
-Open WebUI at `https://chat.<HOST_NAME>` is a full chat assistant running entirely on the Pi's CPU: text, images and audio in, speech out, plus a tool that lets the model report the machine's own health.
+Open WebUI at `https://ai.<HOST_NAME>` is a full chat assistant running entirely on the Pi's CPU: text, images and audio in, speech out, plus a tool that lets the model report the machine's own health.
 
-The two hostnames say who they are for: `chat.` is the human UI, `llm.` is the gateway clients POST to. They used to be `ai.` and `agent.`, two synonyms for opposite things. Neither old name answers any more - there is no redirect, so a stale bookmark gets Traefik's 404.
+The two hostnames say who they are for: `ai.` is the human UI, `llm.` is the gateway clients POST to. `llm.` used to be `agent.`, a synonym of `ai.` for the opposite kind of caller - a person on one, a client library on the other. The old name is gone with no redirect, so a stale bookmark gets Traefik's 404; only admins ever typed it.
+
+`chat.<HOST_NAME>` is **reserved and deliberately unused**: it is the name a
+human-to-human messaging service should get, and for everyone outside this
+repository "chat" means talking to people, not to a model. Nothing here may
+claim it.
 
 | Piece | Role | Network |
 |-------|------|---------|
@@ -204,7 +209,7 @@ sh scripts/open-webui-bootstrap.sh
 
 ### Who may use it
 
-Authelia already decides who reaches `chat.<HOST_NAME>`, so Open WebUI's own `pending` role — which parks every SSO login behind an admin approval screen — would only mean nobody can use the service until an admin notices. The script sets `ui.default_user_role` to `user` and releases accounts already parked (marker `pi-pcloud.open_access`).
+Authelia already decides who reaches `ai.<HOST_NAME>`, so Open WebUI's own `pending` role — which parks every SSO login behind an admin approval screen — would only mean nobody can use the service until an admin notices. The script sets `ui.default_user_role` to `user` and releases accounts already parked (marker `pi-pcloud.open_access`).
 
 That alone is not enough, because two separate things default to admin-only:
 
