@@ -445,17 +445,20 @@ sh scripts/open-webui-bootstrap.sh    # re-seeds the connection, tools and sugge
 
 On a **fresh install** the steps that write the model's workspace row are skipped until an admin account exists — so run the bootstrap once after your first SSO login. See [Local AI](AI.md#how-open-webui-is-wired).
 
-**`pi-litellm` restarts in a loop.** Two causes, both visible in `docker logs pi-litellm`:
+**The model picker is empty.** Open WebUI reaches the models through agentgateway, so check that
+side first — `docker logs pi-agentgateway`, then `curl -H "Authorization: Bearer sk-$(cat
+"$DATA_LOCATION"/agentgateway/secrets/llm_api_key)" http://localhost:4000/v1/models` from inside the
+`ai` network. Two causes:
 
-- `password authentication failed for user "litellm"`, or the database does not exist.
-  `config/postgres/init-databases.sh` creates the role and the database, but the Postgres image
-  only runs it on a **fresh** `PGDATA` — so a cluster that predates this service has neither. Create
-  them once, with the same shape that file uses (`PASSWORD` from `.env` as the role password), then
-  `docker compose up -d litellm`. Open WebUI waits on litellm being healthy, so it stays down with it.
-- `cat: /run/secrets/litellm/master_key: No such file or directory`. `litellm-pre-start.sh` has not
-  run — a hand-edited `COMPOSE_PROFILES` that names `open-webui` without `litellm` is the way to get
-  there, since the hook is gated on either. `make update` runs the full pre-start sequence and fills
-  the directory in place; no recreate is needed.
+- The gateway exited at startup. It fetches Authelia's OIDC discovery document before it serves
+  anything and stops when that fails, so an Authelia that is down takes the chat's models with it.
+  It is distroless and carries no healthcheck, which is why Open WebUI depends on it as
+  `service_started` and cannot wait this out — restart it once Authelia is healthy.
+- `401` from `/v1`. The `apiKey` policy is `strict` and the key Open WebUI holds no longer matches
+  the one in `config/agentgateway/agentgateway.env`. That file's values are frozen at container
+  creation, so pick a regenerated key up with `docker compose up -d agentgateway open-webui`, not
+  `restart` — and note `OPENAI_API_KEY` is PersistentConfig in Open WebUI, so an instance whose
+  database already exists needs `sh scripts/open-webui-bootstrap.sh` too.
 
 **Replies take minutes.** Something re-enabled the built-in tools or thinking. Both cost thousands of prompt tokens per message at ~40 tok/s — see [Why the defaults look aggressive](AI.md#why-the-defaults-look-aggressive).
 

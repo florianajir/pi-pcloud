@@ -18,7 +18,7 @@
 #
 # More than one service may be named, because COMPOSE_PROFILES records what was
 # *asked for* while compose starts more: a service listing another's name in its
-# own `profiles:` runs whenever that one does - litellm under open-webui,
+# own `profiles:` runs whenever that one does - agentgateway under open-webui,
 # gluetun under qbittorrent. A hook on such a service has to name every profile
 # that starts it, or it is skipped on exactly the boots that need it.
 #

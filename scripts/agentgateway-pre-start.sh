@@ -1,12 +1,14 @@
 #!/bin/sh
 # Prepares what agentgateway cannot get for itself: a writable data directory,
-# and an env_file carrying the two secrets its config reads from the environment.
+# and an env_file carrying the three secrets its config reads from the
+# environment.
 #
 # An env_file rather than the `export $(cat ...)` entrypoint the other services
 # use, because the image is distroless and has no shell to run it in.
 #
 # A pre-start hook, after authelia-pre-start.sh so the client secret exists.
-# Idempotent.
+# Runs for open-webui too, not just agentgateway: open-webui's entrypoint reads
+# the LLM API key this writes. Idempotent.
 
 set -eu
 
@@ -25,11 +27,13 @@ WRITER_UID="${WRITER_UID:-1000}"
 WRITER_GID="${WRITER_GID:-1000}"
 
 main() {
-    local data_dir="" secrets_dir="" cookie_file="" client_secret="" cookie_secret=""
+    local data_dir="" secrets_dir="" cookie_file="" key_file=""
+    local client_secret="" cookie_secret="" llm_api_key=""
 
     data_dir="$(resolve_data_location_path)/agentgateway"
     secrets_dir="$data_dir/secrets"
     cookie_file="$secrets_dir/cookie_secret"
+    key_file="$secrets_dir/llm_api_key"
 
     mkdir -p "$secrets_dir"
     safe_chmod 700 "$secrets_dir"
@@ -43,12 +47,24 @@ main() {
         safe_chmod 600 "$cookie_file"
         log "Generated the agentgateway session cookie secret"
     fi
-    # -R, and after the write: a root-run systemd boot leaves both a 0700
-    # directory the next non-root run cannot mktemp in and a 0600 file it cannot
+    # The credential every /v1 caller presents, open-webui included. Not derived
+    # from PASSWORD: agent.<HOST_NAME> carries no forward-auth on /v1, so a
+    # PASSWORD leak would otherwise be a free pass to the models. It also has to
+    # outlive a rotation - OPENAI_API_KEY is PersistentConfig in Open WebUI, so
+    # whatever that container starts with is copied into its database.
+    if [ ! -s "$key_file" ]; then
+        write_file_atomic "$key_file" generate_secret \
+            || die "Failed to generate the agentgateway LLM API key"
+        safe_chmod 600 "$key_file"
+        log "Generated the agentgateway LLM API key"
+    fi
+    # -R, and after the writes: a root-run systemd boot leaves both a 0700
+    # directory the next non-root run cannot mktemp in and 0600 files it cannot
     # read, and this is a blocking pre-start hook.
     fix_ownership "$secrets_dir"
 
     cookie_secret="$(cat "$cookie_file")"
+    llm_api_key="sk-$(cat "$key_file")"
 
     client_secret="$(get_oidc_secret agentgateway)" || client_secret=""
     if [ -z "$client_secret" ]; then
@@ -57,8 +73,8 @@ main() {
     fi
 
     mkdir -p "$AGW_ENV_DIR"
-    printf 'OIDC_COOKIE_SECRET=%s\nUI_CLIENT_SECRET=%s\n' \
-        "$cookie_secret" "$client_secret" | write_secret_file "$AGW_ENV_FILE" \
+    printf 'OIDC_COOKIE_SECRET=%s\nUI_CLIENT_SECRET=%s\nLLM_API_KEY=%s\n' \
+        "$cookie_secret" "$client_secret" "$llm_api_key" | write_secret_file "$AGW_ENV_FILE" \
         || die "Failed to write $AGW_ENV_FILE"
     safe_chmod 600 "$AGW_ENV_FILE"
     # The systemd unit runs this as root; without this the file lands root:root

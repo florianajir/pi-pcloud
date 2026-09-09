@@ -59,9 +59,9 @@ Two consequences specific to this stack: **group membership travels in the `grou
 
 **The `groups` claim is not in the ID Token, and it must not be put there.** Since Authelia gained support for the claims parameter the ID Token carries only what proves authorization happened — `groups`, `email`, `name` and `preferred_username` are served from the UserInfo endpoint against the access token. Every client here is fine with that, verified against each one's source: Kavita sets `GetClaimsFromUserInfoEndpoint`, Shelfmark falls back to an explicit `userinfo` call when the token's claims are too sparse, Dockhand merges the UserInfo response over the ID Token, Immich only skips UserInfo when the ID Token already carries `email` (it does not), and Nextcloud's `user_oidc` asks for the claims it needs in the ID Token through the standard claims parameter — which Authelia honours for any claim the client could have reached by scope. So this stack declares **no `claims_policies`**, and the `id_token` escape hatch in that block should stay unused: Authelia's own documentation calls it a break-glass measure for clients with a bug.
 
-**Logging out is not an OIDC operation here.** Authelia implements none of the OIDC logout mechanisms — RP-initiated, front-channel or back-channel — so its discovery document carries no `end_session_endpoint`. Left at that, `user_oidc` falls back to redirecting to the Nextcloud root, where the still-valid portal cookie signs the user straight back in and logging out looks like a page reload. The five clients that expose a logout URL therefore point at Authelia's *portal* logout route instead, with an `rd` back to their own login page: not OIDC, but a browser redirected there carries the session cookie, so the session genuinely ends. Redirect targets sit under the session cookie domain, which is what passes Authelia's `safe-redirection` check. Note the effect is stack-wide, not per-service — ending the Authelia session logs the user out of every other SSO service too.
+**Logging out is not an OIDC operation here.** Authelia implements none of the OIDC logout mechanisms — RP-initiated, front-channel or back-channel — so its discovery document carries no `end_session_endpoint`. Left at that, `user_oidc` falls back to redirecting to the Nextcloud root, where the still-valid portal cookie signs the user straight back in and logging out looks like a page reload. The four clients that expose a logout URL therefore point at Authelia's *portal* logout route instead, with an `rd` back to their own login page: not OIDC, but a browser redirected there carries the session cookie, so the session genuinely ends. Redirect targets sit under the session cookie domain, which is what passes Authelia's `safe-redirection` check. Note the effect is stack-wide, not per-service — ending the Authelia session logs the user out of every other SSO service too.
 
-Only Nextcloud needs the odd-looking trailing `&ignored=`, and it is load-bearing: `user_oidc` appends `?post_logout_redirect_uri=…&client_id=…` unconditionally, so without a parameter to absorb it that second `?` lands inside the `rd` value and corrupts it. The other four parse the URL and merge their own parameters instead — Audiobookshelf and Immich through `openid-client` and `new URL()`, Open WebUI and LiteLLM by redirecting to the value verbatim.
+Only Nextcloud needs the odd-looking trailing `&ignored=`, and it is load-bearing: `user_oidc` appends `?post_logout_redirect_uri=…&client_id=…` unconditionally, so without a parameter to absorb it that second `?` lands inside the `rd` value and corrupts it. The other three parse the URL and merge their own parameters instead — Audiobookshelf and Immich through `openid-client` and `new URL()`, Open WebUI by redirecting to the value verbatim.
 
 | Client | Where the logout URL lives | Set in |
 |--------|---------------------------|--------|
@@ -69,7 +69,6 @@ Only Nextcloud needs the odd-looking trailing `&ignored=`, and it is load-bearin
 | **Audiobookshelf** | `authOpenIDLogoutURL` auth setting | `scripts/audiobookshelf-bootstrap.sh` |
 | **Immich** | `oauth.endSessionEndpoint` (takes precedence over discovery) | `config/immich/oauth-config.yaml.template` |
 | **Open WebUI** | `WEBUI_AUTH_SIGNOUT_REDIRECT_URL` | `compose.yaml` |
-| **LiteLLM** | `PROXY_LOGOUT_URL` | `compose.yaml` |
 
 The remaining clients have nowhere to put one, so signing out of them leaves the portal session standing and the next visit signs the user back in: Kavita, Beszel, Dockhand and Headplane expose no such field, Shelfmark implements no logout handling of its own, and Vaultwarden offers no override (it is `SSO_AUTH_ONLY_NOT_SESSION` here in any case). Headscale is not affected — it holds no browser session, only device registrations.
 
@@ -88,7 +87,6 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | **Headplane** | openid profile email offline_access | client_secret_basic | **admin_only** | 2FA + `admin` group |
 | **Headscale** | openid profile email | client_secret_basic | one_factor | VPN device registration |
 | **Open WebUI** | openid profile email | client_secret_basic | one_factor | — |
-| **LiteLLM** | openid profile email | client_secret_basic | **admin_only** | 2FA + `admin` group. Gates the Admin UI only — `/v1` takes virtual keys and never sees OIDC. **No `groups` scope**: it reads a role out of the claims and accepts only its own names, so the admin is named by `PROXY_ADMIN_ID` instead |
 | **Agentgateway** | openid profile email | client_secret_basic | **admin_only** | 2FA + `admin` group. PKCE (S256) required — its browser flow always sends a code challenge |
 | **Vaultwarden** | openid profile email offline_access | client_secret_basic | one_factor | Master password still required |
 | **Kavita** | openid profile email offline_access | client_secret_post | one_factor | **no `groups` scope** — role sync is off, so the claim would be ignored; roles come from `DefaultRoles` and admin is set in Kavita |
@@ -108,8 +106,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Vaultwarden | ✓ | — | ✓ | LAN-only + OIDC + master password — see [below](#vaultwarden). Off `frontend`, on the two-member `vaultwarden_web` segment with Traefik: nothing else has any reason to open `:80` on the vault, and no script does |
 | Beszel | ✓ | — | ✓ | LAN-only + OIDC, password login disabled |
 | Open WebUI | ✓ | — | ✓ | LAN-only + OIDC |
-| LiteLLM | ✓ | — | ✓ | LAN-only + OIDC + admin + 2FA on the UI, so only an admin sees the models, the spend and the provider credentials. No forward-auth, and the policy deliberately does not reach `/v1`: that is called by editors, scripts and n8n with a virtual key, and none of them can complete an interactive login. The key *is* the authorization there — a caller with none gets a 401 from LiteLLM itself |
-| Agentgateway | ✓ | — | ✓ | LAN-only + OIDC + admin + 2FA, run by the gateway itself (`ui.policies.oidc`) rather than by Traefik, which would intercept the `/oauth/callback` that flow returns to. Its whole surface is a console that reconfigures the proxy, so it belongs with Dockhand rather than with the user-facing services. The policy covers the UI **only**: an MCP target added through it is served on the same port with no policy until one is attached to it |
+| Agentgateway | ✓ | — | ✓ | LAN-only + OIDC + admin + 2FA on the UI, run by the gateway itself (`ui.policies.oidc`) rather than by Traefik, which would intercept the `/oauth/callback` that flow returns to. The console reconfigures the whole gateway, so it belongs with Dockhand rather than with the user-facing services. That policy covers the UI **only**, and the other two surfaces on the same port are gated separately: `/v1` by the `llm.policies.apiKey` policy in `strict` mode — a caller with no key gets a 401, which is what lets editors, scripts and n8n reach the models without an interactive login — and an MCP target by whatever policy is attached to it, **none by default** |
 | Dockhand | ✓ | — | ✓ | LAN-only + OIDC + admin + 2FA, local login disabled. Off `frontend`, on the two-member `dockhand` segment with Traefik: it reads the Docker socket, so reaching `:3000` from a neighbour is a path to every container on the host. Uptime Kuma watches it over `docker.sock`, not over HTTP; `dockhand-oidc-bootstrap.sh` and `rotate-password.sh` set `DOCKER_CURL_NETWORK` to join that segment |
 | Headplane | ✓ | ✓ | ✓ | LAN-only + SSO + OIDC + admin + 2FA |
 | Kavita | ✓ | — | ✓ | LAN-only + own accounts / OIDC — OPDS clients can't pass an interactive portal |
@@ -250,17 +247,16 @@ Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/se
 | `vaultwarden_admin_token` | Vaultwarden `/admin` token, plaintext — the one you type. Written by `scripts/vaultwarden-pre-start.sh`, never mounted into any container |
 | `vaultwarden_admin_token_hash` | Argon2id digest of the above, the only form Vaultwarden receives |
 
-Three more are generated per-service under `${DATA_LOCATION}`, mode `600`, for the same reason as the
-Vaultwarden token — neither `llm.<HOST_NAME>` nor `agent.<HOST_NAME>` carries forward-auth, so a
-`PASSWORD` leak must not also be admin over them:
+Two more are generated per-service under `${DATA_LOCATION}`, mode `600`, for the same reason as the
+Vaultwarden token — `agent.<HOST_NAME>` carries no forward-auth, so a `PASSWORD` leak must not also be
+admin over it:
 
 | Secret | Purpose |
 |--------|---------|
-| `litellm/secrets/master_key` | LiteLLM's admin API credential and, with no `UI_PASSWORD` set, the break-glass UI password for `ADMIN_USER`. Exported as `sk-<key>` by both the `litellm` and the `open-webui` entrypoint, so the caller and the proxy cannot disagree |
-| `litellm/secrets/salt_key` | Encrypts the provider credentials LiteLLM stores in Postgres. **Never rotate it**: there is no re-encrypt path, so a new key does not invalidate the old rows, it makes them undecryptable |
 | `agentgateway/secrets/cookie_secret` | AES-256-GCM key for agentgateway's OIDC session cookie. Regenerating it only logs everyone out |
+| `agentgateway/secrets/llm_api_key` | The virtual key every `/v1` caller presents. Exported as `sk-<key>` into the gateway's own `apiKey` policy and into the `open-webui` entrypoint from the same file, so the caller and the gateway cannot disagree. Open WebUI mounts **this file alone**, not the directory: the cookie secret next to it signs admin sessions |
 
-`scripts/agentgateway-pre-start.sh` copies that cookie secret and the OIDC client secret into
+`scripts/agentgateway-pre-start.sh` copies those two and the OIDC client secret into
 `config/agentgateway/agentgateway.env` (mode `600`, gitignored), because the agentgateway image is
 distroless — no shell — so the `export $(cat …)` entrypoint the other services use is not available and
 an `env_file` is. Those values are frozen at container creation: pick a change up with

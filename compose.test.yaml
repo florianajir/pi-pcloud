@@ -51,7 +51,13 @@ services:
     # document from https://auth.test.local before it serves anything, and it
     # exits when that fails - so Traefik's docker provider never loads its
     # router and the probe reports a 404 rather than the 403 it expects.
-    profiles: [ci-excluded]
+    #
+    # !override, not a plain list: compose *appends* profiles across files, so
+    # without it this service stays reachable through the `open-webui` profile
+    # it carries in production - and CI, which starts open-webui, would start
+    # the one container it cannot run. tests/ci-profiles.py refuses exactly that
+    # collision; it is what caught gluetun riding in on `shelfmark`.
+    profiles: !override [ci-excluded]
 
   llama-cpp:
     # Needs the 4.4GB of Gemma 4 weights that scripts/llama-cpp-pre-start.sh

@@ -162,10 +162,10 @@ contains "the selected service's hook runs"   "$out" "HOOK qbittorrent-pre-start
 contains "and so does its bootstrap"          "$out" "HOOK qbittorrent-bootstrap.sh"
 lacks    "an unselected service is skipped"   "$out" "HOOK prowlarr-pre-start.sh"
 
-# litellm carries open-webui's profile as well as its own, so a hook gated on
-# its own name alone was skipped on exactly the boots that start it.
+# agentgateway carries open-webui's profile as well as its own, so a hook gated
+# on its own name alone was skipped on exactly the boots that start it.
 out="$(run open-webui)"
-contains "a hook gated on two profiles runs on either" "$out" "HOOK litellm-pre-start.sh"
+contains "a hook gated on two profiles runs on either" "$out" "HOOK agentgateway-pre-start.sh"
 lacks    "and still gates an unrelated service"        "$out" "HOOK kavita-pre-start.sh"
 
 # A .env with no COMPOSE_PROFILES line is a pre-profiles install: everything is

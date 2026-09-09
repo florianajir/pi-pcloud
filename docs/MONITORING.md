@@ -99,7 +99,7 @@ The group decides the check interval, the retry budget and the ntfy priority:
 | **Personal Data** | immich, immich-ml, nextcloud, vaultwarden, kavita, audiobookshelf, backrest, backup freshness | 120 s | 3 | each monitor |
 | **Media & Downloads** | qbittorrent, stremio, stremio-lan, comet, prowlarr, kapowarr, flaresolverr, shelfmark, route qbittorrent | 300 s | 2 (low) | the group only |
 | **Tools & Observability** | homepage, beszel, beszel-agent, dockhand | 300 s | 2 (low) | the group only |
-| **Automation & AI** | n8n, n8n-runners, open-webui, llama-cpp, piper, litellm, agentgateway | 300 s | 2 (low) | the group only |
+| **Automation & AI** | n8n, n8n-runners, open-webui, llama-cpp, piper, agentgateway | 300 s | 2 (low) | the group only |
 
 `ntfy` sits in **Core** because it delivers every other alert. A container in `compose.yaml` but in no group above is monitored under **Tools & Observability**.
 

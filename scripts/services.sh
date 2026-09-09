@@ -539,8 +539,8 @@ cmd_enable() {
     fi
 
     # Compose starts more than the service named: one that carries this one's
-    # profile comes with it - litellm under open-webui, gluetun under
-    # qbittorrent - and its hooks have to run too, since litellm's is what
+    # profile comes with it - agentgateway under open-webui, gluetun under
+    # qbittorrent - and its hooks have to run too, since agentgateway's is what
     # writes the keys its entrypoint reads. Diffing the effective sets is what
     # cmd_config already does; asking for `$svc-pre-start.sh` alone left the
     # dependency unconfigured while reporting success.

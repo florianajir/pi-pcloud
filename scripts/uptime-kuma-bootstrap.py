@@ -169,7 +169,6 @@ GROUPS = [
             "pi-open-webui",
             "pi-llama-cpp",
             "pi-piper",
-            "pi-litellm",
             # agentgateway's only check: distroless, so it has no healthcheck.
             "pi-agentgateway",
         ],

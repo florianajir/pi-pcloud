@@ -89,7 +89,7 @@ Visit `https://auth.<HOST_NAME>` and sign in with an LLDAP account. Admin users 
 
 Everything is wired to SSO already — just visit it and you'll be redirected to the portal:
 
-`https://nextcloud.<HOST_NAME>` · `https://immich.<HOST_NAME>` · `https://vault.<HOST_NAME>` · `https://ai.<HOST_NAME>` · `https://llm.<HOST_NAME>` · `https://agent.<HOST_NAME>/ui` · `https://beszel.<HOST_NAME>` · `https://uptime.<HOST_NAME>` · `https://n8n.<HOST_NAME>` · `https://dockhand.<HOST_NAME>`
+`https://nextcloud.<HOST_NAME>` · `https://immich.<HOST_NAME>` · `https://vault.<HOST_NAME>` · `https://ai.<HOST_NAME>` · `https://agent.<HOST_NAME>/ui` · `https://beszel.<HOST_NAME>` · `https://uptime.<HOST_NAME>` · `https://n8n.<HOST_NAME>` · `https://dockhand.<HOST_NAME>`
 
 `https://homepage.<HOST_NAME>` is a dashboard listing all of them, with live widgets. The full list with its protection model is in [Security](SECURITY.md#per-service-protection).
 

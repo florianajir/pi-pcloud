@@ -317,30 +317,6 @@ __OIDC_PRIVATE_KEY__
         token_endpoint_auth_method: client_secret_basic
         userinfo_signed_response_alg: none
 
-      - client_id: litellm
-        client_name: LiteLLM
-        client_secret: '{{ secret "/config/secrets/oidc_litellm_secret_hash" }}'
-        public: false
-        authorization_policy: admin_only
-        consent_mode: implicit
-        # Derived by LiteLLM from PROXY_BASE_URL; the path is not configurable.
-        redirect_uris:
-          - 'https://llm.__HOST_NAME__/sso/callback'
-        # No `groups`: LiteLLM reads a role out of the claims and accepts only
-        # its own names (proxy_admin, ...), which no group here matches.
-        scopes:
-          - openid
-          - profile
-          - email
-        response_types:
-          - code
-        grant_types:
-          - authorization_code
-        # fastapi-sso, which LiteLLM's generic provider is built on, posts the
-        # token request with httpx.BasicAuth and offers no way to change that.
-        token_endpoint_auth_method: client_secret_basic
-        userinfo_signed_response_alg: none
-
       - client_id: agentgateway
         client_name: Agentgateway
         client_secret: '{{ secret "/config/secrets/oidc_agentgateway_secret_hash" }}'
