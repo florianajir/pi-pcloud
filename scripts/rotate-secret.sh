@@ -515,10 +515,8 @@ do_rotate() {
     esac
 }
 
-# Presence is not the question here: the value has to be the one valkey is
-# actually enforcing, because a stale copy in the rendered conf is a cache every
-# client is locked out of - and until the healthcheck started matching on PONG,
-# that state reported healthy.
+# Presence is not the question: the value has to be the one valkey is actually
+# enforcing, because a stale copy is a cache every client is locked out of.
 check_redis_auth() {
     _file="$(resolve_data_location_path)/authelia-config/secrets/redis_password"
 
@@ -553,14 +551,10 @@ rotate_redis_auth() {
     sh "${SCRIPT_DIR}/redis-pre-start.sh" >/dev/null || fail "redis-pre-start.sh failed"
     [ -s "$_dir/redis_password" ] || fail "the Redis password was not regenerated"
 
-    # redis first, or every consumer would be recreated against a server still
-    # enforcing the old password. `up -d` rather than restart: the rendered conf
-    # is a bind mount, so a restart would reload it, but the consumers below hold
-    # the value in their own config and have to be recreated either way - doing
-    # both the same way keeps the order the only thing that matters here.
+    # redis first, or every consumer is recreated against a server still
+    # enforcing the old password.
     recreate_enabled redis || fail "could not recreate redis"
-    # Authelia reads the secret file at start, immich and nextcloud copy it into
-    # their own config from the entrypoint, so all three need a new container.
+    # All three read the secret at start-up, so a restart would not be enough.
     recreate_enabled authelia immich-server nextcloud ||
         fail "could not recreate the Redis consumers"
 }

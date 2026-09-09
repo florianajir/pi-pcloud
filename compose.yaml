@@ -1038,8 +1038,7 @@ services:
       DB_USERNAME: immich
       DB_PASSWORD: ${PASSWORD}
       REDIS_HOSTNAME: redis
-      # Read by /usr/src/app/server/bin/start.sh at startup, so the password
-      # stays out of this container's environment and out of docker inspect.
+      # The file variant, so the password is not in docker inspect.
       REDIS_PASSWORD_FILE: /run/secrets/redis_password
       IMMICH_CONFIG_FILE: /immich-oauth-config.yaml
       IMMICH_TRUSTED_PROXIES: 172.30.11.250/32
@@ -1123,8 +1122,7 @@ services:
       - POSTGRES_USER=nextcloud
       - POSTGRES_PASSWORD=${PASSWORD}
       - REDIS_HOST=redis
-      # file_env in the image entrypoint reads this as root before Apache
-      # starts, so the password never reaches the container's environment.
+      # The file variant, so the password is not in docker inspect.
       - REDIS_HOST_PASSWORD_FILE=/run/secrets/redis_password
       - TZ=${TIMEZONE:-Europe/Paris}
       - SMTP_HOST=${SMTP_HOST:-localhost}
@@ -2656,20 +2654,18 @@ services:
     image: docker.io/valkey/valkey:9@sha256:c123e3715db63d06d4ad6964884037aa0d5d4d703939b9929954112889708e1d
     healthcheck:
       <<: *healthcheck-fast
-      # Authenticated, and matched on the reply: `redis-cli ping` exits 0 while
-      # printing `NOAUTH Authentication required`, so the unauthenticated probe
-      # this replaces would have reported healthy on a server every client was
-      # being rejected by - a green cache with the whole stack locked out of it.
+      # Matched on the reply, because `redis-cli ping` exits 0 while printing
+      # `NOAUTH Authentication required` - so the probe this replaces would have
+      # reported healthy on a cache every client was being rejected by.
       test: ["CMD-SHELL", "REDISCLI_AUTH=$(cat /run/secrets/redis_password) valkey-cli ping | grep -q PONG"]
       start_period: 5s
       start_interval: 3s
     command: ["valkey-server", "/etc/valkey/valkey.conf"]
     volumes:
       - ./config/redis/valkey.conf:/etc/valkey/valkey.conf:ro
-      # requirepass, rendered by scripts/redis-pre-start.sh; see the `include`
-      # at the end of valkey.conf.
       - ${DATA_LOCATION:-./data}/redis/redis-auth.conf:/run/secrets/redis-auth.conf:ro
-      # The same value as a bare file, for the healthcheck above.
+      # The same secret again, bare, because the healthcheck above cannot parse
+      # a config directive.
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/redis_password:/run/secrets/redis_password:ro
       - redis_data:/data
     networks:
