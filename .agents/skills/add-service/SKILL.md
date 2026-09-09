@@ -113,6 +113,11 @@ list is what both the systemd unit and `make update` run.
 No extra container just to run a script, and no new `.env` keys — reuse
 `ADMIN_USER` / `PASSWORD` and the per-service config files.
 
+Anything the hook generates on the host has to end with lib.sh `fix_ownership`:
+the unit runs it as root, and a root-owned `0600` file is one the next non-root
+`make update` cannot read and `docker compose up` cannot load as an `env_file`.
+`tests/stack-up-test.sh` enforces it.
+
 ## 11. Docs
 
 Every place a service is enumerated, in the same change — these tables are where

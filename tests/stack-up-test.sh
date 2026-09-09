@@ -66,6 +66,29 @@ for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*-bootstrap.s
     fi
 done
 
+# --- a generated file is handed back to the project owner --------------------
+#
+# The systemd unit runs these as root, so a file a hook generates lands
+# root:root 0600. The next non-root `make update` then dies inside the blocking
+# pre-start phase reading its own secret, and a non-root `docker compose up`
+# cannot read an env_file it just wrote - `required: false` covers a missing
+# file, not an unreadable one. Three hooks shipped without the handback before
+# this was checked, so it is checked rather than remembered.
+#
+# safe_chmod is the signal because it is lib.sh's host-path helper: a bootstrap
+# that writes inside a container (shelfmark's, through `docker exec`) chowns to
+# the service's own uid instead and must not appear here.
+for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*bootstrap.sh; do
+    grep -qE 'safe_chmod 6[0-7][0-7]' "$path" || continue
+    name="$(basename "$path")"
+    if grep -q 'fix_ownership' "$path"; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        printf 'FAIL %s writes a 0600 file and never calls fix_ownership\n' "$name"
+    fi
+done
+
 # And exactly one home for it: a list left behind in stack-up.sh would be the
 # one the boot path used while CI kept running the other.
 ok "stack-up.sh declares no hook list of its own" \

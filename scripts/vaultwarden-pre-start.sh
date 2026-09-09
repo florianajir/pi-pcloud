@@ -59,3 +59,10 @@ if [ ! -s "$HASH_FILE" ] || [ "$_token_is_new" = "1" ]; then
     safe_chmod 600 "$HASH_FILE"
     log "Generated Vaultwarden admin token hash"
 fi
+
+# Both files, every run: authelia-pre-start.sh sweeps this directory with the
+# same call, but it runs *before* this hook - so a token written here by a root
+# boot stayed root-owned until the next one, and `rotate-secret.sh vaultwarden`
+# could only read it with sudo in between.
+fix_ownership "$TOKEN_FILE"
+fix_ownership "$HASH_FILE"
