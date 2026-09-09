@@ -2540,9 +2540,9 @@ services:
     environment:
       - WEBUI_AUTH=true
       - ENABLE_LOGIN_FORM=false
-      - CORS_ALLOW_ORIGIN=https://ai.${HOST_NAME:-pi.lan}
+      - CORS_ALLOW_ORIGIN=https://chat.${HOST_NAME:-pi.lan}
       - ENABLE_OAUTH_SIGNUP=true
-      # Authelia already gates ai.${HOST_NAME:-pi.lan}, so Open WebUI's own
+      # Authelia already gates chat.${HOST_NAME:-pi.lan}, so Open WebUI's own
       # "pending" default would just park every SSO login until an admin looks.
       - DEFAULT_USER_ROLE=user
       - OAUTH_CLIENT_ID=open-webui
@@ -2553,7 +2553,7 @@ services:
       # Authelia's portal logout route, not an end_session_endpoint - see
       # docs/SECURITY.md. Open WebUI redirects to this verbatim once discovery
       # turns up no endpoint of its own.
-      - WEBUI_AUTH_SIGNOUT_REDIRECT_URL=https://auth.${HOST_NAME:-pi.lan}/logout?rd=https%3A%2F%2Fai.${HOST_NAME:-pi.lan}%2Fauth
+      - WEBUI_AUTH_SIGNOUT_REDIRECT_URL=https://auth.${HOST_NAME:-pi.lan}/logout?rd=https%3A%2F%2Fchat.${HOST_NAME:-pi.lan}%2Fauth
       - DATABASE_URL=postgresql://open-webui:${PASSWORD}@postgres/open-webui
       # Through agentgateway, so a model or provider added there appears here
       # without touching this file. The key is the one in the gateway's own
@@ -2619,16 +2619,32 @@ services:
     labels:
       - "homepage.group=AI"
       - "homepage.name=Open WebUI"
-      - "homepage.href=https://ai.${HOST_NAME:-pi.lan}"
+      - "homepage.href=https://chat.${HOST_NAME:-pi.lan}"
       - "homepage.description=Local AI chat"
       - "homepage.icon=open-webui.png"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
-      - "traefik.http.routers.open-webui.rule=Host(`ai.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.open-webui.rule=Host(`chat.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.open-webui.entrypoints=websecure"
       - "traefik.http.routers.open-webui.middlewares=frame-deny@docker,lan@docker"
       - "traefik.http.routers.open-webui.tls=true"
       - "traefik.http.services.open-webui.loadbalancer.server.port=8080"
+      # ai.${HOST_NAME:-pi.lan} was this service's hostname until the chat/llm
+      # rename, and it is what the family has bookmarked. Kept as a redirect
+      # router onto the same service, so an old link still lands in the chat.
+      # No forward-auth on it and no OIDC callback pointing here: it only ever
+      # answers a 302, and the login happens once the browser is on chat.
+      - "traefik.http.routers.open-webui-legacy.rule=Host(`ai.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.open-webui-legacy.entrypoints=websecure"
+      - "traefik.http.routers.open-webui-legacy.tls=true"
+      - "traefik.http.routers.open-webui-legacy.service=open-webui"
+      - "traefik.http.routers.open-webui-legacy.middlewares=frame-deny@docker,lan@docker,open-webui-legacy-redirect"
+      # permanent=false: a 301 sticks in every browser cache that ever saw it,
+      # which would make reverting the rename or reusing ai. for anything else
+      # a support call per device. Nothing here needs the SEO of a 301.
+      - "traefik.http.middlewares.open-webui-legacy-redirect.redirectregex.regex=^https?://[^/]+/?(.*)$$"
+      - "traefik.http.middlewares.open-webui-legacy-redirect.redirectregex.replacement=https://chat.${HOST_NAME:-pi.lan}/$${1}"
+      - "traefik.http.middlewares.open-webui-legacy-redirect.redirectregex.permanent=false"
     cpu_shares: *cpu-prio-idle
     mem_limit: 1g
     memswap_limit: 1536m
@@ -2687,12 +2703,12 @@ services:
     labels:
       - "homepage.group=AI"
       - "homepage.name=Agentgateway"
-      - "homepage.href=https://agent.${HOST_NAME:-pi.lan}/ui"
+      - "homepage.href=https://llm.${HOST_NAME:-pi.lan}/ui"
       - "homepage.description=LLM and MCP gateway, models and keys"
       - "homepage.icon=agentgateway.png"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
-      - "traefik.http.routers.agentgateway.rule=Host(`agent.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.agentgateway.rule=Host(`llm.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.agentgateway.entrypoints=websecure"
       # No authelia@docker: the gateway runs its own OIDC authorization-code
       # flow against the same Authelia, and a forward-auth in front of it would

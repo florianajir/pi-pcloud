@@ -181,7 +181,7 @@ Authelia's rules in evaluation order (`config/authelia/configuration.yml.templat
 | Domain | Subject | Policy |
 |--------|---------|--------|
 | `auth.*` | — | bypass (the portal itself) |
-| `uptime.*`, `homepage.*`, `qbittorrent.*`, `prowlarr.*`, `kapowarr.*`, `ai.*` | any user | one_factor |
+| `uptime.*`, `homepage.*`, `qbittorrent.*`, `prowlarr.*`, `kapowarr.*`, `chat.*` | any user | one_factor |
 | `headscale.*` path `/admin` | `admin` group | two_factor |
 | `backrest.*`, `pihole.*`, `traefik.*`, `lldap.*` | `admin` group | two_factor |
 | anything else | — | **deny** |
@@ -248,7 +248,7 @@ Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/se
 | `vaultwarden_admin_token_hash` | Argon2id digest of the above, the only form Vaultwarden receives |
 
 Two more are generated per-service under `${DATA_LOCATION}`, mode `600`, for the same reason as the
-Vaultwarden token — `agent.<HOST_NAME>` carries no forward-auth, so a `PASSWORD` leak must not also be
+Vaultwarden token — `llm.<HOST_NAME>` carries no forward-auth, so a `PASSWORD` leak must not also be
 admin over it:
 
 | Secret | Purpose |

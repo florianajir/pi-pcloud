@@ -62,9 +62,10 @@ layout:
       style: row
       columns: 1
       icon: mdi-shield-key
-    Tools:
+    AI & Automation:
       style: row
       columns: 2
+      icon: mdi-robot
       AI:
         header: false
       Automation:

@@ -1,6 +1,8 @@
 # Local AI
 
-Open WebUI at `https://ai.<HOST_NAME>` is a full chat assistant running entirely on the Pi's CPU: text, images and audio in, speech out, plus a tool that lets the model report the machine's own health.
+Open WebUI at `https://chat.<HOST_NAME>` is a full chat assistant running entirely on the Pi's CPU: text, images and audio in, speech out, plus a tool that lets the model report the machine's own health.
+
+The two hostnames say who they are for: `chat.` is the human UI, `llm.` is the gateway clients POST to. They used to be `ai.` and `agent.`, two synonyms for opposite things. `ai.<HOST_NAME>` still answers, as a 302 onto `chat.` so old bookmarks keep working; `agent.<HOST_NAME>` does not, since only admins ever typed it.
 
 | Piece | Role | Network |
 |-------|------|---------|
@@ -59,7 +61,7 @@ Edit the `DOWNLOADS` list in `config/llama-cpp/fetch-models.sh`, then point `LLA
 
 ## The gateway (Agentgateway)
 
-`https://agent.<HOST_NAME>` is [agentgateway](https://agentgateway.dev), a Rust data plane that serves
+`https://llm.<HOST_NAME>` is [agentgateway](https://agentgateway.dev), a Rust data plane that serves
 three things on one port: an OpenAI-compatible `/v1` in front of `llama-cpp`, an MCP endpoint at `/mcp`
 that federates tool servers, and the UI at `/ui` that configures both. It joined the
 [Agentic AI Infrastructure Foundation](https://aaif.io/blog/agentgateway-joins-aaif-as-an-open-gateway-for-agentic-ai-infrastructure)
@@ -112,7 +114,7 @@ into the nightly snapshot.
 
 ### Three surfaces, three different gates
 
-They share port 4000 and the `agent.<HOST_NAME>` router, and Traefik carries only the LAN allowlist, so
+They share port 4000 and the `llm.<HOST_NAME>` router, and Traefik carries only the LAN allowlist, so
 each surface has to gate itself:
 
 | Surface | Gated by | Effect |
@@ -122,7 +124,7 @@ each surface has to gate itself:
 | `/mcp` | whatever policy is attached to the target | **nothing by default** |
 
 The gateway runs the OIDC flow itself against the `agentgateway` Authelia client — authorization code
-with PKCE, callback `https://agent.<HOST_NAME>/oauth/callback`. A forward-auth in front of it would
+with PKCE, callback `https://llm.<HOST_NAME>/oauth/callback`. A forward-auth in front of it would
 intercept that callback, which is why there is none. Its console reconfigures the whole gateway, so it
 sits with Dockhand and Headplane rather than with the user-facing services.
 
@@ -143,7 +145,7 @@ if you want it; every MCP client then shares that one registration.
 ### The key that is not `PASSWORD`
 
 `scripts/agentgateway-pre-start.sh` generates `${DATA_LOCATION}/agentgateway/secrets/llm_api_key` on
-first start, and `rotate-password.sh` deliberately leaves it alone. `agent.<HOST_NAME>` carries no
+first start, and `rotate-password.sh` deliberately leaves it alone. `llm.<HOST_NAME>` carries no
 forward-auth on `/v1` — API clients cannot complete an interactive login — so deriving it from
 `PASSWORD` would make a `PASSWORD` leak a free pass to the models. It also has to outlive a rotation:
 `OPENAI_API_KEY` is PersistentConfig in Open WebUI, so the value that container starts with is copied
@@ -159,7 +161,7 @@ agentgateway in the SQLite database, which backrest snapshots whole.
 ### Calling it from outside
 
 ```bash
-curl -sS https://agent.<HOST_NAME>/v1/chat/completions \
+curl -sS https://llm.<HOST_NAME>/v1/chat/completions \
   -H "Authorization: Bearer sk-<your-key>" \
   -H 'Content-Type: application/json' \
   -d '{"model": "gemma-4-e2b-it", "messages": [{"role": "user", "content": "hello"}]}'
@@ -202,7 +204,7 @@ sh scripts/open-webui-bootstrap.sh
 
 ### Who may use it
 
-Authelia already decides who reaches `ai.<HOST_NAME>`, so Open WebUI's own `pending` role — which parks every SSO login behind an admin approval screen — would only mean nobody can use the service until an admin notices. The script sets `ui.default_user_role` to `user` and releases accounts already parked (marker `pi-pcloud.open_access`).
+Authelia already decides who reaches `chat.<HOST_NAME>`, so Open WebUI's own `pending` role — which parks every SSO login behind an admin approval screen — would only mean nobody can use the service until an admin notices. The script sets `ui.default_user_role` to `user` and releases accounts already parked (marker `pi-pcloud.open_access`).
 
 That alone is not enough, because two separate things default to admin-only:
 

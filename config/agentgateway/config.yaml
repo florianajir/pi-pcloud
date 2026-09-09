@@ -23,7 +23,7 @@ gateways:
 # file, which hybrid mode blocks client-side, with no override on that screen.
 # So both are declared here. Naming the gateway above attaches them to port 4000
 # instead of opening one of their own, which is why the UI, the LLM API and MCP
-# all sit behind the single agent.<HOST_NAME> router.
+# all sit behind the single llm.<HOST_NAME> router.
 #
 # What is in this file is the read-only baseline; providers, models and MCP
 # targets added through the UI afterwards live in the database next to it.
@@ -73,7 +73,7 @@ frontendPolicies:
 ui:
   gateways: default
   policies:
-    # Traefik carries no forward-auth for agent.<HOST_NAME>, so this is what
+    # Traefik carries no forward-auth for llm.<HOST_NAME>, so this is what
     # puts Authelia in front of the UI - and only the UI. The LLM API on the
     # same port is gated by the apiKey policy above instead; an MCP target added
     # later is served with no policy at all until one is attached to it.
@@ -82,7 +82,7 @@ ui:
       issuer: https://auth.${HOST_NAME}
       clientId: agentgateway
       clientSecret: ${UI_CLIENT_SECRET}
-      redirectURI: https://agent.${HOST_NAME}/oauth/callback
+      redirectURI: https://llm.${HOST_NAME}/oauth/callback
       # openid is always requested on top of these.
       scopes:
         - profile

@@ -48,7 +48,7 @@ main() {
         log "Generated the agentgateway session cookie secret"
     fi
     # The credential every /v1 caller presents, open-webui included. Not derived
-    # from PASSWORD: agent.<HOST_NAME> carries no forward-auth on /v1, so a
+    # from PASSWORD: llm.<HOST_NAME> carries no forward-auth on /v1, so a
     # PASSWORD leak would otherwise be a free pass to the models. It also has to
     # outlive a rotation - OPENAI_API_KEY is PersistentConfig in Open WebUI, so
     # whatever that container starts with is copied into its database.
