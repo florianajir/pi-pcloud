@@ -2682,6 +2682,7 @@ services:
       - GENERIC_USER_ID_ATTRIBUTE=preferred_username
       - GENERIC_USER_EMAIL_ATTRIBUTE=email
       - GENERIC_USER_DISPLAY_NAME_ATTRIBUTE=name
+      - AUTO_REDIRECT_UI_LOGIN_TO_SSO=true
     volumes:
       - ./config/litellm/config.yaml:/etc/litellm/config.yaml:ro
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_litellm_secret.txt:/run/secrets/oidc_litellm_secret:ro
