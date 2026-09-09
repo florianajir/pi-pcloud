@@ -50,7 +50,11 @@ fi
 
 # --- The sequence ---
 
+# redis-pre-start.sh comes before authelia-pre-start.sh on purpose: the latter
+# restarts Authelia when it re-renders configuration.yml, and that config now
+# carries the Redis password - so the server has to be enforcing it first.
 PRE_START_HOOKS='
+redis-pre-start.sh
 authelia-pre-start.sh
 headscale-pre-start.sh
 backrest-pre-start.sh

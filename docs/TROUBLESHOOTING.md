@@ -20,6 +20,14 @@ make logs       # follow everything
 | Permission denied under `data/` | `${DATA_LOCATION}` is not writable by the containers' UID |
 | Traefik logs ACME failures | The Cloudflare token lacks `Zone → DNS → Edit`, or the zone ID is wrong |
 
+**Everything that uses Redis is broken at once, and `pi-redis` is healthy.** The password drifted from
+one of its consumers. `make check-secrets` names it: the `redis-auth` check authenticates against the
+running Valkey with the value in the secrets directory. Symptoms differ by consumer — Authelia returns
+a "user state" error on every protected route, Immich and Nextcloud log `NOAUTH Authentication
+required`. Re-render and propagate with `make rotate-secret TARGET=redis-auth`. If `pi-redis` itself
+will not start and logs `can't open config file '/run/secrets/redis-auth.conf'`, the pre-start hook
+never rendered it: run `sudo sh scripts/redis-pre-start.sh`.
+
 **A service depends on one that never became healthy.** `docker compose ps` shows which. Compose `depends_on: service_healthy` means one failing healthcheck can hold back a whole branch of the stack — check the dependency's own logs first, not the service that appears stuck.
 
 ## Access

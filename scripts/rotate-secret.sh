@@ -28,6 +28,7 @@ set -eu
 . "$(dirname "$0")/lib.sh"
 
 BACKREST_CONTAINER="pi-backrest"
+REDIS_CONTAINER="pi-redis"
 BACKREST_CONFIG="${PROJECT_DIR}/config/backrest/config.json"
 HOMEPAGE_BACKREST_SECRET="${PROJECT_DIR}/config/homepage/secrets/backrest_password"
 
@@ -60,6 +61,8 @@ Targets:
   comet           Comet's admin/configure logins -> config/comet/comet.env
   vaultwarden     Vaultwarden /admin token       -> the secrets dir, vaultwarden
   ntfy            every ntfy password and token  -> ntfy.env and every publisher
+  redis-auth      the shared Redis password      -> the secrets dir, valkey's included
+                                                    conf, authelia + immich + nextcloud
 
 Options:
   --check   report drift between a secret and its consumers; change nothing
@@ -70,7 +73,7 @@ EOF
 
 case "$TARGET" in
     "") usage; exit 1 ;;
-    --list) printf '%s\n' backrest-auth restic-s3 restic-usb s3-keys beszel-token n8n-runner comet vaultwarden ntfy; exit 0 ;;
+    --list) printf '%s\n' backrest-auth restic-s3 restic-usb s3-keys beszel-token n8n-runner comet vaultwarden ntfy redis-auth; exit 0 ;;
 esac
 
 # --- Rollback bookkeeping -----------------------------------------------------
@@ -490,6 +493,7 @@ do_check() {
         n8n-runner)    check_generated_env_file "${PROJECT_DIR}/config/n8n/n8n.env" N8N_RUNNERS_AUTH_TOKEN "n8n.env" pi-n8n ;;
         comet)         check_generated_env_file "${PROJECT_DIR}/config/comet/comet.env" ADMIN_DASHBOARD_PASSWORD "comet.env" pi-comet ;;
         vaultwarden)   check_secret_file "$(resolve_data_location_path)/authelia-config/secrets/vaultwarden_admin_token" "the Vaultwarden admin token" ;;
+        redis-auth)    check_redis_auth ;;
         ntfy)          check_generated_env_file "${PROJECT_DIR}/config/ntfy/ntfy.env" NTFY_AUTH_USERS "ntfy.env" pi-ntfy ;;
         *) die "unknown target '$TARGET' (see --list)" ;;
     esac
@@ -506,8 +510,59 @@ do_rotate() {
         comet)         rotate_generated_env_file "${PROJECT_DIR}/config/comet/comet.env" comet-pre-start.sh comet ;;
         vaultwarden)   rotate_vaultwarden ;;
         ntfy)          rotate_ntfy ;;
+        redis-auth)    rotate_redis_auth ;;
         *) die "unknown target '$TARGET' (see --list)" ;;
     esac
+}
+
+# Presence is not the question here: the value has to be the one valkey is
+# actually enforcing, because a stale copy in the rendered conf is a cache every
+# client is locked out of - and until the healthcheck started matching on PONG,
+# that state reported healthy.
+check_redis_auth() {
+    _file="$(resolve_data_location_path)/authelia-config/secrets/redis_password"
+
+    check_secret_file "$_file" "the Redis password" || return "$?"
+
+    if ! container_is_running "$REDIS_CONTAINER"; then
+        log "UNKNOWN: $REDIS_CONTAINER is not running"
+        return 2
+    fi
+
+    # The password goes in on stdin, never argv: `valkey-cli -a <pw>` and
+    # `docker exec -e REDISCLI_AUTH=<pw>` both put it in the host process table.
+    if printf 'AUTH %s\nPING\n' "$(cat "$_file")" |
+        docker exec -i "$REDIS_CONTAINER" valkey-cli 2>/dev/null | grep -q PONG; then
+        log "OK: valkey accepts the password in the secrets directory"
+        return 0
+    fi
+
+    log "DRIFT: valkey rejects the password in the secrets directory"
+    return 1
+}
+
+rotate_redis_auth() {
+    [ "$(id -u)" -eq 0 ] ||
+        die "the Authelia secrets directory is root:root 0700 - re-run with sudo"
+    _dir="$(resolve_data_location_path)/authelia-config/secrets"
+    _conf="$(resolve_data_location_path)/redis/redis-auth.conf"
+
+    backup_path "$_dir/redis_password"
+    backup_path "$_conf"
+    rm -f "$_dir/redis_password" "$_conf"
+    sh "${SCRIPT_DIR}/redis-pre-start.sh" >/dev/null || fail "redis-pre-start.sh failed"
+    [ -s "$_dir/redis_password" ] || fail "the Redis password was not regenerated"
+
+    # redis first, or every consumer would be recreated against a server still
+    # enforcing the old password. `up -d` rather than restart: the rendered conf
+    # is a bind mount, so a restart would reload it, but the consumers below hold
+    # the value in their own config and have to be recreated either way - doing
+    # both the same way keeps the order the only thing that matters here.
+    recreate_enabled redis || fail "could not recreate redis"
+    # Authelia reads the secret file at start, immich and nextcloud copy it into
+    # their own config from the entrypoint, so all three need a new container.
+    recreate_enabled authelia immich-server nextcloud ||
+        fail "could not recreate the Redis consumers"
 }
 
 rotate_vaultwarden() {

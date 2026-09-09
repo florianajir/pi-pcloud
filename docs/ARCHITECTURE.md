@@ -57,7 +57,7 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **Authelia** | SSO portal, OIDC provider, forward-auth backend | all users |
 | **LLDAP** | The user and group directory — one source of truth | Authelia, Nextcloud, Dockhand |
 | **PostgreSQL** | Database for Nextcloud, Immich, Authelia, LLDAP, Vaultwarden, Open WebUI | app containers |
-| **Redis (Valkey)** | Session store and cache | app containers |
+| **Redis (Valkey)** | Session store and cache, password-protected — see [Security](SECURITY.md#the-shared-redis-is-authenticated) | Authelia, Immich, Nextcloud |
 | **Pi-hole** | Ad blocking, local DNS for `*.<HOST_NAME>` | LAN and VPN clients |
 | **Unbound** | Recursive resolver — walks the delegation tree itself | Pi-hole only |
 | **Headscale** | Self-hosted Tailscale control plane | VPN clients, from anywhere |
