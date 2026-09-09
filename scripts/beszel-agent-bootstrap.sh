@@ -69,7 +69,11 @@ upsert_env_value() {
 
 set_agent_env_value() {
     upsert_env_value "$AGENT_ENV_FILE" "$1" "$2"
-    chmod 600 "$AGENT_ENV_FILE" 2>/dev/null || true
+    safe_chmod 600 "$AGENT_ENV_FILE"
+    # The systemd unit runs this as root, and compose reads agent.env as an
+    # env_file: root:root 0600 is a file the next non-root `docker compose up`
+    # cannot read, and `required: false` covers a missing one, not that.
+    fix_ownership "$AGENT_ENV_FILE"
 }
 
 resolve_key_from_env() {
@@ -465,7 +469,8 @@ ensure_agent_env_file() {
             printf 'TOKEN=\n'
             printf 'KEY=\n'
         } > "$AGENT_ENV_FILE"
-        chmod 600 "$AGENT_ENV_FILE" 2>/dev/null || true
+        safe_chmod 600 "$AGENT_ENV_FILE"
+        fix_ownership "$AGENT_ENV_FILE"
         log "Created $AGENT_ENV_FILE"
     fi
 }
