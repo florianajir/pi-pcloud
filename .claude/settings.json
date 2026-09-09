@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./config/**/*.env)",
+      "Read(./config/homepage/secrets/**)",
+      "Read(./data/**)",
+      "Read(//mnt/usbdrive/**)",
+      "Edit(./.env)",
+      "Edit(./config/**/*.env)",
+      "Edit(./config/homepage/secrets/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/no-secret-reads.sh\"",
+            "timeout": 10,
+            "statusMessage": "Vetting command for secret exposure"
+          }
+        ]
+      }
+    ]
+  }
+}
