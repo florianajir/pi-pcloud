@@ -85,8 +85,8 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | **Headplane** | openid profile email offline_access | client_secret_basic | **admin_only** | 2FA + `admin` group |
 | **Headscale** | openid profile email | client_secret_basic | one_factor | VPN device registration |
 | **Open WebUI** | openid profile email | client_secret_basic | one_factor | — |
-| **LiteLLM** | openid profile email | client_secret_basic | one_factor | Admin UI only; the `/v1` API takes virtual keys. **No `groups` scope** — it reads a role out of the claims and accepts only its own names, so the admin is named by `PROXY_ADMIN_ID` instead |
-| **Agentgateway** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required — its browser flow always sends a code challenge |
+| **LiteLLM** | openid profile email | client_secret_basic | **admin_only** | 2FA + `admin` group. Gates the Admin UI only — `/v1` takes virtual keys and never sees OIDC. **No `groups` scope**: it reads a role out of the claims and accepts only its own names, so the admin is named by `PROXY_ADMIN_ID` instead |
+| **Agentgateway** | openid profile email | client_secret_basic | **admin_only** | 2FA + `admin` group. PKCE (S256) required — its browser flow always sends a code challenge |
 | **Vaultwarden** | openid profile email offline_access | client_secret_basic | one_factor | Master password still required |
 | **Kavita** | openid profile email groups offline_access | client_secret_post | one_factor | Roles come from the `groups` claim |
 | **Shelfmark** | openid profile email groups | client_secret_basic | one_factor | PKCE (S256) required; admin comes from the `admin` group; local login disabled |
@@ -105,8 +105,8 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Vaultwarden | ✓ | — | ✓ | LAN-only + OIDC + master password — see [below](#vaultwarden). Off `frontend`, on the two-member `vaultwarden_web` segment with Traefik: nothing else has any reason to open `:80` on the vault, and no script does |
 | Beszel | ✓ | — | ✓ | LAN-only + OIDC, password login disabled |
 | Open WebUI | ✓ | — | ✓ | LAN-only + OIDC |
-| LiteLLM | ✓ | — | ✓ | LAN-only + OIDC on the UI. No forward-auth: `/v1` is called by editors, scripts and n8n with a virtual key, and none of them can complete an interactive login. The key *is* the authorization — a caller with none gets a 401 from LiteLLM itself |
-| Agentgateway | ✓ | — | ✓ | LAN-only + OIDC, run by the gateway itself (`ui.policies.oidc`) rather than by Traefik, which would intercept the `/oauth/callback` that flow returns to. The policy covers the UI **only**: an MCP target added through the UI is served on the same port with no policy until one is attached to it |
+| LiteLLM | ✓ | — | ✓ | LAN-only + OIDC + admin + 2FA on the UI, so only an admin sees the models, the spend and the provider credentials. No forward-auth, and the policy deliberately does not reach `/v1`: that is called by editors, scripts and n8n with a virtual key, and none of them can complete an interactive login. The key *is* the authorization there — a caller with none gets a 401 from LiteLLM itself |
+| Agentgateway | ✓ | — | ✓ | LAN-only + OIDC + admin + 2FA, run by the gateway itself (`ui.policies.oidc`) rather than by Traefik, which would intercept the `/oauth/callback` that flow returns to. Its whole surface is a console that reconfigures the proxy, so it belongs with Dockhand rather than with the user-facing services. The policy covers the UI **only**: an MCP target added through it is served on the same port with no policy until one is attached to it |
 | Dockhand | ✓ | — | ✓ | LAN-only + OIDC + admin + 2FA, local login disabled. Off `frontend`, on the two-member `dockhand` segment with Traefik: it reads the Docker socket, so reaching `:3000` from a neighbour is a path to every container on the host. Uptime Kuma watches it over `docker.sock`, not over HTTP; `dockhand-oidc-bootstrap.sh` and `rotate-password.sh` set `DOCKER_CURL_NETWORK` to join that segment |
 | Headplane | ✓ | ✓ | ✓ | LAN-only + SSO + OIDC + admin + 2FA |
 | Kavita | ✓ | — | ✓ | LAN-only + own accounts / OIDC — OPDS clients can't pass an interactive portal |

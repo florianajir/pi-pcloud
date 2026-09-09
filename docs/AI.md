@@ -92,14 +92,23 @@ Nextcloud and Authelia share on the `ai` network — where Open WebUI executes a
 
 The Admin UI uses the `litellm` Authelia client (authorization code, `client_secret_basic`, callback
 `https://llm.<HOST_NAME>/sso/callback` — LiteLLM derives that path from `PROXY_BASE_URL` and it is not
-configurable). `PROXY_ADMIN_ID` is set to `ADMIN_USER` and matched against the `preferred_username`
-claim, so that one account is promoted to `proxy_admin` on every login and everybody else lands on the
-role above.
+configurable). Its policy is `admin_only`: the `admin` group with 2FA, and deny for everyone else.
+
+**That gates the UI, and only the UI.** `/v1` never goes through OIDC, so Open WebUI and any script
+holding a virtual key are untouched by it — which is the split worth keeping: an admin configures the
+models, the budgets and the provider credentials, everyone else consumes with a key. Nobody but an
+admin needs to see the spend page.
+
+`PROXY_ADMIN_ID` is set to `ADMIN_USER` and matched against the `preferred_username` claim, so that one
+account is promoted to `proxy_admin` on every login. The role in `config/litellm/config.yaml` therefore
+only ever applies to a *second* member of the `admin` group.
 
 There is deliberately **no `groups` scope**: LiteLLM reads a role out of the SSO claims and accepts only
-its own names (`proxy_admin`, `internal_user`, …), none of which an Authelia group here matches.
+its own names (`proxy_admin`, `internal_user`, …), none of which an Authelia group here matches. The
+group check is Authelia's, at the authorization endpoint, and needs no scope.
 
-SSO is free up to 5 users; past that LiteLLM asks for an enterprise licence.
+SSO is free up to 5 users; past that LiteLLM asks for an enterprise licence — which `admin_only` keeps
+comfortably out of reach.
 
 If Authelia itself is what is broken, the UI still takes a username and password: `ADMIN_USER` and the
 master key, which is `sk-` followed by the contents of
@@ -342,8 +351,10 @@ into the nightly snapshot.
 ### Logging in
 
 The gateway runs the OIDC flow itself (`ui.policies.oidc`) against the `agentgateway` Authelia client —
-authorization code with PKCE, callback `https://agent.<HOST_NAME>/oauth/callback`. Traefik carries the
-LAN allowlist and nothing else: a forward-auth in front of it would intercept the callback that flow
+authorization code with PKCE, callback `https://agent.<HOST_NAME>/oauth/callback`, policy `admin_only`
+(the `admin` group with 2FA). Its whole surface is a console that reconfigures the proxy, so it sits
+with Dockhand and Headplane rather than with the user-facing services. Traefik carries the LAN
+allowlist and nothing else: a forward-auth in front of it would intercept the callback that flow
 returns to.
 
 The policy covers the **UI only**. An MCP target you add is served on the same port with no policy on it,

@@ -18,6 +18,7 @@ litellm_settings:
   # Clients send sampling fields llama-server never implemented; without this a
   # single unknown key is a 400 for the whole request.
   drop_params: true
-  # What an Authelia user gets on first login; PROXY_ADMIN_ID promotes the admin.
+  # Only ever a second member of the `admin` group: the client's Authelia policy
+  # is admin_only, and PROXY_ADMIN_ID promotes the one admin to proxy_admin.
   default_internal_user_params:
     user_role: internal_user

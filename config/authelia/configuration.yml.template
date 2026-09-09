@@ -305,7 +305,7 @@ __OIDC_PRIVATE_KEY__
         client_name: LiteLLM
         client_secret: '{{ secret "/config/secrets/oidc_litellm_secret_hash" }}'
         public: false
-        authorization_policy: one_factor
+        authorization_policy: admin_only
         consent_mode: implicit
         # Derived by LiteLLM from PROXY_BASE_URL; the path is not configurable.
         redirect_uris:
@@ -329,7 +329,7 @@ __OIDC_PRIVATE_KEY__
         client_name: Agentgateway
         client_secret: '{{ secret "/config/secrets/oidc_agentgateway_secret_hash" }}'
         public: false
-        authorization_policy: one_factor
+        authorization_policy: admin_only
         consent_mode: implicit
         redirect_uris:
           - 'https://agent.__HOST_NAME__/oauth/callback'
