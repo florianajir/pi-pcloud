@@ -320,6 +320,21 @@ PY
     rm -rf "$_kak_tmp"
 }
 
+# A short-lived admin JWT for Kavita's API. /api/Plugin/authenticate is the only
+# credential path left once our OIDC config sets DisablePasswordAuthentication, so
+# every script that has to talk to Kavita goes through here. Empty output means no
+# admin exists yet (fresh install) - callers warn and skip rather than fail a boot.
+# Usage: kavita_token [container]
+kavita_token() {
+    _kt_container="${1:-pi-kavita}"
+    _kt_key="$(kavita_admin_api_key "$_kt_container")"
+    [ -n "$_kt_key" ] || return 0
+
+    KAVITA_KEY="$_kt_key" docker exec -i -e KAVITA_KEY "$_kt_container" sh -c \
+        'curl -sS -X POST "http://localhost:5000/api/Plugin/authenticate?apiKey=$KAVITA_KEY&pluginName=pi-web-bootstrap"' \
+        2>/dev/null | jq -r '.token // empty'
+}
+
 # Where scripts/audiobookshelf-bootstrap.sh persists the API key every later
 # script authenticates with. Inside /config rather than beside it so Backrest's
 # read-only mount of that directory carries it off-site: local logins are

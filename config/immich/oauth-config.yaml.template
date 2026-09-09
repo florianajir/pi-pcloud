@@ -6,11 +6,18 @@ oauth:
   autoRegister: true
   autoLaunch: true
   buttonText: 'Login'
-  scope: 'openid profile email'
+  scope: 'openid profile email groups'
   signingAlgorithm: 'RS256'
   profileSigningAlgorithm: 'none'
   tokenEndpointAuthMethod: 'client_secret_post'
   storageLabelClaim: 'preferred_username'
+  # Immich reads this claim as a list and looks for the literal strings `admin` or
+  # `user`, so pointing it straight at `groups` makes the LLDAP `admin` group the
+  # source of truth - re-evaluated on every login, so it promotes *and* demotes,
+  # unlike the storage claims which only apply at account creation. No custom
+  # Authelia claim is needed. An account in neither yields no role at all, which
+  # Immich reads as "leave alone": a family member never gets demoted by accident.
+  roleClaim: 'groups'
   # Authelia's portal logout route, not an end_session_endpoint - see
   # docs/SECURITY.md. Keep autoLaunch=0 percent-encoded: decoded, its `?` falls
   # out of `rd`, and without it the login page bounces back to Authelia.

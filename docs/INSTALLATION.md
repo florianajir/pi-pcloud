@@ -78,7 +78,8 @@ The variables you must set are listed in [Configuration → Required variables](
 Visit `https://lldap.<HOST_NAME>` and log in as `admin` with your `PASSWORD`.
 
 - Create users under **Admin → Users**.
-- Create an **`admin` group** and add your admin accounts to it. It gates the admin tools — Traefik, Pi-hole, Backrest, LLDAP, Dockhand, Headplane — behind 2FA. Regular users need no group at all.
+- Create an **`admin` group** and add your admin accounts to it. It gates the admin tools — Traefik, Pi-hole, Backrest, LLDAP, Dockhand, Headplane — behind 2FA, and it is also what makes an account a **Nextcloud server administrator** and an **Immich administrator**. Regular users need no group at all.
+- Leave the built-in `lldap_*` groups to the accounts that administer the directory itself. They are LLDAP's own permission model, they are filtered out of the `groups` claim on purpose, and `lldap_strict_readonly` in particular hands read access to every user record — it is not needed to change one's own password (that goes through the reset mail).
 
 ### 2. Log in through the SSO portal
 
@@ -94,17 +95,15 @@ Everything is wired to SSO already — just visit it and you'll be redirected to
 
 ### 4. Kavita — one manual step
 
-Kavita's OIDC connection is provisioned automatically (`scripts/kavita-oidc-bootstrap.sh` writes the client, secret and `appsettings.json`), but its **role mapping and account auto-provisioning live in its own database**, editable only through the UI. Once per fresh install:
+Kavita keeps its OIDC settings in two stores and `scripts/kavita-oidc-bootstrap.sh` now writes both: the client, secret and scopes into `appsettings.json` (which Kavita copies into its database at every startup), and account provisioning plus the role settings over `/api/Settings`. One step stays manual, and it gates everything else — the API needs an admin, and there is no login a script can use until one exists:
 
 1. Visit `https://kavita.<HOST_NAME>` and create the **admin account** by normal registration.
-2. **Settings → OpenID Connect** — Authority, Client ID and Secret are already filled in.
-3. Enable **Auto-Provision** so Authelia users get a Kavita account on first login.
-4. Under **Advanced settings**, set **Roles claim** to `groups`. The default `.../claims/role` is not emitted by Authelia. Leave **Custom scopes** as `groups`.
-5. To grant admin via SSO, put the user in an LLDAP group whose name matches a Kavita role (e.g. `Admin`), or set a **Roles prefix** such as `kavita-` and use groups like `kavita-admin`.
+2. Re-run `make update` (or wait for the next start). The hook fills in Authority, Client ID, Secret, turns on **Auto-Provision**, and sets the role settings described below.
+3. Optionally, in **Settings → OpenID Connect**, turn on **Disable password authentication** once you have confirmed an SSO login works. The hook deliberately does not do this for you: imposed automatically it can lock you out of a fresh install where SSO is not working yet.
 
-These persist in the `kavita_config` volume, and only these steps are manual: they gate everything else, because with **Disable password authentication** on there is no login a script can use until an admin exists.
+**Role sync is off on purpose, and turning it on will lock out your family.** With it on, Kavita takes every permission from the `groups` claim on each login: an account whose claim contains neither `Login` nor `Admin` is *refused outright*, and existing accounts have their roles replaced by whatever the claim matched. Since `admin` is the only group anyone has here, that means admins work and everybody else cannot log in at all. Off, new SSO accounts get `Login`, `Change Password`, `Bookmark` and `Download` from **Default roles**, and you promote an admin with a click in **Settings → Users**. If you do want group-driven roles, you need LLDAP groups named after Kavita's own roles (`Login`, `Admin`, `library-<Name>`) behind a **Roles prefix**, *and* the `groups` scope restored on both the Authelia client and Kavita's **Custom scopes** — set on one side only, the authorization request fails with `invalid_scope` and nobody can log in.
 
-Once that admin exists, the rest is provisioned on the next `make update`:
+All of it persists in the `kavita_config` volume. Once that admin exists, the rest is provisioned on the same run:
 
 - `scripts/kavita-library-bootstrap.sh` creates the **Comics**, **Manga** and **Books** libraries with the right type and folders, repairs them if they drift, and adds every library to the OIDC default set so auto-provisioned accounts can see one added later.
 - `scripts/homepage-widgets-bootstrap.sh` publishes a Kavita **API key** for the Homepage widget — the widget cannot use a password, since Kavita refuses password logins while OIDC is enforced.
