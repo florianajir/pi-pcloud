@@ -15,3 +15,9 @@ oauth:
   # docs/SECURITY.md. Keep autoLaunch=0 percent-encoded: decoded, its `?` falls
   # out of `rd`, and without it the login page bounces back to Authelia.
   endSessionEndpoint: 'https://auth.__HOST_NAME__/logout?rd=https%3A%2F%2Fimmich.__HOST_NAME__%2Fauth%2Flogin%3FautoLaunch%3D0'
+# A sibling of `oauth`, not a key inside it - Immich's schema puts them side by
+# side and nesting this is ignored silently. Off so the shared .env PASSWORD is
+# not a way past Authelia; Immich refuses to let the UI override a config file,
+# so the way back in is to flip this and restart.
+passwordLogin:
+  enabled: false
