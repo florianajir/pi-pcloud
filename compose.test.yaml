@@ -46,6 +46,13 @@ services:
     # not resolve on GitHub Actions runners.
     profiles: [ci-excluded]
 
+  agentgateway:
+    # Same as headscale: its ui.policies.oidc makes it fetch the discovery
+    # document from https://auth.test.local before it serves anything, and it
+    # exits when that fails - so Traefik's docker provider never loads its
+    # router and the probe reports a 404 rather than the 403 it expects.
+    profiles: [ci-excluded]
+
   llama-cpp:
     # Needs the 4.4GB of Gemma 4 weights that scripts/llama-cpp-pre-start.sh
     # seeds into the llama_models volume, which CI does not run.
