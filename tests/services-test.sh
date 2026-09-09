@@ -142,6 +142,15 @@ ok       "enable with no line succeeds"       "$rc" 0
 lacks    "  without pulling in stremio-lan"   "$(written)" "stremio-lan"
 contains "  and starts the service"           "$out" "docker compose up -d kavita"
 
+# Compose starts more than the service named - litellm carries open-webui's
+# profile - and the dependency's own pre-start hook is what writes the keys its
+# entrypoint reads. Asking for `<svc>-pre-start.sh` alone left it unconfigured
+# while the command reported success.
+run_rc beszel enable open-webui
+ok       "enable open-webui succeeds"          "$rc" 0
+contains "  and runs the dependency's hook"    "$out" "litellm-pre-start.sh"
+contains "  starting both"                     "$out" "litellm open-webui"
+
 # --- the two networking modes stay exclusive ---------------------------------
 
 # "all" already runs stremio, so this must not silently start a second server

@@ -164,6 +164,11 @@ services:
       - OPEN_WEBUI_DB_PASSWORD=${PASSWORD}
       - OPEN_WEBUI_SQL_BACKUP_DIR=/userdata/open-webui/backups
       - OPEN_WEBUI_SQL_BACKUP_KEEP=7
+      - LITELLM_DB_NAME=litellm
+      - LITELLM_DB_USER=litellm
+      - LITELLM_DB_PASSWORD=${PASSWORD}
+      - LITELLM_SQL_BACKUP_DIR=/userdata/litellm/backups
+      - LITELLM_SQL_BACKUP_KEEP=7
       - IMMICH_DB_NAME=immich
       - IMMICH_DB_USER=immich
       - IMMICH_DB_PASSWORD=${PASSWORD}
@@ -215,6 +220,12 @@ services:
       - ${DATA_LOCATION:-./data}/lldap/backups:/userdata/lldap/backups
       - ${DATA_LOCATION:-./data}/authelia-config:/userdata/authelia-config
       - ${DATA_LOCATION:-./data}/open-webui/backups:/userdata/open-webui/backups
+      # The salt key rides along: without it the credentials in the dump below
+      # cannot be decrypted. Read-only parent, writable backups child, as above.
+      - ${DATA_LOCATION:-./data}/litellm:/userdata/litellm:ro
+      - ${DATA_LOCATION:-./data}/litellm/backups:/userdata/litellm/backups
+      # The only copy of the MCP targets added through its UI.
+      - ${DATA_LOCATION:-./data}/agentgateway:/userdata/agentgateway:ro
       # Open WebUI's uploads and vector store; without this a DB restore points
       # at blobs that were never snapshotted.
       - open_webui_data:/userdata/open-webui-data:ro
@@ -2527,7 +2538,9 @@ services:
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.1"
     expose:
       - 8080
-    entrypoint: ["bash", "-c", "export OAUTH_CLIENT_SECRET=$(cat /run/secrets/oidc_open-webui_secret) && exec bash start.sh"]
+    # Plain assignments under `-e`; see the same entrypoint on the litellm
+    # service for why `export X=$(cat ...)` hid a missing file.
+    entrypoint: ["bash", "-euc", "OAUTH_CLIENT_SECRET=$(cat /run/secrets/oidc_open-webui_secret); OPENAI_API_KEY=sk-$(cat /run/secrets/litellm/master_key); export OAUTH_CLIENT_SECRET OPENAI_API_KEY; exec bash start.sh"]
     environment:
       - WEBUI_AUTH=true
       - ENABLE_LOGIN_FORM=false
@@ -2546,11 +2559,13 @@ services:
       # turns up no endpoint of its own.
       - WEBUI_AUTH_SIGNOUT_REDIRECT_URL=https://auth.${HOST_NAME:-pi.lan}/logout?rd=https%3A%2F%2Fai.${HOST_NAME:-pi.lan}%2Fauth
       - DATABASE_URL=postgresql://open-webui:${PASSWORD}@postgres/open-webui
-      # The key is required by the client but ignored by llama-server, which runs
-      # unauthenticated on the internal ai network - same for piper and parakeet.
+      # Through LiteLLM, so a model added there appears here without touching
+      # this file. The master key rather than a virtual one: a virtual key can
+      # only be minted after LiteLLM is up, which is after this container is
+      # created. The entrypoint above reads it from the file the proxy reads, so
+      # a rotation cannot leave the two disagreeing.
       - ENABLE_OPENAI_API=true
-      - OPENAI_API_BASE_URL=http://llama-cpp:8080/v1
-      - OPENAI_API_KEY=llama-cpp
+      - OPENAI_API_BASE_URL=http://litellm:4000/v1
       # No Ollama in the stack; left on, this probes localhost:11434 on every
       # start and on the model list of every page load.
       - ENABLE_OLLAMA_API=false
@@ -2562,20 +2577,31 @@ services:
       # database already exists.
       #
       # The base URL is not optional: Open WebUI defaults it to
-      # OPENAI_API_BASE_URL, which here is llama-cpp, so leaving it out would
+      # OPENAI_API_BASE_URL, which here is litellm, so leaving it out would
       # point the microphone at the chat model.
       - AUDIO_STT_ENGINE=openai
       - AUDIO_STT_OPENAI_API_BASE_URL=http://parakeet:8000/v1
       - AUDIO_STT_MODEL=parakeet-tdt-0.6b-v3
       - AUDIO_STT_OPENAI_API_KEY=parakeet
+      # Not optional either, and for a sharper reason than the base URL above:
+      # AUDIO_TTS_OPENAI_API_KEY also falls back to OPENAI_API_KEY, which is now
+      # LiteLLM's master key - so leaving it unset ships a full-privilege admin
+      # credential to piper on every read-aloud. The four other settings that
+      # inherit that key (RAG, images, image edit, STT) inherit the base URL
+      # with it, so they stay pointed at LiteLLM; TTS is the one that does not.
+      - AUDIO_TTS_OPENAI_API_KEY=piper
     volumes:
       - open_webui_data:/app/backend/data
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_open-webui_secret.txt:/run/secrets/oidc_open-webui_secret:ro
+      # The whole directory, for the reason given on the litellm service. The
+      # salt key comes with it, and unlocks nothing the master key does not.
+      - ${DATA_LOCATION:-./data}/litellm/secrets:/run/secrets/litellm:ro
     depends_on:
       postgres:
         condition: service_healthy
-      llama-cpp:
-        condition: service_started
+      # llama-cpp is reached through litellm now, so this is where the wait is.
+      litellm:
+        condition: service_healthy
         required: false
       # service_started, not service_healthy: system-tools is on the relaxed
       # healthcheck (120s interval, no start_interval), so Docker's first probe
@@ -2604,6 +2630,157 @@ services:
     cpu_shares: *cpu-prio-idle
     mem_limit: 1g
     memswap_limit: 1536m
+    oom_score_adj: *oom-score-deprioritize
+
+  # OpenAI-compatible gateway in front of llama-cpp. Everything that speaks to a
+  # model goes through here, so a second model or a cloud provider is a row in
+  # its database instead of an environment change in every client, and the spend
+  # of each key is recorded whether the caller is the chat UI or a script.
+  litellm:
+    <<: *service-defaults
+    image: ghcr.io/berriai/litellm:v1.100.0
+    container_name: pi-litellm
+    # open-webui, because the chat has no models without this proxy now. Same
+    # shape as flaresolverr under prowlarr.
+    profiles: ["litellm", "open-webui", "all"]
+    networks:
+      - frontend
+      - ai
+    extra_hosts:
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 4000
+    # Three values that cannot come from `environment:`, all files - see
+    # scripts/litellm-pre-start.sh for why two of them are not PASSWORD.
+    #
+    # Plain assignments under `-e`, not `export X=$(cat ...)`: export is a
+    # command, so its own success masks a failed substitution, and the proxy came
+    # up with the master key "sk-" and an empty salt key. Measured both ways.
+    entrypoint: ["bash", "-euc", "GENERIC_CLIENT_SECRET=$(cat /run/secrets/oidc_litellm_secret); LITELLM_SALT_KEY=$(cat /run/secrets/litellm/salt_key); LITELLM_MASTER_KEY=sk-$(cat /run/secrets/litellm/master_key); export GENERIC_CLIENT_SECRET LITELLM_SALT_KEY LITELLM_MASTER_KEY; exec docker/prod_entrypoint.sh --config /etc/litellm/config.yaml --port 4000"]
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      # No UI_PASSWORD, so this account's password is the master key - the way
+      # back in when Authelia itself is what is broken.
+      - UI_USERNAME=${ADMIN_USER:-admin}
+      - DATABASE_URL=postgresql://litellm:${PASSWORD}@postgres:5432/litellm
+      - STORE_MODEL_IN_DB=True
+      # What the SSO redirect URI is built from; without it LiteLLM sends the
+      # browser back to the container's own address.
+      - PROXY_BASE_URL=https://llm.${HOST_NAME:-pi.lan}
+      # Matched against GENERIC_USER_ID_ATTRIBUTE below: this account is
+      # promoted to proxy_admin, everyone else gets config/litellm's role.
+      - PROXY_ADMIN_ID=${ADMIN_USER:-admin}
+      - GENERIC_CLIENT_ID=litellm
+      # Written out rather than discovered: LiteLLM's generic provider takes the
+      # three endpoints, not an issuer.
+      - GENERIC_AUTHORIZATION_ENDPOINT=https://auth.${HOST_NAME:-pi.lan}/api/oidc/authorization
+      - GENERIC_TOKEN_ENDPOINT=https://auth.${HOST_NAME:-pi.lan}/api/oidc/token
+      - GENERIC_USERINFO_ENDPOINT=https://auth.${HOST_NAME:-pi.lan}/api/oidc/userinfo
+      - GENERIC_USER_ID_ATTRIBUTE=preferred_username
+      - GENERIC_USER_EMAIL_ATTRIBUTE=email
+      - GENERIC_USER_DISPLAY_NAME_ATTRIBUTE=name
+    volumes:
+      - ./config/litellm/config.yaml:/etc/litellm/config.yaml:ro
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_litellm_secret.txt:/run/secrets/oidc_litellm_secret:ro
+      # The directory, not the files inside it: Docker materialises a
+      # *directory* at a missing bind-mount source, and `[ -s ]` in the
+      # pre-start hook then reads that as already generated. An empty directory
+      # is merely empty, and the next hook run fills it in place.
+      - ${DATA_LOCATION:-./data}/litellm/secrets:/run/secrets/litellm:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      llama-cpp:
+        condition: service_started
+        required: false
+    healthcheck:
+      <<: *healthcheck-relaxed
+      # The image ships neither curl nor wget, and /health/liveliness is the one
+      # health route that takes no credential.
+      test: ["CMD", "python3", "-c", "import urllib.request as r; r.urlopen('http://localhost:4000/health/liveliness').read()"]
+      # Prisma migrates on first start. start_interval so open-webui, which
+      # waits on this being healthy, is not held to the 120s probe interval.
+      start_period: 180s
+      start_interval: 5s
+    labels:
+      - "homepage.group=AI"
+      - "homepage.name=LiteLLM"
+      - "homepage.href=https://llm.${HOST_NAME:-pi.lan}"
+      - "homepage.description=LLM gateway, keys and spend"
+      # dashboard-icons has nothing for LiteLLM.
+      - "homepage.icon=mdi-router-network"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.litellm.rule=Host(`llm.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.litellm.entrypoints=websecure"
+      # No authelia@docker: /v1 is called with a virtual key by scripts and
+      # editors that have no browser to complete a login in, and the UI has the
+      # Authelia OIDC client above.
+      - "traefik.http.routers.litellm.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.litellm.tls=true"
+      - "traefik.http.services.litellm.loadbalancer.server.port=4000"
+    cpu_shares: *cpu-prio-idle
+    mem_limit: 1g
+    memswap_limit: 1536m
+    oom_score_adj: *oom-score-deprioritize
+
+  # MCP gateway: one endpoint that federates tool servers, with the UI to add
+  # them behind an Authelia login. LLM traffic is litellm's job, not this one's.
+  agentgateway:
+    <<: *service-defaults
+    image: cr.agentgateway.dev/agentgateway:v1.5.0
+    container_name: pi-agentgateway
+    profiles: ["agentgateway", "all"]
+    # The image runs as 65532, which cannot write a data directory the project
+    # owner must stay able to read; 1000 is what every PUID here assumes.
+    user: "1000:1000"
+    networks:
+      - frontend
+      - ai
+    extra_hosts:
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 4000
+    command: ["-f", "/config.yaml"]
+    environment:
+      # Expanded by agentgateway inside /config.yaml, not by Compose.
+      - HOST_NAME=${HOST_NAME:-pi.lan}
+    env_file:
+      # OIDC_COOKIE_SECRET and UI_CLIENT_SECRET, written by
+      # scripts/agentgateway-pre-start.sh. Frozen at container creation, so a
+      # rotated secret needs `up -d`, not `restart`.
+      - path: ./config/agentgateway/agentgateway.env
+        required: false
+    volumes:
+      - ./config/agentgateway/config.yaml:/config.yaml:ro
+      - ${DATA_LOCATION:-./data}/agentgateway:/data
+    depends_on:
+      # Both healthy: it fetches the OIDC discovery document at startup and
+      # exits when that fails, and the issuer resolves through Traefik.
+      authelia:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    # No healthcheck: the image is distroless, so there is no shell and no HTTP
+    # client to probe with. Uptime Kuma watches the container instead.
+    labels:
+      - "homepage.group=AI"
+      - "homepage.name=Agentgateway"
+      - "homepage.href=https://agent.${HOST_NAME:-pi.lan}/ui"
+      - "homepage.description=MCP gateway"
+      - "homepage.icon=agentgateway.png"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.agentgateway.rule=Host(`agent.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.agentgateway.entrypoints=websecure"
+      # No authelia@docker: the gateway runs its own OIDC authorization-code
+      # flow against the same Authelia, and a forward-auth in front of it would
+      # intercept the /oauth/callback that flow returns to.
+      - "traefik.http.routers.agentgateway.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.agentgateway.tls=true"
+      - "traefik.http.services.agentgateway.loadbalancer.server.port=4000"
+    cpu_shares: *cpu-prio-idle
+    mem_limit: 256m
     oom_score_adj: *oom-score-deprioritize
 
   # Database & Cache

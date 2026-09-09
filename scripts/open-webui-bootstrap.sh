@@ -1,6 +1,6 @@
 #!/bin/sh
-# Registers the local llama-cpp backend as an Open WebUI connection and seeds the
-# settings a fresh install needs.
+# Registers the LiteLLM proxy as an Open WebUI connection and seeds the settings
+# a fresh install needs.
 #
 # OPENAI_API_BASE_URL and friends are "PersistentConfig" variables: Open WebUI
 # copies them into its database on first start and reads the database from then
@@ -32,8 +32,12 @@ case "$DEFAULT_LANGUAGE" in
         ;;
 esac
 
-LLAMA_URL="http://llama-cpp:8080/v1"
-# Must match LLAMA_ARG_ALIAS in compose.yaml.
+LITELLM_URL="http://litellm:4000/v1"
+# The same file compose exports both containers' keys from, so this cannot
+# disagree with them. Hex, which is what makes it safe to splice into SQL.
+LITELLM_KEY_FILE="$(resolve_data_location_path)/litellm/secrets/master_key"
+# Must match model_name in config/litellm/config.yaml, which is in turn
+# LLAMA_ARG_ALIAS in compose.yaml.
 LLAMA_MODEL="gemma-4-e2b-it"
 # Each settings group carries its own marker row, so it is seeded once and never
 # re-imposed - anything changed afterwards in Admin Settings stays changed. Bump
@@ -147,24 +151,39 @@ psql_owui() {
 
 # 't' when the connection is already registered, or when Open WebUI has not
 # persisted its connection list yet - a fresh install seeds it straight from
-# the compose environment, which already points at llama-cpp.
+# the compose environment, which already points at LiteLLM.
 connection_present() {
     psql_owui -tAc \
         "SELECT coalesce(
-             (SELECT value::jsonb ? '$LLAMA_URL' FROM config WHERE key = 'openai.api_base_urls'),
+             (SELECT value::jsonb ? '$LITELLM_URL' FROM config WHERE key = 'openai.api_base_urls'),
              true
          );" 2>/dev/null | tr -d ' \r\n'
 }
 
+# A full-privilege LiteLLM credential, so it never reaches argv - and it is
+# checked to be hex before being spliced into a SQL literal.
+litellm_key() {
+    local key=""
+
+    [ -r "$LITELLM_KEY_FILE" ] || return 1
+    key="$(tr -d '\r\n' < "$LITELLM_KEY_FILE")"
+    case "$key" in
+        "" | *[!0-9a-fA-F]*) return 1 ;;
+    esac
+    printf 'sk-%s' "$key"
+}
+
 add_connection() {
+    local key="$1"
+
     # api_base_urls, api_keys and api_configs are parallel: the config for a URL
     # is looked up by its index in the URL list, so all three have to grow
-    # together. api_keys is padded first in case it is short - llama-server
-    # takes no key anyway, it is unauthenticated on the internal ai network.
+    # together. api_keys is padded first in case it is short, then the key is
+    # appended at the index this URL lands on - LiteLLM rejects a call without.
     psql_owui -q <<SQL
 DO \$\$
 DECLARE
-    target text := '$LLAMA_URL';
+    target text := '$LITELLM_URL';
     urls   jsonb;
     keys   jsonb;
     idx    int;
@@ -185,7 +204,7 @@ BEGIN
 
     UPDATE config SET value = (urls || to_jsonb(target))::json, updated_at = stamp
         WHERE key = 'openai.api_base_urls';
-    UPDATE config SET value = (keys || to_jsonb(''::text))::json, updated_at = stamp
+    UPDATE config SET value = (keys || to_jsonb('$key'::text))::json, updated_at = stamp
         WHERE key = 'openai.api_keys';
     UPDATE config SET value = jsonb_set(
             coalesce(value::jsonb, '{}'::jsonb),
@@ -533,11 +552,16 @@ main() {
     case "$(connection_present)" in
         t) ;;
         f)
-            log "Registering $LLAMA_URL as an Open WebUI connection"
-            if add_connection; then
-                changed=1
+            _key="$(litellm_key)" || _key=""
+            if [ -z "$_key" ]; then
+                log "WARNING: no readable LiteLLM master key; leaving the connection unregistered"
             else
-                log "WARNING: failed to register the llama-cpp connection"
+                log "Registering $LITELLM_URL as an Open WebUI connection"
+                if add_connection "$_key"; then
+                    changed=1
+                else
+                    log "WARNING: failed to register the LiteLLM connection"
+                fi
             fi
             ;;
         *)

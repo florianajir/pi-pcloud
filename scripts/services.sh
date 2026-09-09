@@ -501,6 +501,8 @@ cmd_enable() {
     require_env_file
     known="$(known_profiles)"
     validate_service "$svc" enable "$known"
+    # Captured before the write, to diff the *effective* service sets below.
+    was_enabled="$(current_enabled)"
     if has_profiles_line; then
         current="$(get_env_value_clean COMPOSE_PROFILES)"
     else
@@ -535,10 +537,30 @@ cmd_enable() {
         fi
         write_profiles "$new"
     fi
-    run_pre_start_hook "$svc-pre-start.sh"
-    echo "🚀 Starting $svc (and any services it depends on)..."
-    run_compose_up_with "$new" up -d "$svc"
-    run_post_start_hooks "$svc" "$known"
+
+    # Compose starts more than the service named: one that carries this one's
+    # profile comes with it - litellm under open-webui, gluetun under
+    # qbittorrent - and its hooks have to run too, since litellm's is what
+    # writes the keys its entrypoint reads. Diffing the effective sets is what
+    # cmd_config already does; asking for `$svc-pre-start.sh` alone left the
+    # dependency unconfigured while reporting success.
+    newly_on=""
+    for _svc in $(services_for_profiles "$new"); do
+        in_lines "$was_enabled" "$_svc" || newly_on="$newly_on $_svc"
+    done
+    # Already running, so nothing is new: re-run the named service's own hooks
+    # rather than silently doing nothing.
+    [ -n "$newly_on" ] || newly_on=" $svc"
+
+    for _svc in $newly_on; do
+        run_pre_start_hook "$_svc-pre-start.sh"
+    done
+    echo "🚀 Starting$newly_on..."
+    # shellcheck disable=SC2086 # service names, split on purpose
+    run_compose_up_with "$new" up -d $newly_on
+    for _svc in $newly_on; do
+        run_post_start_hooks "$_svc" "$known"
+    done
     echo "✅ $svc enabled"
 }
 

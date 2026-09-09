@@ -47,6 +47,7 @@ prowlarr:/userdata/prowlarr/prowlarr.db
 kapowarr:/userdata/kapowarr-db/Kapowarr.db
 shelfmark:/userdata/shelfmark/users.db
 audiobookshelf:/userdata/audiobookshelf/absdatabase.sqlite
+agentgateway:/userdata/agentgateway/agentgateway.db
 '
 
 mkdir -p "$DEST"

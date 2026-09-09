@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+#
+# Agentgateway expands the references below itself, not Compose. It does that
+# over the raw text, comments included - so a reference written in a comment as
+# an example is looked up like any other and fails the start.
+config:
+  # hybrid: this file is the read-only baseline, UI edits go to the database.
+  # In the default `file` mode every save would fail against a read-only mount.
+  storage:
+    mode: hybrid
+  # SQLite, not the shared Postgres: this also takes a row per proxied request,
+  # and everything in the stack waits on that Postgres.
+  database:
+    url: sqlite:///data/agentgateway.db
+gateways:
+  default:
+    port: 4000
+ui:
+  gateways: default
+  policies:
+    # Traefik carries no forward-auth for agent.<HOST_NAME>, so this is what
+    # puts Authelia in front of the UI - and only the UI: an MCP target added
+    # later is served with no policy until one is attached. See docs/SECURITY.md.
+    oidc:
+      issuer: https://auth.${HOST_NAME}
+      clientId: agentgateway
+      clientSecret: ${UI_CLIENT_SECRET}
+      redirectURI: https://agent.${HOST_NAME}/oauth/callback
+      # openid is always requested on top of these.
+      scopes:
+        - profile
+        - email

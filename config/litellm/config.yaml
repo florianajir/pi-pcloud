@@ -1,0 +1,24 @@
+# LiteLLM proxy configuration.
+#
+# Only what has to exist before anyone can log in: STORE_MODEL_IN_DB is on, so
+# every model added through the Admin UI afterwards lives in Postgres, not here.
+model_list:
+  - model_name: gemma-4-e2b-it
+    litellm_params:
+      # openai/ selects the OpenAI-compatible transport; the rest is
+      # LLAMA_ARG_ALIAS in compose.yaml.
+      model: openai/gemma-4-e2b-it
+      api_base: http://llama-cpp:8080/v1
+      # Required by the client library, ignored by llama-server.
+      api_key: llama-cpp
+
+litellm_settings:
+  # litellm.telemetry defaults to true and posts usage to a hosted endpoint.
+  telemetry: false
+  # Clients send sampling fields llama-server never implemented; without this a
+  # single unknown key is a 400 for the whole request.
+  drop_params: true
+  # Only ever a second member of the `admin` group: the client's Authelia policy
+  # is admin_only, and PROXY_ADMIN_ID promotes the one admin to proxy_admin.
+  default_internal_user_params:
+    user_role: internal_user

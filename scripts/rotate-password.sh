@@ -26,7 +26,7 @@
 #     Postgres role password is still valid (i.e. BEFORE rotating the
 #     `nextcloud` role), or Nextcloud loses its DB connection in the gap.
 #   - .env's PASSWORD feeds Postgres connection strings for lldap,
-#     immich-server, open-webui, vaultwarden, and backrest, AND local-login
+#     immich-server, open-webui, vaultwarden, litellm, and backrest, AND local-login
 #     fallbacks for pihole/homepage. Writing a new PASSWORD into .env
 #     without also rotating the Postgres roles those services hold poisons .env
 #     for a FUTURE, unrelated container recreate (a reboot, `make restart`, an
@@ -89,7 +89,7 @@ confirm() {
     else
         echo "⚠️  This will rotate PASSWORD everywhere it's persisted:"
         echo "   Postgres roles (postgres, immich, nextcloud, authelia, lldap, open-webui,"
-        echo "   vaultwarden), the LLDAP admin account (LDAP password-modify, not env),"
+        echo "   vaultwarden, litellm), the LLDAP admin account (LDAP password-modify, not env),"
         echo "   Authelia's ldap_password + db_password secrets, Nextcloud (DB + admin"
         echo "   login), Pi-hole, Beszel, ntfy, qBittorrent, Prowlarr, Kapowarr, Dockhand,"
         echo "   and recreates the containers that bake it into their environment."
@@ -185,7 +185,7 @@ rotate_postgres_roles() {
     if ! container_is_running "pi-postgres"; then
         note "✘ SKIPPED all postgres roles (pi-postgres not running)"
         IMMICH_ROLE_OK=0; AUTHELIA_ROLE_OK=0; LLDAP_ROLE_OK=0; OPEN_WEBUI_ROLE_OK=0
-        VAULTWARDEN_ROLE_OK=0
+        VAULTWARDEN_ROLE_OK=0; LITELLM_ROLE_OK=0
         return 0
     fi
     rotate_postgres_role postgres postgres
@@ -194,6 +194,7 @@ rotate_postgres_roles() {
     rotate_postgres_role lldap lldap            && LLDAP_ROLE_OK=1      || LLDAP_ROLE_OK=0
     rotate_postgres_role open-webui open-webui  && OPEN_WEBUI_ROLE_OK=1 || OPEN_WEBUI_ROLE_OK=0
     rotate_postgres_role vaultwarden vaultwarden && VAULTWARDEN_ROLE_OK=1 || VAULTWARDEN_ROLE_OK=0
+    rotate_postgres_role litellm litellm        && LITELLM_ROLE_OK=1    || LITELLM_ROLE_OK=0
     # nextcloud is rotated in rotate_nextcloud_db_password(), after config.php
     # is updated - see the ordering note there.
 }
@@ -750,6 +751,10 @@ main() {
         # applies the new role password. Its ADMIN_TOKEN is independent of PASSWORD
         # and deliberately untouched here - see scripts/vaultwarden-pre-start.sh.
         if [ "$VAULTWARDEN_ROLE_OK" = "1" ]; then recreate vaultwarden; else note "… Skipped recreating vaultwarden - its Postgres role didn't rotate"; fi
+        # Only DATABASE_URL carries PASSWORD here. The master key and the salt
+        # key are generated files this deliberately never touches - see
+        # scripts/litellm-pre-start.sh.
+        if [ "$LITELLM_ROLE_OK" = "1" ]; then recreate litellm; else note "… Skipped recreating litellm - its Postgres role didn't rotate"; fi
         # backrest is NOT gated on the roles, unlike the containers above.
         # Its UI login is no longer PASSWORD - that lives in
         # config/backrest/backrest.env and is untouched by a rotation - so the
@@ -767,6 +772,7 @@ main() {
         [ "$LLDAP_ROLE_OK" = "1" ]       || _stale_dumps="$_stale_dumps lldap"
         [ "$OPEN_WEBUI_ROLE_OK" = "1" ]  || _stale_dumps="$_stale_dumps open-webui"
         [ "$VAULTWARDEN_ROLE_OK" = "1" ] || _stale_dumps="$_stale_dumps vaultwarden"
+        [ "$LITELLM_ROLE_OK" = "1" ]     || _stale_dumps="$_stale_dumps litellm"
         [ "$IMMICH_ROLE_OK" = "1" ]      || _stale_dumps="$_stale_dumps immich"
         if [ -n "$_stale_dumps" ]; then
             note "⚠ backrest now holds the new PASSWORD, but these roles did not rotate:$_stale_dumps"

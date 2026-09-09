@@ -36,7 +36,7 @@ Prefer doing it by hand? See the [Installation guide](docs/INSTALLATION.md).
 - **Reachable from anywhere, exposed to no one.** Headscale runs your own Tailscale control plane; everything but the login portal is restricted to your LAN and your tailnet.
 - **Backups you can restore.** Backrest (restic) snapshots app data and databases nightly, encrypted and deduplicated, to any S3-compatible bucket.
 - **Alerts on your phone.** Beszel watches the hardware, Uptime Kuma watches the services *through* Traefik, and everything pushes to ntfy — split into muteable topics.
-- **A local AI assistant.** Open WebUI on top of llama.cpp, with speech in and out, running entirely on the Pi's CPU. It can even report the machine's own health.
+- **A local AI assistant.** Open WebUI on top of llama.cpp, with speech in and out, running entirely on the Pi's CPU. It can even report the machine's own health. LiteLLM puts one OpenAI-compatible endpoint with virtual keys in front of it, so your editor and your scripts reach the same models.
 
 ### Why not something else?
 
@@ -55,7 +55,7 @@ Prefer doing it by hand? See the [Installation guide](docs/INSTALLATION.md).
 | **Network & access** | Traefik, Authelia, LLDAP, Headscale + Headplane, Tailscale |
 | **DNS & filtering** | Pi-hole, Unbound |
 | **Download & media** | qBittorrent, Prowlarr, Kapowarr, Shelfmark, Kavita, Audiobookshelf, Stremio + Comet, FlareSolverr, Gluetun |
-| **AI** | Open WebUI, llama.cpp, Piper (TTS), Parakeet (STT), system-tools |
+| **AI** | Open WebUI, LiteLLM, Agentgateway, llama.cpp, Piper (TTS), Parakeet (STT), system-tools |
 | **Monitoring & backup** | Beszel, Uptime Kuma, Homepage, Backrest, Dockhand |
 | **Infrastructure** | PostgreSQL, Redis (Valkey), ddns-updater |
 

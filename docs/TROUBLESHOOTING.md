@@ -445,6 +445,18 @@ sh scripts/open-webui-bootstrap.sh    # re-seeds the connection, tools and sugge
 
 On a **fresh install** the steps that write the model's workspace row are skipped until an admin account exists — so run the bootstrap once after your first SSO login. See [Local AI](AI.md#how-open-webui-is-wired).
 
+**`pi-litellm` restarts in a loop.** Two causes, both visible in `docker logs pi-litellm`:
+
+- `password authentication failed for user "litellm"`, or the database does not exist.
+  `config/postgres/init-databases.sh` creates the role and the database, but the Postgres image
+  only runs it on a **fresh** `PGDATA` — so a cluster that predates this service has neither. Create
+  them once, with the same shape that file uses (`PASSWORD` from `.env` as the role password), then
+  `docker compose up -d litellm`. Open WebUI waits on litellm being healthy, so it stays down with it.
+- `cat: /run/secrets/litellm/master_key: No such file or directory`. `litellm-pre-start.sh` has not
+  run — a hand-edited `COMPOSE_PROFILES` that names `open-webui` without `litellm` is the way to get
+  there, since the hook is gated on either. `make update` runs the full pre-start sequence and fills
+  the directory in place; no recreate is needed.
+
 **Replies take minutes.** Something re-enabled the built-in tools or thinking. Both cost thousands of prompt tokens per message at ~40 tok/s — see [Why the defaults look aggressive](AI.md#why-the-defaults-look-aggressive).
 
 **The assistant answers about the server without calling the tool.** Check the phrasing: singular and negated questions reliably fail to trigger a tool call where the plural, positive form works. See [Topic selection is testable](AI.md#topic-selection-is-testable-so-test-it).
