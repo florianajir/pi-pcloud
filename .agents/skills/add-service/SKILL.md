@@ -29,6 +29,13 @@ explicitly which ones you skipped and why.
 
 ## 2. Traefik
 
+Pick `<sub>` by who calls it: a service the household uses gets a **function**
+name (`ai`, `vault`, `audiobooks`, `uptime`), an admin-only or infrastructure one
+gets the **product** name (`traefik`, `backrest`, `lldap`, `beszel`). Single label
+only - the certificate is `*.${HOST_NAME}`, so `a.b.${HOST_NAME}` needs its own
+SANs entry. **`chat.` is reserved** for a future human-to-human messaging service;
+do not spend it on anything else (see docs/AI.md).
+
 Join `frontend` and add:
 
 ```yaml

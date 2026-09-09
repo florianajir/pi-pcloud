@@ -20,7 +20,7 @@ flowchart LR
     subgraph Apps["Routed services"]
       A1["nextcloud · immich · vaultwarden\nn8n · ntfy · kavita"]
       A2["qbittorrent · prowlarr · kapowarr\nstremio (via gluetun)"]
-      A3["open-webui · litellm · agentgateway\nbeszel · uptime-kuma · homepage\ndockhand · backrest"]
+      A3["open-webui · agentgateway\nbeszel · uptime-kuma · homepage\ndockhand · backrest"]
       Authelia[authelia]
     end
 
@@ -56,7 +56,7 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **ddns-updater** | Keeps the Cloudflare records pointed at your public IP | Cloudflare API |
 | **Authelia** | SSO portal, OIDC provider, forward-auth backend | all users |
 | **LLDAP** | The user and group directory — one source of truth | Authelia, Nextcloud, Dockhand |
-| **PostgreSQL** | Database for Nextcloud, Immich, Authelia, LLDAP, Vaultwarden, Open WebUI, LiteLLM | app containers |
+| **PostgreSQL** | Database for Nextcloud, Immich, Authelia, LLDAP, Vaultwarden, Open WebUI | app containers |
 | **Redis (Valkey)** | Session store and cache, password-protected — see [Security](SECURITY.md#the-shared-redis-is-authenticated) | Authelia, Immich, Nextcloud |
 | **Pi-hole** | Ad blocking, local DNS for `*.<HOST_NAME>` | LAN and VPN clients |
 | **Unbound** | Recursive resolver — walks the delegation tree itself | Pi-hole only |
@@ -81,9 +81,8 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **Stremio + Comet** | Streaming server and its debrid addon | users |
 | **stremio-lan** | The same Stremio server on a LAN macvlan address instead of the VPN, for DLNA casting — mutually exclusive with `stremio` | users, LAN renderers |
 | **Open WebUI** | Local AI chat frontend — see [Local AI](AI.md) | users |
-| **LiteLLM** | LLM gateway in front of llama.cpp: one OpenAI-compatible endpoint, virtual keys, budgets and per-key spend | Open WebUI, and any API client |
-| **Agentgateway** | MCP gateway — federates tool servers behind one endpoint, with a UI to add them | MCP clients, admins |
-| **llama.cpp / Piper / Parakeet / system-tools** | Inference, TTS, STT and the host-status tool | LiteLLM, Open WebUI |
+| **Agentgateway** | LLM and MCP gateway in front of llama.cpp: one OpenAI-compatible endpoint, one MCP endpoint, virtual keys and token rate limits | Open WebUI, and any API or MCP client |
+| **llama.cpp / Piper / Parakeet / system-tools** | Inference, TTS, STT and the host-status tool | Agentgateway, Open WebUI |
 | **Homepage** | Dashboard with live widgets | users |
 | **Beszel** | Hardware metrics and threshold alerts | admins |
 | **beszel-agent** | Host-side collector feeding the Beszel hub over a shared Unix socket | Beszel only |
@@ -146,7 +145,7 @@ Persistent state is split deliberately:
 
 | Where | What | Why |
 |-------|------|-----|
-| `${DATA_LOCATION}` (default `./data`) | `nextcloud`, `immich`, `postgres18`, `authelia-config`, `lldap`, `vaultwarden`, `uptime-kuma`, `backrest`, `download`, `comics`, `manga`, `n8n`, `open-webui`, `litellm`, `agentgateway`, … | Anything you would miss. **Point this at your SSD.** Backrest mounts most of it read-only |
+| `${DATA_LOCATION}` (default `./data`) | `nextcloud`, `immich`, `postgres18`, `authelia-config`, `lldap`, `vaultwarden`, `uptime-kuma`, `backrest`, `download`, `comics`, `manga`, `n8n`, `open-webui`, `agentgateway`, … | Anything you would miss. **Point this at your SSD.** Backrest mounts most of it read-only |
 | Named Docker volumes | Pi-hole, Redis, Headscale, Beszel, ntfy, Kavita config, llama.cpp weights, … | Smaller state, and the model weights that belong on the fast root filesystem rather than in backups |
 
 ### The reading libraries

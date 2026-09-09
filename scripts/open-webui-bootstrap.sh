@@ -1,6 +1,6 @@
 #!/bin/sh
-# Registers the LiteLLM proxy as an Open WebUI connection and seeds the settings
-# a fresh install needs.
+# Registers the agentgateway LLM endpoint as an Open WebUI connection and seeds
+# the settings a fresh install needs.
 #
 # OPENAI_API_BASE_URL and friends are "PersistentConfig" variables: Open WebUI
 # copies them into its database on first start and reads the database from then
@@ -32,12 +32,12 @@ case "$DEFAULT_LANGUAGE" in
         ;;
 esac
 
-LITELLM_URL="http://litellm:4000/v1"
-# The same file compose exports both containers' keys from, so this cannot
-# disagree with them. Hex, which is what makes it safe to splice into SQL.
-LITELLM_KEY_FILE="$(resolve_data_location_path)/litellm/secrets/master_key"
-# Must match model_name in config/litellm/config.yaml, which is in turn
-# LLAMA_ARG_ALIAS in compose.yaml.
+GATEWAY_URL="http://agentgateway:4000/v1"
+# The same file compose exports the gateway's own key from, so this cannot
+# disagree with it. Hex, which is what makes it safe to splice into SQL.
+GATEWAY_KEY_FILE="$(resolve_data_location_path)/agentgateway/secrets/llm_api_key"
+# Must match the model `name` in config/agentgateway/config.yaml, which is in
+# turn LLAMA_ARG_ALIAS in compose.yaml.
 LLAMA_MODEL="gemma-4-e2b-it"
 # Each settings group carries its own marker row, so it is seeded once and never
 # re-imposed - anything changed afterwards in Admin Settings stays changed. Bump
@@ -149,24 +149,83 @@ psql_owui() {
     compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d open-webui "$@"
 }
 
-# 't' when the connection is already registered, or when Open WebUI has not
-# persisted its connection list yet - a fresh install seeds it straight from
-# the compose environment, which already points at LiteLLM.
-connection_present() {
+# Three states, not two. `absent` means Open WebUI has not persisted its
+# connection list yet, so the compose environment is what seeds it and there is
+# nothing to do here. `stale` means the URL is registered but the key stored
+# beside it is not the one the gateway now accepts - which `present` used to be
+# indistinguishable from, so a wrong or rotated key could never be repaired and
+# the only remedy was editing the database by hand.
+connection_state() {
+    local key="$1"
+
+    # Scalar subqueries inside a one-row derived table, not a join: both config
+    # rows are absent on a fresh install, and any join of two empty sides
+    # returns no row at all - which would read as "cannot query" and skip.
     psql_owui -tAc \
-        "SELECT coalesce(
-             (SELECT value::jsonb ? '$LITELLM_URL' FROM config WHERE key = 'openai.api_base_urls'),
-             true
-         );" 2>/dev/null | tr -d ' \r\n'
+        "SELECT CASE
+             WHEN s.urls IS NULL THEN 'absent'
+             WHEN NOT (s.urls ? '$GATEWAY_URL') THEN 'missing'
+             WHEN coalesce(s.keys ->> (
+                 SELECT (ord - 1)::int
+                 FROM jsonb_array_elements_text(s.urls) WITH ORDINALITY AS t(val, ord)
+                 WHERE t.val = '$GATEWAY_URL'
+                 LIMIT 1
+             ), '') = '$key' THEN 'current'
+             ELSE 'stale'
+         END
+         FROM (SELECT
+                 (SELECT value::jsonb FROM config WHERE key = 'openai.api_base_urls') AS urls,
+                 (SELECT value::jsonb FROM config WHERE key = 'openai.api_keys') AS keys
+              ) s;" \
+        2>/dev/null | tr -d ' \r\n'
 }
 
-# A full-privilege LiteLLM credential, so it never reaches argv - and it is
+# The repair half of the above: overwrite the key at the URL's own index. The
+# arrays are parallel, so the index is looked up from the URL list rather than
+# assumed.
+update_connection_key() {
+    local key="$1"
+
+    psql_owui -q <<SQL
+DO \$\$
+DECLARE
+    target text := '$GATEWAY_URL';
+    urls   jsonb;
+    keys   jsonb;
+    idx    int;
+    stamp  bigint := extract(epoch from now())::bigint;
+BEGIN
+    SELECT value::jsonb INTO urls FROM config WHERE key = 'openai.api_base_urls';
+    IF urls IS NULL OR NOT (urls ? target) THEN
+        RETURN;
+    END IF;
+
+    SELECT ord - 1 INTO idx
+        FROM jsonb_array_elements_text(urls) WITH ORDINALITY AS t(val, ord)
+        WHERE t.val = target
+        LIMIT 1;
+
+    SELECT coalesce(value::jsonb, '[]'::jsonb) INTO keys FROM config WHERE key = 'openai.api_keys';
+    keys := coalesce(keys, '[]'::jsonb);
+    WHILE jsonb_array_length(keys) <= idx LOOP
+        keys := keys || to_jsonb(''::text);
+    END LOOP;
+
+    UPDATE config SET value = jsonb_set(keys, ARRAY[idx::text], to_jsonb('$key'::text))::json,
+            updated_at = stamp
+        WHERE key = 'openai.api_keys';
+END
+\$\$;
+SQL
+}
+
+# The credential every /v1 caller presents, so it never reaches argv - and it is
 # checked to be hex before being spliced into a SQL literal.
-litellm_key() {
+gateway_key() {
     local key=""
 
-    [ -r "$LITELLM_KEY_FILE" ] || return 1
-    key="$(tr -d '\r\n' < "$LITELLM_KEY_FILE")"
+    [ -r "$GATEWAY_KEY_FILE" ] || return 1
+    key="$(tr -d '\r\n' < "$GATEWAY_KEY_FILE")"
     case "$key" in
         "" | *[!0-9a-fA-F]*) return 1 ;;
     esac
@@ -179,11 +238,12 @@ add_connection() {
     # api_base_urls, api_keys and api_configs are parallel: the config for a URL
     # is looked up by its index in the URL list, so all three have to grow
     # together. api_keys is padded first in case it is short, then the key is
-    # appended at the index this URL lands on - LiteLLM rejects a call without.
+    # appended at the index this URL lands on - the gateway's apiKey policy is
+    # `strict`, so it rejects a call without one.
     psql_owui -q <<SQL
 DO \$\$
 DECLARE
-    target text := '$LITELLM_URL';
+    target text := '$GATEWAY_URL';
     urls   jsonb;
     keys   jsonb;
     idx    int;
@@ -549,26 +609,34 @@ main() {
 
     wait_for_health_warning "pi-open-webui" 60 2 || true
 
-    case "$(connection_present)" in
-        t) ;;
-        f)
-            _key="$(litellm_key)" || _key=""
-            if [ -z "$_key" ]; then
-                log "WARNING: no readable LiteLLM master key; leaving the connection unregistered"
-            else
-                log "Registering $LITELLM_URL as an Open WebUI connection"
+    _key="$(gateway_key)" || _key=""
+    if [ -z "$_key" ]; then
+        log "WARNING: no readable agentgateway LLM API key; leaving the connection alone"
+    else
+        case "$(connection_state "$_key")" in
+            absent | current) ;;
+            missing)
+                log "Registering $GATEWAY_URL as an Open WebUI connection"
                 if add_connection "$_key"; then
                     changed=1
                 else
-                    log "WARNING: failed to register the LiteLLM connection"
+                    log "WARNING: failed to register the agentgateway connection"
                 fi
-            fi
-            ;;
-        *)
-            log "WARNING: could not read Open WebUI config table; skipping"
-            return 0
-            ;;
-    esac
+                ;;
+            stale)
+                log "Stored agentgateway key does not match the gateway's; correcting it"
+                if update_connection_key "$_key"; then
+                    changed=1
+                else
+                    log "WARNING: failed to correct the agentgateway connection key"
+                fi
+                ;;
+            *)
+                log "WARNING: could not read Open WebUI config table; skipping"
+                return 0
+                ;;
+        esac
+    fi
 
     if [ "$(marker_present "$DEFAULTS_MARKER" "$DEFAULTS_VERSION")" = "f" ]; then
         log "Seeding low-latency defaults (title/tags/follow-up generation off)"

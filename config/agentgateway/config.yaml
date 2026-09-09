@@ -4,8 +4,11 @@
 # over the raw text, comments included - so a reference written in a comment as
 # an example is looked up like any other and fails the start.
 config:
-  # hybrid: this file is the read-only baseline, UI edits go to the database.
-  # In the default `file` mode every save would fail against a read-only mount.
+  # hybrid: this file is the read-only baseline, UI edits to *resources* (MCP
+  # targets, models, providers, routes, policies) go to the database. The
+  # top-level sections below stay file-only - the UI refuses to write them at
+  # all in this mode. In the default `file` mode even a resource save would
+  # fail against a read-only mount.
   storage:
     mode: hybrid
   # SQLite, not the shared Postgres: this also takes a row per proxied request,
@@ -15,17 +18,71 @@ config:
 gateways:
   default:
     port: 4000
+# The UI reads "LLM enabled" and "MCP enabled" off the mere presence of these
+# two sections, and cannot add them itself: its welcome wizard writes the whole
+# file, which hybrid mode blocks client-side, with no override on that screen.
+# So both are declared here. Naming the gateway above attaches them to port 4000
+# instead of opening one of their own, which is why the UI, the LLM API and MCP
+# all sit behind the single llm.<HOST_NAME> router.
+#
+# What is in this file is the read-only baseline; providers, models and MCP
+# targets added through the UI afterwards live in the database next to it.
+llm:
+  gateways: default
+  policies:
+    # strict: every /v1 call needs one of these keys. The OIDC policy below
+    # covers the UI and only the UI, so without this the LLM API would be open
+    # to anything that can reach the router - and lan@docker is a network, not
+    # an identity. The split is deliberate: an admin configures through the
+    # browser, a client consumes with a key.
+    apiKey:
+      mode: strict
+      keys:
+        # Written by scripts/agentgateway-pre-start.sh; the same file
+        # open-webui's entrypoint reads, so the two cannot drift apart.
+        - key: ${LLM_API_KEY}
+          metadata:
+            user: open-webui
+  models:
+    # The one model that has to exist before anyone can log in - everything
+    # else is added through the UI. `name` is what clients ask for and what
+    # /v1/models lists; `params.model` is LLAMA_ARG_ALIAS in compose.yaml.
+    - name: gemma-4-e2b-it
+      provider:
+        # Not `openAI`: that provider talks to api.openai.com. `custom` is the
+        # OpenAI-compatible transport, and `completions` with no `path` resolves
+        # to <baseUrl>/chat/completions - which is why baseUrl carries the /v1.
+        custom:
+          formats:
+            - type: completions
+      params:
+        model: gemma-4-e2b-it
+        baseUrl: http://llama-cpp:8080/v1
+        # No apiKey: llama-server does not check one, and the docs call it
+        # optional for exactly this case.
+  providers: []
+  virtualModels: []
+mcp:
+  gateways: default
+  targets: []
+# Written by the UI alongside the LLM section above; the LLM path buffers whole
+# request bodies, and this is the default it would have set (32 MiB).
+frontendPolicies:
+  http:
+    maxBufferSize: 33554432
 ui:
   gateways: default
   policies:
-    # Traefik carries no forward-auth for agent.<HOST_NAME>, so this is what
-    # puts Authelia in front of the UI - and only the UI: an MCP target added
-    # later is served with no policy until one is attached. See docs/SECURITY.md.
+    # Traefik carries no forward-auth for llm.<HOST_NAME>, so this is what
+    # puts Authelia in front of the UI - and only the UI. The LLM API on the
+    # same port is gated by the apiKey policy above instead; an MCP target added
+    # later is served with no policy at all until one is attached to it.
+    # See docs/SECURITY.md.
     oidc:
       issuer: https://auth.${HOST_NAME}
       clientId: agentgateway
       clientSecret: ${UI_CLIENT_SECRET}
-      redirectURI: https://agent.${HOST_NAME}/oauth/callback
+      redirectURI: https://llm.${HOST_NAME}/oauth/callback
       # openid is always requested on top of these.
       scopes:
         - profile
