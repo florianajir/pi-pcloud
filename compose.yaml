@@ -2683,6 +2683,7 @@ services:
       - GENERIC_USER_EMAIL_ATTRIBUTE=email
       - GENERIC_USER_DISPLAY_NAME_ATTRIBUTE=name
       - AUTO_REDIRECT_UI_LOGIN_TO_SSO=true
+      - PROXY_LOGOUT_URL=https://auth.${HOST_NAME:-pi.lan}/logout?rd=https%3A%2F%2Fllm.${HOST_NAME:-pi.lan}%2Fui
     volumes:
       - ./config/litellm/config.yaml:/etc/litellm/config.yaml:ro
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_litellm_secret.txt:/run/secrets/oidc_litellm_secret:ro
