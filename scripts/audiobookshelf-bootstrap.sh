@@ -270,7 +270,7 @@ configure_oidc() {
             authOpenIDClientID: "audiobookshelf",
             authOpenIDClientSecret: $secret,
             authOpenIDTokenSigningAlgorithm: "RS256",
-            authOpenIDButtonText: "Sign in with SSO",
+            authOpenIDButtonText: "Login",
             authOpenIDAutoRegister: true,
             authOpenIDMatchExistingBy: "email",
             authOpenIDSubfolderForRedirectURLs: "",
