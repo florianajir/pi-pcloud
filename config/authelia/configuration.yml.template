@@ -96,6 +96,7 @@ session:
     host: redis
     port: 6379
     database_index: 1
+    password: '{{ secret "/config/secrets/redis_password" }}'
 
 regulation:
   # Ban the source IP as well as the account. IP mode is only meaningful now that

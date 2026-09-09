@@ -1030,6 +1030,7 @@ services:
     volumes:
       - ${DATA_LOCATION:-./data}/immich:/data
       - ${DATA_LOCATION:-./data}/authelia-config/immich-oauth-config.yaml:/immich-oauth-config.yaml:ro
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/redis_password:/run/secrets/redis_password:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
       DB_HOSTNAME: postgres
@@ -1037,6 +1038,8 @@ services:
       DB_USERNAME: immich
       DB_PASSWORD: ${PASSWORD}
       REDIS_HOSTNAME: redis
+      # The file variant, so the password is not in docker inspect.
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       IMMICH_CONFIG_FILE: /immich-oauth-config.yaml
       IMMICH_TRUSTED_PROXIES: 172.30.11.250/32
       CPU_CORES: 3
@@ -1119,6 +1122,10 @@ services:
       - POSTGRES_USER=nextcloud
       - POSTGRES_PASSWORD=${PASSWORD}
       - REDIS_HOST=redis
+      # The file variant, so the password is not in docker inspect - and it has
+      # to stay a path every UID in the container can read, because
+      # `docker exec -u www-data` re-resolves it. See the mount below.
+      - REDIS_HOST_PASSWORD_FILE=/run/secrets/redis_password
       - TZ=${TIMEZONE:-Europe/Paris}
       - SMTP_HOST=${SMTP_HOST:-localhost}
       - SMTP_SECURE=${SMTP_SECURE:-tls}
@@ -1156,6 +1163,9 @@ services:
       - ./config/nextcloud/security-headers.conf:/etc/apache2/conf-enabled/security-headers.conf:ro
       - ./config/nextcloud/zz-opcache-jit.ini:/usr/local/etc/php/conf.d/zz-opcache-jit.ini:ro
       - ./config/nextcloud/hooks/post-installation:/docker-entrypoint-hooks.d/post-installation:ro
+      # The 0644 copy, not the 0600 original: redis.config.php keeps the
+      # `_FILE` branch and re-reads it per request, so www-data needs it too.
+      - ${DATA_LOCATION:-./data}/redis/redis-password:/run/secrets/redis_password:ro
     extra_hosts:
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
     networks:
@@ -2652,12 +2662,19 @@ services:
     image: docker.io/valkey/valkey:9@sha256:c123e3715db63d06d4ad6964884037aa0d5d4d703939b9929954112889708e1d
     healthcheck:
       <<: *healthcheck-fast
-      test: ["CMD", "redis-cli", "ping"]
+      # Matched on the reply, because `redis-cli ping` exits 0 while printing
+      # `NOAUTH Authentication required` - so the probe this replaces would have
+      # reported healthy on a cache every client was being rejected by.
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$(cat /run/secrets/redis_password) valkey-cli ping | grep -q PONG"]
       start_period: 5s
       start_interval: 3s
     command: ["valkey-server", "/etc/valkey/valkey.conf"]
     volumes:
       - ./config/redis/valkey.conf:/etc/valkey/valkey.conf:ro
+      - ${DATA_LOCATION:-./data}/redis/redis-auth.conf:/run/secrets/redis-auth.conf:ro
+      # The same secret again, bare, because the healthcheck above cannot parse
+      # a config directive.
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/redis_password:/run/secrets/redis_password:ro
       - redis_data:/data
     networks:
       - immich

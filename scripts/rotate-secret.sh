@@ -28,6 +28,7 @@ set -eu
 . "$(dirname "$0")/lib.sh"
 
 BACKREST_CONTAINER="pi-backrest"
+REDIS_CONTAINER="pi-redis"
 BACKREST_CONFIG="${PROJECT_DIR}/config/backrest/config.json"
 HOMEPAGE_BACKREST_SECRET="${PROJECT_DIR}/config/homepage/secrets/backrest_password"
 
@@ -60,6 +61,8 @@ Targets:
   comet           Comet's admin/configure logins -> config/comet/comet.env
   vaultwarden     Vaultwarden /admin token       -> the secrets dir, vaultwarden
   ntfy            every ntfy password and token  -> ntfy.env and every publisher
+  redis-auth      the shared Redis password      -> the secrets dir, valkey's included
+                                                    conf, authelia + immich + nextcloud
 
 Options:
   --check   report drift between a secret and its consumers; change nothing
@@ -70,7 +73,7 @@ EOF
 
 case "$TARGET" in
     "") usage; exit 1 ;;
-    --list) printf '%s\n' backrest-auth restic-s3 restic-usb s3-keys beszel-token n8n-runner comet vaultwarden ntfy; exit 0 ;;
+    --list) printf '%s\n' backrest-auth restic-s3 restic-usb s3-keys beszel-token n8n-runner comet vaultwarden ntfy redis-auth; exit 0 ;;
 esac
 
 # --- Rollback bookkeeping -----------------------------------------------------
@@ -184,6 +187,17 @@ recreate_enabled() {
     # `compose up -d <svc>` STARTS a service whose profile is not selected, which
     # would quietly re-enable something the operator turned off. Only touch what
     # COMPOSE_PROFILES already includes.
+    #
+    # --force is for a secret that lives in a *bind-mounted file*: rotating it
+    # leaves the service definition byte-identical, so compose finds a container
+    # whose config hash already matches and does nothing at all. Secrets carried
+    # by an env_file or an environment value do change the hash, and those
+    # callers must not pass it - a needless recreate is not free.
+    _force=""
+    if [ "${1:-}" = "--force" ]; then
+        _force="--force-recreate"
+        shift
+    fi
     _wanted=""
     _skipped=""
     for _svc in "$@"; do
@@ -197,7 +211,7 @@ recreate_enabled() {
     [ -n "$_wanted" ] || { log "none of the affected services are enabled; nothing to recreate"; return 0; }
     # up -d, never restart: env_file values are frozen when the container is created.
     # shellcheck disable=SC2086  # deliberate word splitting into a service list
-    compose up -d $_wanted >/dev/null 2>&1 || return 1
+    compose up -d $_force $_wanted >/dev/null 2>&1 || return 1
     log "recreated:$_wanted"
 }
 
@@ -490,6 +504,7 @@ do_check() {
         n8n-runner)    check_generated_env_file "${PROJECT_DIR}/config/n8n/n8n.env" N8N_RUNNERS_AUTH_TOKEN "n8n.env" pi-n8n ;;
         comet)         check_generated_env_file "${PROJECT_DIR}/config/comet/comet.env" ADMIN_DASHBOARD_PASSWORD "comet.env" pi-comet ;;
         vaultwarden)   check_secret_file "$(resolve_data_location_path)/authelia-config/secrets/vaultwarden_admin_token" "the Vaultwarden admin token" ;;
+        redis-auth)    check_redis_auth ;;
         ntfy)          check_generated_env_file "${PROJECT_DIR}/config/ntfy/ntfy.env" NTFY_AUTH_USERS "ntfy.env" pi-ntfy ;;
         *) die "unknown target '$TARGET' (see --list)" ;;
     esac
@@ -506,8 +521,57 @@ do_rotate() {
         comet)         rotate_generated_env_file "${PROJECT_DIR}/config/comet/comet.env" comet-pre-start.sh comet ;;
         vaultwarden)   rotate_vaultwarden ;;
         ntfy)          rotate_ntfy ;;
+        redis-auth)    rotate_redis_auth ;;
         *) die "unknown target '$TARGET' (see --list)" ;;
     esac
+}
+
+# Presence is not the question: the value has to be the one valkey is actually
+# enforcing, because a stale copy is a cache every client is locked out of.
+check_redis_auth() {
+    _file="$(resolve_data_location_path)/authelia-config/secrets/redis_password"
+
+    check_secret_file "$_file" "the Redis password" || return "$?"
+
+    if ! container_is_running "$REDIS_CONTAINER"; then
+        log "UNKNOWN: $REDIS_CONTAINER is not running"
+        return 2
+    fi
+
+    # The password goes in on stdin, never argv: `valkey-cli -a <pw>` and
+    # `docker exec -e REDISCLI_AUTH=<pw>` both put it in the host process table.
+    if printf 'AUTH %s\nPING\n' "$(cat "$_file")" |
+        docker exec -i "$REDIS_CONTAINER" valkey-cli 2>/dev/null | grep -q PONG; then
+        log "OK: valkey accepts the password in the secrets directory"
+        return 0
+    fi
+
+    log "DRIFT: valkey rejects the password in the secrets directory"
+    return 1
+}
+
+rotate_redis_auth() {
+    [ "$(id -u)" -eq 0 ] ||
+        die "the Authelia secrets directory is root:root 0700 - re-run with sudo"
+    _dir="$(resolve_data_location_path)/authelia-config/secrets"
+    _conf="$(resolve_data_location_path)/redis/redis-auth.conf"
+    _copy="$(resolve_data_location_path)/redis/redis-password"
+
+    backup_path "$_dir/redis_password"
+    backup_path "$_conf"
+    backup_path "$_copy"
+    rm -f "$_dir/redis_password" "$_conf" "$_copy"
+    sh "${SCRIPT_DIR}/redis-pre-start.sh" >/dev/null || fail "redis-pre-start.sh failed"
+    [ -s "$_dir/redis_password" ] || fail "the Redis password was not regenerated"
+
+    # redis first, or every consumer is recreated against a server still
+    # enforcing the old password. The hook above has already done this when redis
+    # was running; this is the profile-aware pass that also covers it being down.
+    recreate_enabled --force redis || fail "could not recreate redis"
+    # All three read the secret from a bind-mounted file, so nothing here
+    # changes the service definition and --force is what makes compose act.
+    recreate_enabled --force authelia immich-server nextcloud ||
+        fail "could not recreate the Redis consumers"
 }
 
 rotate_vaultwarden() {
