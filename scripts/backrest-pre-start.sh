@@ -229,6 +229,37 @@ if [ -z "$AUTH_PASSWORD_VALUE" ]; then
   log "Generated BACKREST_AUTH_PASSWORD for the Backrest API"
 fi
 
+# Docker materialises a bind-mount source it cannot find, as root:root. backrest
+# is a core service and mounts one data directory per *optional* service, so on a
+# host where that service is not enabled yet, `up -d` creates its data directory
+# before its own hook has ever run - and enabling it later dies with "mkdir:
+# cannot create directory: Permission denied" inside a blocking pre-start hook.
+# Which is a supported workflow: `make enable` and `make config` exist for it.
+#
+# Created here instead, where the hook always runs and before any `up -d`. The
+# list is read out of compose.yaml rather than kept here, because a copy of it
+# would be the one nobody updates. Only backrest mounts into /userdata.
+ensure_backrest_mount_dirs() {
+  local data_root=""
+  local dir=""
+  data_root="$(resolve_data_location_path)"
+
+  grep -oE '\$\{DATA_LOCATION[^}]*\}/[a-z0-9/-]+:/userdata/' "$PROJECT_DIR/compose.yaml" |
+    sed -E 's|.*\}/([a-z0-9/-]+):/userdata/|\1|' | sort -u |
+    while read -r name; do
+      [ -n "$name" ] || continue
+      dir="$data_root/$name"
+      [ -d "$dir" ] && continue
+      if mkdir -p "$dir" 2>/dev/null; then
+        fix_ownership "$dir"
+      else
+        log "WARNING: could not create $dir; Docker will create it as root:root"
+      fi
+    done
+}
+
+ensure_backrest_mount_dirs
+
 mkdir -p "${CONFIG_DIR}"
 
 # generate_secret emits hex, so no value here needs Compose's $$ escaping.
