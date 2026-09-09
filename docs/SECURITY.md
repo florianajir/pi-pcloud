@@ -287,25 +287,37 @@ network can read or forge an SSO session. A per-service ACL user would not have 
 So `requirepass` is set, from a generated secret. Not `PASSWORD`: nothing here has to type it, every
 consumer reads it from a file, and keeping it independent means `rotate-password.sh` has no
 four-service restart to sequence. Rotate it with `make rotate-secret TARGET=redis-auth`, which
-re-renders, restarts Valkey and recreates the three consumers in that order.
+re-renders, restarts Valkey and recreates the three consumers in that order. Every one of those
+containers is recreated with `--force-recreate`: the secret is a bind-mounted *file*, so rotating it
+leaves the service definition byte-identical and a plain `up -d` would find a matching config hash
+and do nothing.
 
 | Where the value lands | How |
 |---|---|
 | Valkey | `requirepass`, rendered by `scripts/redis-pre-start.sh` into `${DATA_LOCATION}/redis/redis-auth.conf`, which `config/redis/valkey.conf` pulls in with `include`. That file is a versioned mount, so the secret cannot live in it |
 | Authelia | `session.redis.password`, as `{{ secret "/config/secrets/redis_password" }}` |
 | Immich | `REDIS_PASSWORD_FILE`, read by `server/bin/start.sh` as root before the server starts |
-| Nextcloud | `REDIS_HOST_PASSWORD_FILE`, read by `file_env` in the image entrypoint, also as root |
+| Nextcloud | `REDIS_HOST_PASSWORD_FILE`, read by `file_env` in the image entrypoint as root — and re-read per request by `config/redis.config.php`, so it points at the `0644` copy below |
 
 No consumer takes it as an environment variable, so `docker inspect` shows none of them holding it.
 
-**The rendered `requirepass` file is `0644`, and that is deliberate.** It is the one secret in this
-stack that is not `0600`, because the Valkey entrypoint re-execs the server under
-`setpriv --reuid=valkey --clear-groups` (uid 999) and the hook that writes the file has to work both
-as root under systemd and as the project owner under `make update` — neither can hand a file to 999
-without the other losing access to it. A bind-mounted file is reached by its own mode inside the
-container while the host still has to traverse the directory, so `${DATA_LOCATION}/redis` is `0700`
-and carries the protection — the same way the Authelia secrets directory does under a `0777`
-`DATA_LOCATION`. The authoritative copy in the secrets directory stays `0600`.
+**The two files under `${DATA_LOCATION}/redis` are `0644`, and that is deliberate.** They are the
+only secrets in this stack that are not `0600`, because the processes that read them are not root:
+the Valkey entrypoint re-execs the server under `setpriv --reuid=valkey --clear-groups` (uid 999),
+and Nextcloud's cron and post-installation hooks run as `www-data` (uid 33) — while the hook that
+writes them runs as root under systemd and as the project owner under `make update`. Neither of those
+can hand a file to 999 or 33 without the other losing access to it. A bind-mounted file is reached by
+its own mode inside the container while the host still has to traverse the directory, so
+`${DATA_LOCATION}/redis` is `0700` and carries the protection — the same way the Authelia secrets
+directory does under a `0777` `DATA_LOCATION`. The authoritative copy in the secrets directory stays
+`0600`.
+
+The Nextcloud copy exists because `_FILE` is not resolved once. The image's `file_env` exports
+`REDIS_HOST_PASSWORD` and unsets the `_FILE` variable for Apache, but `config/redis.config.php` keeps
+the `_FILE` branch and re-evaluates it on every request — and `docker exec -u www-data` gets the
+container's *configured* environment, not the entrypoint's exports. `nextcloud-cron.service` and the
+documented `20-external-storage.sh` invocation would otherwise authenticate with an empty string and
+fail with `NOAUTH`.
 
 **The healthcheck authenticates now, and matches on the reply.** `redis-cli ping` exits 0 while
 printing `NOAUTH Authentication required`, so the previous probe would have reported a healthy cache

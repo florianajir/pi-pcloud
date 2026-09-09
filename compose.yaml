@@ -1122,7 +1122,9 @@ services:
       - POSTGRES_USER=nextcloud
       - POSTGRES_PASSWORD=${PASSWORD}
       - REDIS_HOST=redis
-      # The file variant, so the password is not in docker inspect.
+      # The file variant, so the password is not in docker inspect - and it has
+      # to stay a path every UID in the container can read, because
+      # `docker exec -u www-data` re-resolves it. See the mount below.
       - REDIS_HOST_PASSWORD_FILE=/run/secrets/redis_password
       - TZ=${TIMEZONE:-Europe/Paris}
       - SMTP_HOST=${SMTP_HOST:-localhost}
@@ -1161,7 +1163,9 @@ services:
       - ./config/nextcloud/security-headers.conf:/etc/apache2/conf-enabled/security-headers.conf:ro
       - ./config/nextcloud/zz-opcache-jit.ini:/usr/local/etc/php/conf.d/zz-opcache-jit.ini:ro
       - ./config/nextcloud/hooks/post-installation:/docker-entrypoint-hooks.d/post-installation:ro
-      - ${DATA_LOCATION:-./data}/authelia-config/secrets/redis_password:/run/secrets/redis_password:ro
+      # The 0644 copy, not the 0600 original: redis.config.php keeps the
+      # `_FILE` branch and re-reads it per request, so www-data needs it too.
+      - ${DATA_LOCATION:-./data}/redis/redis-password:/run/secrets/redis_password:ro
     extra_hosts:
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
     networks:

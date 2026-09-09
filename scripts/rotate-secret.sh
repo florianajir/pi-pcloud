@@ -187,6 +187,17 @@ recreate_enabled() {
     # `compose up -d <svc>` STARTS a service whose profile is not selected, which
     # would quietly re-enable something the operator turned off. Only touch what
     # COMPOSE_PROFILES already includes.
+    #
+    # --force is for a secret that lives in a *bind-mounted file*: rotating it
+    # leaves the service definition byte-identical, so compose finds a container
+    # whose config hash already matches and does nothing at all. Secrets carried
+    # by an env_file or an environment value do change the hash, and those
+    # callers must not pass it - a needless recreate is not free.
+    _force=""
+    if [ "${1:-}" = "--force" ]; then
+        _force="--force-recreate"
+        shift
+    fi
     _wanted=""
     _skipped=""
     for _svc in "$@"; do
@@ -200,7 +211,7 @@ recreate_enabled() {
     [ -n "$_wanted" ] || { log "none of the affected services are enabled; nothing to recreate"; return 0; }
     # up -d, never restart: env_file values are frozen when the container is created.
     # shellcheck disable=SC2086  # deliberate word splitting into a service list
-    compose up -d $_wanted >/dev/null 2>&1 || return 1
+    compose up -d $_force $_wanted >/dev/null 2>&1 || return 1
     log "recreated:$_wanted"
 }
 
@@ -544,18 +555,22 @@ rotate_redis_auth() {
         die "the Authelia secrets directory is root:root 0700 - re-run with sudo"
     _dir="$(resolve_data_location_path)/authelia-config/secrets"
     _conf="$(resolve_data_location_path)/redis/redis-auth.conf"
+    _copy="$(resolve_data_location_path)/redis/redis-password"
 
     backup_path "$_dir/redis_password"
     backup_path "$_conf"
-    rm -f "$_dir/redis_password" "$_conf"
+    backup_path "$_copy"
+    rm -f "$_dir/redis_password" "$_conf" "$_copy"
     sh "${SCRIPT_DIR}/redis-pre-start.sh" >/dev/null || fail "redis-pre-start.sh failed"
     [ -s "$_dir/redis_password" ] || fail "the Redis password was not regenerated"
 
     # redis first, or every consumer is recreated against a server still
-    # enforcing the old password.
-    recreate_enabled redis || fail "could not recreate redis"
-    # All three read the secret at start-up, so a restart would not be enough.
-    recreate_enabled authelia immich-server nextcloud ||
+    # enforcing the old password. The hook above has already done this when redis
+    # was running; this is the profile-aware pass that also covers it being down.
+    recreate_enabled --force redis || fail "could not recreate redis"
+    # All three read the secret from a bind-mounted file, so nothing here
+    # changes the service definition and --force is what makes compose act.
+    recreate_enabled --force authelia immich-server nextcloud ||
         fail "could not recreate the Redis consumers"
 }
 
