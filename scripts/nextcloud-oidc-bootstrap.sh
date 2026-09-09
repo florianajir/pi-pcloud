@@ -95,6 +95,17 @@ ensure_user_oidc_app() {
 # `?post_logout_redirect_uri=...&client_id=...` unconditionally, and without a
 # parameter to absorb it that second `?` lands inside `rd` and corrupts it.
 # Keep `rd` percent-encoded for the same reason.
+#
+# Setting this also wakes user_oidc's TokenInvalidatedListener, which is gated
+# on nothing but this value being non-empty. On a *non-interactive* token
+# invalidation (deleting an app password, "log out other devices", the token
+# cleanup job) it fires a blocking 5 s server-side GET at this URL with the
+# decrypted ID token in the query string - so that token reaches Traefik's
+# access log, which records query strings. It cannot end anything: the portal
+# route needs the browser's cookie, and the request carries none. Interactive
+# logout never reaches it, since singleLogoutService() deletes the OIDC session
+# row before the event fires. Accepted rather than fixable - the listener has
+# no off switch, and the same column is what the browser redirect reads.
 end_session_endpoint_uri() {
     local return_to="https%3A%2F%2Fnextcloud.${HOST_NAME}%2F"
 
