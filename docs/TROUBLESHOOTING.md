@@ -64,6 +64,8 @@ A split verdict means the client resolved the public address instead of the Pi-h
 
 **A service returns a generic 404 from Traefik.** Its router is gone. For qBittorrent, Prowlarr, Kapowarr and Stremio the usual cause is **gluetun being unhealthy** — they share its network namespace, so when it drops, all of their Traefik routes vanish at once rather than erroring individually. `docker compose ps gluetun` and `docker compose logs gluetun`.
 
+**Nextcloud returns 502.** Its PHP workers are segfaulting, so Traefik has no live backend — `docker logs pi-nextcloud | grep 'Segmentation fault'` confirms it, and `docker restart pi-nextcloud` clears it. `config/nextcloud/zz-opcache-jit.ini` disables the tracing JIT to keep this from recurring, so check that it is still in effect (`docker exec pi-nextcloud php -i | grep '^opcache.jit =>'` should report `disable`); if it is, suspect APCu or the redis and imagick extensions instead.
+
 **`dig AAAA` returns nothing for a stack hostname on the LAN.** Expected: Pi-hole has an A record for `*.<HOST_NAME>` and dnsmasq answers AAAA for those names with `NODATA-IPv6` rather than forwarding, so LAN clients using it take the IPv4 path deliberately. See [Networking → IPv6](NETWORKING.md#what-stays-ipv4-and-why).
 
 **Nothing resolves from outside.** Check that DNS points at your public IP and that 443 is forwarded:

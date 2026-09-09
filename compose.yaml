@@ -1154,6 +1154,7 @@ services:
       - ${DATA_LOCATION:-./data}/download/audiobooks:/mnt/library-audiobooks
       - ./config/nextcloud/custom.config.php:/var/www/html/config/custom.config.php:ro
       - ./config/nextcloud/security-headers.conf:/etc/apache2/conf-enabled/security-headers.conf:ro
+      - ./config/nextcloud/zz-opcache-jit.ini:/usr/local/etc/php/conf.d/zz-opcache-jit.ini:ro
       - ./config/nextcloud/hooks/post-installation:/docker-entrypoint-hooks.d/post-installation:ro
     extra_hosts:
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
