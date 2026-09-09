@@ -250,10 +250,8 @@ configure_oidc() {
     # authOpenIDGroupClaim stays empty for the reason spelled out beside the
     # Authelia client: the claim is read as a role, and a user in none of
     # admin/user/guest is denied outright. Only `admin` exists in this stack.
-    # Authelia implements no OIDC logout, so this is its *portal* logout route
-    # rather than the end_session_endpoint $e would have carried: the browser is
-    # redirected there with its session cookie, which is what ends the session.
-    # `rd` is accepted because it stays under the session cookie domain.
+    # Authelia's portal logout route, not the end_session_endpoint $e would
+    # have carried - see docs/SECURITY.md.
     local logout_url="https://auth.${host_name}/logout?rd=https%3A%2F%2Faudiobooks.${host_name}%2Flogin%2F"
 
     desired="$(printf '%s' "$current" | jq -c \

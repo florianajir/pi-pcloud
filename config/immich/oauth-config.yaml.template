@@ -11,9 +11,7 @@ oauth:
   profileSigningAlgorithm: 'none'
   tokenEndpointAuthMethod: 'client_secret_post'
   storageLabelClaim: 'preferred_username'
-  # Authelia implements no OIDC logout, so this is its *portal* logout route
-  # rather than an end_session_endpoint: the browser is redirected there
-  # carrying the session cookie, which is what ends the session. Keep
-  # autoLaunch=0 percent-encoded - decoded, the `?` falls out of `rd`, and
-  # without it the login page bounces straight back to Authelia.
+  # Authelia's portal logout route, not an end_session_endpoint - see
+  # docs/SECURITY.md. Keep autoLaunch=0 percent-encoded: decoded, its `?` falls
+  # out of `rd`, and without it the login page bounces back to Authelia.
   endSessionEndpoint: 'https://auth.__HOST_NAME__/logout?rd=https%3A%2F%2Fimmich.__HOST_NAME__%2Fauth%2Flogin%3FautoLaunch%3D0'
