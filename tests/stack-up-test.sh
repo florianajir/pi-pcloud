@@ -43,10 +43,11 @@ lacks() {
     esac
 }
 
-# The entries run-hooks.sh declares, in order: "script.sh" or
-# "service:script.sh".
+# The entries run-hooks.sh declares, in order: "script.sh", "service:script.sh",
+# or "service,service:script.sh" for a hook whose service is started by more
+# than one profile.
 hook_entries() {
-    grep -oE '^[a-z0-9-]*:?[a-z0-9-]+\.sh$' "$HOOKS"
+    grep -oE '^[a-z0-9,-]*:?[a-z0-9-]+\.sh$' "$HOOKS"
 }
 
 # --- the sequence is complete -----------------------------------------------
@@ -92,7 +93,7 @@ done
 # And exactly one home for it: a list left behind in stack-up.sh would be the
 # one the boot path used while CI kept running the other.
 ok "stack-up.sh declares no hook list of its own" \
-    "$(grep -cE '^[a-z0-9-]*:?[a-z0-9-]+\.sh$' "$SCRIPT" || true)" 0
+    "$(grep -cE '^[a-z0-9,-]*:?[a-z0-9-]+\.sh$' "$SCRIPT" || true)" 0
 
 # The unit must go through the script, or boot and update drift apart again.
 contains "the unit starts the stack through stack-up.sh" \
@@ -160,6 +161,14 @@ contains "an ungated hook always runs"        "$out" "HOOK authelia-pre-start.sh
 contains "the selected service's hook runs"   "$out" "HOOK qbittorrent-pre-start.sh"
 contains "and so does its bootstrap"          "$out" "HOOK qbittorrent-bootstrap.sh"
 lacks    "an unselected service is skipped"   "$out" "HOOK prowlarr-pre-start.sh"
+
+# litellm carries open-webui's profile as well as its own, so compose starts it
+# whenever the chat runs while COMPOSE_PROFILES names only open-webui. A hook
+# gated on the service's own name alone was skipped on exactly those boots, and
+# the proxy came up with no master key.
+out="$(run open-webui)"
+contains "a hook gated on two profiles runs on either" "$out" "HOOK litellm-pre-start.sh"
+lacks    "and still gates an unrelated service"        "$out" "HOOK kavita-pre-start.sh"
 
 # A .env with no COMPOSE_PROFILES line is a pre-profiles install: everything is
 # enabled, matching the unit's Environment=COMPOSE_PROFILES=all fallback.

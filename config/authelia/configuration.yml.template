@@ -301,6 +301,56 @@ __OIDC_PRIVATE_KEY__
         token_endpoint_auth_method: client_secret_basic
         userinfo_signed_response_alg: none
 
+      - client_id: litellm
+        client_name: LiteLLM
+        client_secret: '{{ secret "/config/secrets/oidc_litellm_secret_hash" }}'
+        public: false
+        authorization_policy: one_factor
+        consent_mode: implicit
+        # Derived by LiteLLM from PROXY_BASE_URL; the path is not configurable.
+        redirect_uris:
+          - 'https://llm.__HOST_NAME__/sso/callback'
+        # No `groups`: LiteLLM reads a role out of the SSO claims and only
+        # accepts its own names (proxy_admin, internal_user, ...), which no
+        # Authelia group here matches. PROXY_ADMIN_ID names the admin instead.
+        scopes:
+          - openid
+          - profile
+          - email
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+        # fastapi-sso, which LiteLLM's generic provider is built on, posts the
+        # token request with httpx.BasicAuth and offers no way to change that.
+        token_endpoint_auth_method: client_secret_basic
+        userinfo_signed_response_alg: none
+
+      - client_id: agentgateway
+        client_name: Agentgateway
+        client_secret: '{{ secret "/config/secrets/oidc_agentgateway_secret_hash" }}'
+        public: false
+        authorization_policy: one_factor
+        consent_mode: implicit
+        redirect_uris:
+          - 'https://agent.__HOST_NAME__/oauth/callback'
+        # Agentgateway's browser flow always sends a code challenge.
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        scopes:
+          - openid
+          - profile
+          - email
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+        # It reads token_endpoint_auth_methods_supported from discovery and
+        # takes client_secret_basic when the provider offers it, which Authelia
+        # does; see crates/agentgateway/src/http/oauth.rs.
+        token_endpoint_auth_method: client_secret_basic
+        userinfo_signed_response_alg: none
+
       - client_id: vaultwarden
         client_name: Vaultwarden
         client_secret: '{{ secret "/config/secrets/oidc_vaultwarden_secret_hash" }}'

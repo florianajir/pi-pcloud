@@ -129,6 +129,13 @@
           "conditions": ["CONDITION_SNAPSHOT_START"],
           "onError": "ON_ERROR_IGNORE",
           "actionCommand": {
+            "command": "/bin/sh /hooks/db-backup.sh litellm"
+          }
+        },
+        {
+          "conditions": ["CONDITION_SNAPSHOT_START"],
+          "onError": "ON_ERROR_IGNORE",
+          "actionCommand": {
             "command": "/bin/sh /hooks/db-backup.sh immich"
           }
         },

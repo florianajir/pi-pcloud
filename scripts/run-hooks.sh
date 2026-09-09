@@ -24,7 +24,9 @@
 # a list that grew stays visible in the log it was added to hide from.
 #
 # An entry is "script.sh", or "service:script.sh" to gate it on that optional
-# service being selected in COMPOSE_PROFILES.
+# service being selected in COMPOSE_PROFILES. The gate may name several
+# services, comma-separated, for a script whose service is started by more than
+# one profile - litellm runs whenever open-webui does, so its hook has to too.
 #
 # Host-only, never mounted into a container, so sourcing lib.sh is fine here.
 
@@ -67,6 +69,8 @@ shelfmark:shelfmark-pre-start.sh
 audiobookshelf:audiobookshelf-pre-start.sh
 nextcloud:nextcloud-pre-start.sh
 llama-cpp:llama-cpp-pre-start.sh
+litellm,open-webui:litellm-pre-start.sh
+agentgateway:agentgateway-pre-start.sh
 stremio-lan:stremio-lan-pre-start.sh
 comet:comet-pre-start.sh
 n8n:n8n-pre-start.sh

@@ -169,6 +169,10 @@ GROUPS = [
             "pi-open-webui",
             "pi-llama-cpp",
             "pi-piper",
+            "pi-litellm",
+            # The only check agentgateway gets: its image is distroless, so
+            # compose.yaml can declare no healthcheck for it.
+            "pi-agentgateway",
         ],
     },
     {

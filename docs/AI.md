@@ -5,12 +5,17 @@ Open WebUI at `https://ai.<HOST_NAME>` is a full chat assistant running entirely
 | Piece | Role | Network |
 |-------|------|---------|
 | `open-webui` | Chat frontend, OIDC-authenticated | `frontend`, `ai` |
+| `litellm` | LLM gateway: one OpenAI-compatible endpoint, virtual keys and spend | `frontend`, `ai` |
 | `llama-cpp` | Inference server (OpenAI-compatible API) | `ai` |
 | `piper` | Text-to-speech | `ai` |
 | `parakeet` | Speech-to-text | `ai` |
 | `system-tools` | OpenAPI tool server answering questions about the host | `ai`, `frontend` |
+| `agentgateway` | MCP gateway and its UI — unrelated to the chat path above | `frontend`, `ai` |
 
-Everything but `open-webui` sits on the internal `ai` network with no route to the internet.
+Everything without `frontend` sits on the internal `ai` network with no route to the internet.
+
+Chat traffic runs `open-webui → litellm → llama-cpp`. `piper` and `parakeet` are called directly: they
+are not chat completions, and LiteLLM would only add a hop.
 
 ## The model
 
@@ -53,11 +58,84 @@ sh scripts/llama-cpp-pre-start.sh
 
 Edit the `DOWNLOADS` list in `config/llama-cpp/fetch-models.sh`, then point `LLAMA_ARG_MODEL` (and `LLAMA_ARG_MMPROJ` / `LLAMA_ARG_SPEC_DRAFT_MODEL`, or drop them) at the new files in `compose.yaml`. Prefer `Q4_0` quantisations: llama.cpp repacks those into the ARM i8mm/dotprod kernels the Pi 5 has. Anything much past ~4B parameters is too slow to chat with on CPU.
 
+## The LLM gateway (LiteLLM)
+
+`https://llm.<HOST_NAME>` is a LiteLLM proxy in front of `llama-cpp`. It exists so there is exactly one
+OpenAI-compatible endpoint in the stack: Open WebUI, your editor, n8n and any script all call the same
+`/v1`, and adding a second model — another local one, or a cloud provider — is a row in its database
+rather than an environment change in every client.
+
+What it buys over calling `llama-cpp:8080/v1` directly:
+
+- **Virtual keys.** Each caller gets its own `sk-…` with an optional budget and rate limit, revocable on
+  its own without touching anyone else's.
+- **Spend and usage per key**, including for local models, which are priced at zero but still counted in
+  tokens and requests — so "what is actually using the Pi's three inference threads" has an answer.
+- **One place for provider credentials.** They are encrypted in Postgres with the salt key, not written
+  into `compose.yaml`.
+
+`config/litellm/config.yaml` carries only what has to exist before anyone can log in: the `gemma-4-e2b-it`
+model and three settings. Everything added afterwards through the Admin UI lives in Postgres
+(`STORE_MODEL_IN_DB`).
+
+It is deliberately **not** wired to the shared Redis. LiteLLM uses it for cross-instance rate limiting and
+response caching, neither of which one instance needs, and joining it would put the cache Immich,
+Nextcloud and Authelia share on the `ai` network — where Open WebUI executes admin-supplied Python.
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| `telemetry` | `false` | `litellm.telemetry` defaults to true and posts usage to a hosted endpoint |
+| `drop_params` | `true` | Clients send sampling fields llama-server never implemented; without this one unknown key is a 400 for the whole request |
+| `default_internal_user_params.user_role` | `internal_user` | What an Authelia user gets on first login: their own keys and their own spend, nothing else |
+
+### Logging in, and who is admin
+
+The Admin UI uses the `litellm` Authelia client (authorization code, `client_secret_basic`, callback
+`https://llm.<HOST_NAME>/sso/callback` — LiteLLM derives that path from `PROXY_BASE_URL` and it is not
+configurable). `PROXY_ADMIN_ID` is set to `ADMIN_USER` and matched against the `preferred_username`
+claim, so that one account is promoted to `proxy_admin` on every login and everybody else lands on the
+role above.
+
+There is deliberately **no `groups` scope**: LiteLLM reads a role out of the SSO claims and accepts only
+its own names (`proxy_admin`, `internal_user`, …), none of which an Authelia group here matches.
+
+SSO is free up to 5 users; past that LiteLLM asks for an enterprise licence.
+
+If Authelia itself is what is broken, the UI still takes a username and password: `ADMIN_USER` and the
+master key, which is `sk-` followed by the contents of
+`${DATA_LOCATION}/litellm/secrets/master_key`.
+
+### The two keys that are not `PASSWORD`
+
+`scripts/litellm-pre-start.sh` generates both on first start, and `rotate-password.sh` deliberately
+leaves them alone:
+
+- **`master_key`** is the admin credential of the management API. `llm.<HOST_NAME>` carries no
+  forward-auth — API clients cannot complete an interactive login — so deriving it from `PASSWORD` would
+  make a `PASSWORD` leak full control of the proxy. It also has to outlive a rotation: `OPENAI_API_KEY`
+  is PersistentConfig in Open WebUI, so the value that container starts with is copied into its
+  database. Both entrypoints read the same file, so the caller and the proxy cannot drift apart.
+- **`salt_key`** encrypts the provider credentials in Postgres. There is no re-encrypt path — a new key
+  does not invalidate the old rows, it makes them undecryptable. Back it up with the database; backrest
+  snapshots `${DATA_LOCATION}/litellm` for exactly that reason.
+
+### Calling it from outside
+
+```bash
+curl -sS https://llm.<HOST_NAME>/v1/chat/completions \
+  -H "Authorization: Bearer sk-<your-virtual-key>" \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "gemma-4-e2b-it", "messages": [{"role": "user", "content": "hello"}]}'
+```
+
+Mint the key under **Virtual Keys** in the UI. The route is LAN-and-tailnet only like everything else,
+so this works from your devices, not from the internet.
+
 ## How Open WebUI is wired
 
 `OPENAI_API_BASE_URL` and friends are Open WebUI *PersistentConfig* variables: they seed the database on first start and are ignored afterwards, so on an instance that already has connections the model simply never shows up in the picker. `scripts/open-webui-bootstrap.sh` (a post-start hook in `scripts/stack-up.sh`) closes that gap.
 
-It appends `http://llama-cpp:8080/v1` to the stored connection list when missing, leaves any other connection you configured in the UI alone, and restarts open-webui only when it changed something. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
+It appends `http://litellm:4000/v1` to the stored connection list when missing, with the LiteLLM master key, leaves any other connection you configured in the UI alone, and restarts open-webui only when it changed something. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
 
 Everything that writes the model's *workspace row* — turning the built-in tools off (marker `pi-pcloud.local_ai_model_defaults`), attaching the tool server, seeding the suggestions — needs an admin account to own that row, and there is none until the first SSO login. Those steps are therefore skipped, unmarked, on a fresh install, and applied by the next run of the hook. The settings that live in the `config` table alone (connection, low-latency defaults, audio) apply from the first boot. Run it by hand after the first login, or after a database restore:
 
@@ -241,3 +319,48 @@ Long uploads are transcribed in 20-second windows. That is not only about memory
 At 60 seconds half the audio simply goes missing, so the window has to stay well under it. Boundaries are then nudged onto the quietest nearby frame rather than falling wherever 20 seconds lands, because a window that opens mid-word is the one that comes back in the wrong language — on a deliberately badly-cut sample that alone took the transcript from 33.7% to 19.5% WER. Dictation reaches none of this: it is one window. Tune with `PARAKEET_CHUNK_SECONDS` if you feed it long recordings.
 
 To go back to Open WebUI's built-in whisper, set the STT engine to Whisper (Local) in **Admin Settings → Audio** — nothing re-imposes Parakeet.
+
+## The MCP gateway (Agentgateway)
+
+`https://agent.<HOST_NAME>/ui` is [agentgateway](https://agentgateway.dev), a Rust proxy for the
+protocols agents speak — MCP, A2A — rather than for chat completions. It is independent of everything
+above: nothing in the chat path goes through it, and turning it off changes nothing about Open WebUI.
+
+It ships with no MCP targets. The point of running it is the UI: you add a tool server there, and
+agentgateway serves the whole set as one MCP endpoint at `/mcp`, so an MCP client is configured once
+instead of once per server.
+
+**Configuration is split in two on purpose.** `config/agentgateway/config.yaml` is mounted read-only and
+is the baseline: the gateway, the UI and the OIDC policy. `config.storage.mode: hybrid` sends everything
+the UI writes to a SQLite database under `${DATA_LOCATION}/agentgateway` instead, where it is merged over
+that baseline at read time. In the default `file` mode every save would fail against a read-only mount.
+
+SQLite rather than the shared Postgres because the same database also takes a row per proxied request,
+and every service in the stack waits on that Postgres. `scripts/sqlite-backup.sh` copies it consistently
+into the nightly snapshot.
+
+### Logging in
+
+The gateway runs the OIDC flow itself (`ui.policies.oidc`) against the `agentgateway` Authelia client —
+authorization code with PKCE, callback `https://agent.<HOST_NAME>/oauth/callback`. Traefik carries the
+LAN allowlist and nothing else: a forward-auth in front of it would intercept the callback that flow
+returns to.
+
+The policy covers the **UI only**. An MCP target you add is served on the same port with no policy on it,
+so attach one — `jwtAuth`, `apiKey` or `basicAuth` all work there — before pointing anything at `/mcp`.
+
+The MCP Authorization spec's own flow (`mcpAuthentication`) is not wired. As written it expects the
+identity provider to support Dynamic Client Registration, and Authelia does not — its discovery document
+publishes no `registration_endpoint`. Setting `clientId` and `clientSecret` on the policy short-circuits
+registration with a client declared in `config/authelia/configuration.yml.template`, which is the way in
+if you want it; every MCP client then shares that one registration.
+
+### Two things that will bite you
+
+- **The image is distroless.** It contains `/app/agentgateway`, `ld.so` and a CA bundle — no shell, no
+  curl. That is why the service declares no healthcheck and Uptime Kuma watches the container instead,
+  and why the OIDC secrets reach it through an `env_file` rather than an `export $(cat …)` entrypoint.
+  Those values are frozen at container creation: use `docker compose up -d agentgateway`, not `restart`.
+- **Environment expansion runs over the raw file, comments included.** A dollar-brace reference written
+  in a comment as an example is looked up like any other and fails the start with
+  `error looking key '…' up`.

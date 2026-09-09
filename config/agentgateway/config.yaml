@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+#
+# The dollar-brace references below are expanded by agentgateway when it reads
+# this file, not by Compose: HOST_NAME comes from the service environment and
+# UI_CLIENT_SECRET from config/agentgateway/agentgateway.env, written by the
+# pre-start hook. Expansion runs over the raw text, comments included, so a
+# reference written here as an example would be looked up and fail the start.
+config:
+  # hybrid: this file stays the read-only baseline and anything added in the UI
+  # goes to the database, so a repo-managed config and UI-added MCP targets can
+  # both exist. In the default `file` mode every UI save would fail, the mount
+  # being read-only.
+  storage:
+    mode: hybrid
+  # SQLite rather than the shared Postgres: this database also takes a row per
+  # proxied request, and every service in the stack waits on that Postgres.
+  database:
+    url: sqlite:///data/agentgateway.db
+gateways:
+  default:
+    port: 4000
+ui:
+  gateways: default
+  policies:
+    # The UI is the only thing this gateway serves out of the box, and this is
+    # what puts Authelia in front of it - Traefik carries no forward-auth for
+    # agent.<HOST_NAME>, so an MCP target added later is served with no policy
+    # at all until one is attached to it. See docs/SECURITY.md.
+    oidc:
+      issuer: https://auth.${HOST_NAME}
+      clientId: agentgateway
+      clientSecret: ${UI_CLIENT_SECRET}
+      redirectURI: https://agent.${HOST_NAME}/oauth/callback
+      # openid is always requested; these are what Authelia needs to return a
+      # username and a mail address.
+      scopes:
+        - profile
+        - email
