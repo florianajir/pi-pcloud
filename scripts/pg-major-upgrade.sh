@@ -44,7 +44,7 @@ KEEP_DUMPS=0
 REHEARSE=0
 
 # Every database in the cluster, and the role that owns it (same name here).
-DATABASES="immich nextcloud authelia lldap open-webui vaultwarden"
+DATABASES="immich nextcloud authelia lldap open-webui vaultwarden freshrss"
 
 # The containers that hold connections into those databases, plus backrest
 # (whose scheduled db-backup.sh hooks would fire pg_dump against a stopped
@@ -54,7 +54,7 @@ DATABASES="immich nextcloud authelia lldap open-webui vaultwarden"
 # through the whole cutover. The one visible effect of authelia being down is
 # that SSO logins fail for the duration; established sessions and the network
 # itself are untouched.
-WRITER_CONTAINERS="pi-immich pi-immich-machine-learning pi-nextcloud pi-authelia pi-lldap pi-open-webui pi-vaultwarden pi-backrest"
+WRITER_CONTAINERS="pi-immich pi-immich-machine-learning pi-nextcloud pi-authelia pi-lldap pi-open-webui pi-vaultwarden pi-freshrss pi-backrest"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in

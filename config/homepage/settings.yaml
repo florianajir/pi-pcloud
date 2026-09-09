@@ -54,6 +54,10 @@ layout:
       style: row
       columns: 2
       icon: mdi-book-open-page-variant
+    News:
+      style: row
+      columns: 2
+      icon: mdi-rss
     Video:
       style: row
       columns: 2

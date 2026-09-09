@@ -48,6 +48,9 @@
         "/userdata/kavita/cache-long",
         "/userdata/kavita/backups",
         "/userdata/shelfmark/covers",
+        "/userdata/freshrss/cache",
+        "/userdata/freshrss/favicons",
+        "/userdata/freshrss/users/*/log.txt",
         "/userdata/prowlarr/logs.db",
         "/userdata/kavita/cache.db",
         "/userdata/lldap/users.db",
@@ -137,6 +140,13 @@
           "onError": "ON_ERROR_FATAL",
           "actionCommand": {
             "command": "/bin/sh /hooks/db-backup.sh vaultwarden"
+          }
+        },
+        {
+          "conditions": ["CONDITION_SNAPSHOT_START"],
+          "onError": "ON_ERROR_IGNORE",
+          "actionCommand": {
+            "command": "/bin/sh /hooks/db-backup.sh freshrss"
           }
         },
         {

@@ -120,6 +120,7 @@ GROUPS = [
             "pi-vaultwarden",
             "pi-kavita",
             "pi-audiobookshelf",
+            "pi-freshrss",
             "pi-backrest",
         ],
     },

@@ -19,7 +19,7 @@ sql_escape() {
 PASSWORD_SQL=$(sql_escape "$POSTGRES_PASSWORD")
 
 # Role name and database name are identical for every service.
-SERVICES="immich nextcloud authelia lldap open-webui vaultwarden"
+SERVICES="immich nextcloud authelia lldap open-webui vaultwarden freshrss"
 
 for service in $SERVICES; do
     cat >> "$TEMP_SQL" << EOF
