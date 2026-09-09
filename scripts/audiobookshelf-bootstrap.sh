@@ -250,10 +250,26 @@ configure_oidc() {
     # authOpenIDGroupClaim stays empty for the reason spelled out beside the
     # Authelia client: the claim is read as a role, and a user in none of
     # admin/user/guest is denied outright. Only `admin` exists in this stack.
+    # Authelia implements no OIDC logout mechanism, so its discovery document
+    # carries no end_session_endpoint and reading one from $e left this null -
+    # signing out of Audiobookshelf never touched the portal session. Its
+    # *portal* logout route is not OIDC, but the browser is redirected there
+    # with its session cookie, so the session actually ends; `rd` sends it on to
+    # the Audiobookshelf login page, which is under the session cookie domain
+    # and so passes Authelia's safe-redirection check.
+    #
+    # No placeholder parameter is needed to protect `rd` here, unlike the same
+    # URL in nextcloud-oidc-bootstrap.sh: Audiobookshelf hands this to
+    # openid-client, which parses the URL and merges its own query parameters
+    # instead of appending a second `?`. Its post_logout_redirect_uri and
+    # id_token_hint ride along and Authelia ignores both.
+    local logout_url="https://auth.${host_name}/logout?rd=https%3A%2F%2Faudiobooks.${host_name}%2Flogin%2F"
+
     desired="$(printf '%s' "$current" | jq -c \
         --argjson e "$endpoints" \
         --argjson methods "$methods" \
         --arg secret "$secret" \
+        --arg logout_url "$logout_url" \
         '. + {
             authActiveAuthMethods: $methods,
             authOpenIDIssuerURL: $e.issuer,
@@ -261,7 +277,7 @@ configure_oidc() {
             authOpenIDTokenURL: $e.token_endpoint,
             authOpenIDUserInfoURL: $e.userinfo_endpoint,
             authOpenIDJwksURL: $e.jwks_uri,
-            authOpenIDLogoutURL: ($e.end_session_endpoint // null),
+            authOpenIDLogoutURL: $logout_url,
             authOpenIDClientID: "audiobookshelf",
             authOpenIDClientSecret: $secret,
             authOpenIDTokenSigningAlgorithm: "RS256",

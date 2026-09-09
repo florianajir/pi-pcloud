@@ -86,9 +86,33 @@ ensure_user_oidc_app() {
 #
 # Rewriting every boot is the propagation path, not an oversight: it looks like
 # a missing idempotence check in the log and it is load-bearing.
+# Authelia implements no OIDC logout mechanism at all - not RP-initiated,
+# front-channel or back-channel - so its discovery document carries no
+# end_session_endpoint. user_oidc then falls back to redirecting to the
+# Nextcloud root, where the still-valid Authelia cookie logs the user straight
+# back in: logging out appeared to reload the same page.
+#
+# Its *portal* logout route is not OIDC, but a browser redirected there does
+# carry the session cookie, so the session ends. `rd` sends the browser back
+# afterwards; nextcloud.$HOST_NAME sits under the session cookie domain, so
+# Authelia's safe-redirection check accepts it.
+#
+# The trailing `&ignored=` is load-bearing, not a typo. user_oidc appends
+# `?post_logout_redirect_uri=...&client_id=...` unconditionally, which would
+# otherwise land a second `?` inside the `rd` value and corrupt it; the empty
+# parameter absorbs that suffix and leaves `rd` clean. Keep `rd` percent-encoded
+# for the same reason.
+end_session_endpoint_uri() {
+    local return_to="https%3A%2F%2Fnextcloud.${HOST_NAME}%2F"
+
+    printf 'https://auth.%s/logout?rd=%s&ignored=' "$HOST_NAME" "$return_to"
+}
+
 configure_provider() {
     local client_secret="$1"
     local discovery_uri="https://auth.${HOST_NAME}/.well-known/openid-configuration"
+    local end_session_uri
+    end_session_uri="$(end_session_endpoint_uri)"
 
     docker exec \
         -e OIDC_CLIENT_SECRET="$client_secret" \
@@ -97,6 +121,7 @@ configure_provider() {
         --clientid="$OIDC_CLIENT_ID" \
         --clientsecret-env=OIDC_CLIENT_SECRET \
         --discoveryuri="$discovery_uri" \
+        --endsessionendpointuri="$end_session_uri" \
         --scope="openid email profile groups" \
         --mapping-uid="email" \
         --mapping-display-name="name" \
