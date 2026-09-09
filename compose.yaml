@@ -2583,6 +2583,13 @@ services:
       - AUDIO_STT_OPENAI_API_BASE_URL=http://parakeet:8000/v1
       - AUDIO_STT_MODEL=parakeet-tdt-0.6b-v3
       - AUDIO_STT_OPENAI_API_KEY=parakeet
+      # Not optional either, and for a sharper reason than the base URL above:
+      # AUDIO_TTS_OPENAI_API_KEY also falls back to OPENAI_API_KEY, which is now
+      # LiteLLM's master key - so leaving it unset ships a full-privilege admin
+      # credential to piper on every read-aloud. The four other settings that
+      # inherit that key (RAG, images, image edit, STT) inherit the base URL
+      # with it, so they stay pointed at LiteLLM; TTS is the one that does not.
+      - AUDIO_TTS_OPENAI_API_KEY=piper
     volumes:
       - open_webui_data:/app/backend/data
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_open-webui_secret.txt:/run/secrets/oidc_open-webui_secret:ro

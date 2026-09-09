@@ -452,9 +452,10 @@ On a **fresh install** the steps that write the model's workspace row are skippe
   only runs it on a **fresh** `PGDATA` — so a cluster that predates this service has neither. Create
   them once, with the same shape that file uses (`PASSWORD` from `.env` as the role password), then
   `docker compose up -d litellm`. Open WebUI waits on litellm being healthy, so it stays down with it.
-- `cat: /run/secrets/litellm/master_key: No such file or directory`. `litellm-pre-start.sh` has not run —
-  most likely after `make enable open-webui`, which runs only that service's own hook. `make update`
-  runs the full pre-start sequence and fills the directory in place; no recreate is needed.
+- `cat: /run/secrets/litellm/master_key: No such file or directory`. `litellm-pre-start.sh` has not
+  run — a hand-edited `COMPOSE_PROFILES` that names `open-webui` without `litellm` is the way to get
+  there, since the hook is gated on either. `make update` runs the full pre-start sequence and fills
+  the directory in place; no recreate is needed.
 
 **Replies take minutes.** Something re-enabled the built-in tools or thinking. Both cost thousands of prompt tokens per message at ~40 tok/s — see [Why the defaults look aggressive](AI.md#why-the-defaults-look-aggressive).
 

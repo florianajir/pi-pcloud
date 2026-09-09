@@ -43,6 +43,11 @@ main() {
         safe_chmod 600 "$cookie_file"
         log "Generated the agentgateway session cookie secret"
     fi
+    # -R, and after the write: a root-run systemd boot leaves both a 0700
+    # directory the next non-root run cannot mktemp in and a 0600 file it cannot
+    # read, and this is a blocking pre-start hook.
+    fix_ownership "$secrets_dir"
+
     cookie_secret="$(cat "$cookie_file")"
 
     client_secret="$(get_oidc_secret agentgateway)" || client_secret=""
@@ -56,6 +61,10 @@ main() {
         "$cookie_secret" "$client_secret" | write_secret_file "$AGW_ENV_FILE" \
         || die "Failed to write $AGW_ENV_FILE"
     safe_chmod 600 "$AGW_ENV_FILE"
+    # The systemd unit runs this as root; without this the file lands root:root
+    # 0600, and then a non-root `docker compose up` cannot read the env_file
+    # (`required: false` covers a missing one, not an unreadable one).
+    fix_ownership "$AGW_ENV_FILE"
 
     # The directory only, never -R: its contents are a database agentgateway
     # owns and a secret this script wrote 0600.
