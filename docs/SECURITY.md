@@ -57,6 +57,19 @@ Standard authorization-code flow: the service redirects to Authelia's `/authoriz
 
 Two consequences specific to this stack: **group membership travels in the `groups` claim**, which is why Nextcloud and Kavita can map LLDAP groups onto their own roles; and the token exchange is a *container-to-container* call, which is why the Authelia router carries no IP allowlist ([below](#the-middleware-chain)).
 
+**Logging out is not an OIDC operation here.** Authelia implements none of the OIDC logout mechanisms — RP-initiated, front-channel or back-channel — so its discovery document carries no `end_session_endpoint`. Left at that, `user_oidc` falls back to redirecting to the Nextcloud root, where the still-valid portal cookie signs the user straight back in and logging out looks like a page reload. The four clients that expose a logout URL therefore point at Authelia's *portal* logout route instead, with an `rd` back to their own login page: not OIDC, but a browser redirected there carries the session cookie, so the session genuinely ends. Redirect targets sit under the session cookie domain, which is what passes Authelia's `safe-redirection` check. Note the effect is stack-wide, not per-service — ending the Authelia session logs the user out of every other SSO service too.
+
+Only Nextcloud needs the odd-looking trailing `&ignored=`, and it is load-bearing: `user_oidc` appends `?post_logout_redirect_uri=…&client_id=…` unconditionally, so without a parameter to absorb it that second `?` lands inside the `rd` value and corrupts it. The other three parse the URL and merge their own parameters instead — Audiobookshelf and Immich through `openid-client` and `new URL()`, Open WebUI by redirecting to the value verbatim.
+
+| Client | Where the logout URL lives | Set in |
+|--------|---------------------------|--------|
+| **Nextcloud** | `user_oidc` provider `endSessionEndpoint` | `scripts/nextcloud-oidc-bootstrap.sh` |
+| **Audiobookshelf** | `authOpenIDLogoutURL` auth setting | `scripts/audiobookshelf-bootstrap.sh` |
+| **Immich** | `oauth.endSessionEndpoint` (takes precedence over discovery) | `config/immich/oauth-config.yaml.template` |
+| **Open WebUI** | `WEBUI_AUTH_SIGNOUT_REDIRECT_URL` | `compose.yaml` |
+
+The remaining clients have nowhere to put one, so signing out of them leaves the portal session standing and the next visit signs the user back in: Kavita, Beszel, Dockhand and Headplane expose no such field, Shelfmark implements no logout handling of its own, and Vaultwarden offers no override (it is `SSO_AUTH_ONLY_NOT_SESSION` here in any case). Headscale is not affected — it holds no browser session, only device registrations.
+
 **The LDAP bind is tuned for a busy host, not a fast one.** `authentication_backend.ldap` raises `timeout` to `15s` and enables `pooling` (5 connections, 2 retries). Authelia's 5-second default is shorter than an I/O stall on a host under swap pressure, and a bind that times out *during* a token grant does not fail politely: the client sees a `500`, which for a refresh grant costs it the token it was rotating. Pooling keeps connections warm so a stall costs a retry instead of a session.
 
 That tolerance is not free, and it is not scoped to token grants: `timeout` covers every LDAP operation, and `pooling.timeout` adds up to 10 s waiting for a free connection on top. With LLDAP genuinely wedged, a forward-auth request can now hang ~25 s where it used to fail at 5 s — and Authelia's `/api/health` touches no LDAP, so the container stays healthy and its Uptime Kuma monitor stays green throughout. The trade is deliberate: a slow gated router beats a destroyed session on a vault that has no local fallback, and Authelia caches user details between refreshes rather than binding on every request. If a wedged LLDAP ever needs to fail fast instead, lower `timeout` — do not remove `pooling`, which is what turns a transient stall into a retry.

@@ -250,10 +250,15 @@ configure_oidc() {
     # authOpenIDGroupClaim stays empty for the reason spelled out beside the
     # Authelia client: the claim is read as a role, and a user in none of
     # admin/user/guest is denied outright. Only `admin` exists in this stack.
+    # Authelia's portal logout route, not the end_session_endpoint $e would
+    # have carried - see docs/SECURITY.md.
+    local logout_url="https://auth.${host_name}/logout?rd=https%3A%2F%2Faudiobooks.${host_name}%2Flogin%2F"
+
     desired="$(printf '%s' "$current" | jq -c \
         --argjson e "$endpoints" \
         --argjson methods "$methods" \
         --arg secret "$secret" \
+        --arg logout_url "$logout_url" \
         '. + {
             authActiveAuthMethods: $methods,
             authOpenIDIssuerURL: $e.issuer,
@@ -261,7 +266,7 @@ configure_oidc() {
             authOpenIDTokenURL: $e.token_endpoint,
             authOpenIDUserInfoURL: $e.userinfo_endpoint,
             authOpenIDJwksURL: $e.jwks_uri,
-            authOpenIDLogoutURL: ($e.end_session_endpoint // null),
+            authOpenIDLogoutURL: $logout_url,
             authOpenIDClientID: "audiobookshelf",
             authOpenIDClientSecret: $secret,
             authOpenIDTokenSigningAlgorithm: "RS256",
@@ -283,6 +288,18 @@ configure_oidc() {
         return 0
     }
     log "Configured Audiobookshelf OIDC against https://auth.${host_name}"
+
+    # Not redundant: OidcAuthStrategy.getClient() memoises its client for the
+    # life of the process and captures the issuer metadata when it first builds
+    # one, so a PATCH alone leaves a running instance serving the values it
+    # started with. Only reached when the settings really changed.
+    log "Restarting Audiobookshelf so it rebuilds its memoised OIDC client"
+    docker restart "$ABS_CONTAINER" >/dev/null 2>&1 || {
+        log "WARNING: could not restart Audiobookshelf; its OIDC client keeps the previous settings"
+        return 0
+    }
+    wait_for_http_endpoint "$ABS_URL/healthcheck" "Audiobookshelf HTTP API" "$MAX_RETRIES" "$RETRY_INTERVAL" \
+        || log "WARNING: Audiobookshelf did not come back in time; the library step may be skipped this run"
 }
 
 # --- Library ----------------------------------------------------------------

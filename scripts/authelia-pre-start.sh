@@ -243,6 +243,17 @@ main() {
             || die "Failed to render immich-oauth-config.yaml to $IMMICH_OAUTH_CONFIG_FILE"
         safe_chmod 600 "$IMMICH_OAUTH_CONFIG_FILE"
         log "Rendered immich-oauth-config.yaml to $IMMICH_OAUTH_CONFIG_FILE"
+
+        # Immich reads IMMICH_CONFIG_FILE at boot and caches it, and a bind
+        # mount whose content changed is no reason for compose to recreate the
+        # container, so without this the new values sit on disk unread. Only
+        # reached when the render differed; a fresh install skips it and reads
+        # the file when it starts.
+        if container_is_running "${IMMICH_CONTAINER:-pi-immich}"; then
+            log "Restarting Immich so it re-reads the rendered OAuth config"
+            docker restart "${IMMICH_CONTAINER:-pi-immich}" >/dev/null 2>&1 \
+                || log "WARNING: could not restart Immich; it keeps the previously loaded OAuth config"
+        fi
     fi
 
     fix_ownership "$SECRETS_DIR"

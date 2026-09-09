@@ -86,9 +86,30 @@ ensure_user_oidc_app() {
 #
 # Rewriting every boot is the propagation path, not an oversight: it looks like
 # a missing idempotence check in the log and it is load-bearing.
+# Authelia's portal logout route, not an end_session_endpoint - see
+# docs/SECURITY.md.
+#
+# The trailing `&ignored=` is load-bearing, not a typo: user_oidc appends
+# `?post_logout_redirect_uri=...&client_id=...` unconditionally, and without a
+# parameter to absorb it that second `?` lands inside `rd` and corrupts it.
+# Keep `rd` percent-encoded for the same reason.
+#
+# Setting this also wakes user_oidc's TokenInvalidatedListener, gated on
+# nothing else, which GETs the URL server-side on non-interactive token
+# invalidations with the decrypted ID token in the query - so it lands in
+# Traefik's access log. Accepted: the listener has no off switch and the
+# browser redirect reads the same column. Interactive logout never hits it.
+end_session_endpoint_uri() {
+    local return_to="https%3A%2F%2Fnextcloud.${HOST_NAME}%2F"
+
+    printf 'https://auth.%s/logout?rd=%s&ignored=' "$HOST_NAME" "$return_to"
+}
+
 configure_provider() {
     local client_secret="$1"
     local discovery_uri="https://auth.${HOST_NAME}/.well-known/openid-configuration"
+    local end_session_uri
+    end_session_uri="$(end_session_endpoint_uri)"
 
     docker exec \
         -e OIDC_CLIENT_SECRET="$client_secret" \
@@ -97,6 +118,7 @@ configure_provider() {
         --clientid="$OIDC_CLIENT_ID" \
         --clientsecret-env=OIDC_CLIENT_SECRET \
         --discoveryuri="$discovery_uri" \
+        --endsessionendpointuri="$end_session_uri" \
         --scope="openid email profile groups" \
         --mapping-uid="email" \
         --mapping-display-name="name" \
