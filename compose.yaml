@@ -281,7 +281,7 @@ services:
       - "homepage.name=Backrest"
       - "homepage.icon=backrest.png"
       - "homepage.href=https://backrest.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Backup management"
+      - "homepage.description=Backup scheduling and restore"
       - "homepage.widget.type=backrest"
       - "homepage.widget.url=http://pi-backrest:9898"
       - "homepage.widget.username={{HOMEPAGE_VAR_ADMIN_USER}}"
@@ -347,7 +347,7 @@ services:
       - "homepage.name=Traefik"
       - "homepage.icon=traefik.png"
       - "homepage.href=https://traefik.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Reverse proxy"
+      - "homepage.description=Reverse proxy and TLS certificates"
       - "homepage.widget.type=traefik"
       # The address, not the name: traefik is on frontend and backup, and Docker's
       # DNS answers pi-traefik with the backup one, which internalapi-allow denies.
@@ -469,7 +469,7 @@ services:
       - "homepage.name=Beszel"
       - "homepage.icon=beszel.png"
       - "homepage.href=https://beszel.${HOST_NAME:-pi.lan}"
-      - "homepage.description=System monitoring"
+      - "homepage.description=Server resource monitoring"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
       - "traefik.http.routers.beszel.rule=Host(`beszel.${HOST_NAME:-pi.lan}`)"
@@ -603,7 +603,7 @@ services:
       - "homepage.name=Dockhand"
       - "homepage.icon=docker.png"
       - "homepage.href=https://dockhand.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Container management"
+      - "homepage.description=Docker container management"
       - "traefik.enable=true"
       - "traefik.docker.network=dockhand"
       - "traefik.http.routers.dockhand.rule=Host(`dockhand.${HOST_NAME:-pi.lan}`)"
@@ -711,7 +711,7 @@ services:
       - "homepage.name=Pi-hole"
       - "homepage.icon=pi-hole.png"
       - "homepage.href=https://pihole.${HOST_NAME:-pi.lan}"
-      - "homepage.description=DNS filtering"
+      - "homepage.description=Network ad and tracker blocking"
       - "homepage.widget.type=pihole"
       - "homepage.widget.url=http://pi-pihole:8082"
       - "homepage.widget.version=6"
@@ -856,7 +856,7 @@ services:
       - "homepage.name=Headplane"
       - "homepage.icon=headscale.png"
       - "homepage.href=https://headscale.${HOST_NAME:-pi.lan}/admin"
-      - "homepage.description=Headscale administration"
+      - "homepage.description=Web admin interface for Headscale"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
       - "traefik.http.routers.headplane.rule=Host(`headscale.${HOST_NAME:-pi.lan}`) && PathPrefix(`/admin`)"
@@ -921,7 +921,7 @@ services:
       - "homepage.name=Headscale"
       - "homepage.icon=tailscale.png"
       - "homepage.href=https://headscale.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Private Tailnet coordination"
+      - "homepage.description=VPN coordination server"
       - "homepage.widget.type=headscale"
       - "homepage.widget.url=http://pi-headscale:8080"
       - "homepage.widget.nodeId={{HOMEPAGE_FILE_HEADSCALE_NODE_ID}}"
@@ -1062,7 +1062,7 @@ services:
       - "homepage.name=Immich"
       - "homepage.icon=immich.png"
       - "homepage.href=https://immich.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Photos and videos"
+      - "homepage.description=Photo and video library"
       - "homepage.widget.type=immich"
       - "homepage.widget.url=http://pi-immich:2283"
       - "homepage.widget.key={{HOMEPAGE_FILE_IMMICH_API_KEY}}"
@@ -1361,7 +1361,7 @@ services:
       - "homepage.name=Gluetun"
       - "homepage.icon=gluetun.png"
       - "homepage.href=https://gluetun.${HOST_NAME:-pi.lan}"
-      - "homepage.description=VPN client"
+      - "homepage.description=VPN tunnel for downloads and streaming"
       - "homepage.widget.type=gluetun"
       - "homepage.widget.url=http://pi-gluetun:8000"
       - "homepage.widget.version=2"
@@ -1473,7 +1473,7 @@ services:
       - "homepage.name=Stremio"
       - "homepage.icon=stremio.png"
       - "homepage.href=https://stremio.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Streaming server (VPN protected)"
+      - "homepage.description=Movie and TV streaming (VPN protected)"
 
   # Casting alternative to `stremio` above, never both: the conflicts-with label
   # below is what services.sh, the picker and stack-up.sh all read to refuse it.
@@ -1501,7 +1501,7 @@ services:
       - "homepage.name=Stremio"
       - "homepage.icon=stremio.png"
       - "homepage.href=https://stremio.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Streaming server (LAN, casting)"
+      - "homepage.description=Movie and TV streaming (LAN, casting)"
       - "pi-pcloud.conflicts-with=stremio"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
@@ -1571,7 +1571,7 @@ services:
       - "pi-pcloud.companion-of=stremio"
       - "homepage.name=Comet"
       - "homepage.href=https://comet.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Stremio debrid addon"
+      - "homepage.description=Stream source addon for Stremio"
       - "homepage.icon=stremio.png"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
@@ -1638,7 +1638,7 @@ services:
       - "homepage.name=Prowlarr"
       - "homepage.icon=prowlarr.png"
       - "homepage.href=https://prowlarr.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Indexer manager"
+      - "homepage.description=Torrent search aggregator"
       - "homepage.widget.type=prowlarr"
       - "homepage.widget.url=http://pi-prowlarr:9696"
       - "homepage.widget.key={{HOMEPAGE_FILE_PROWLARR_API_KEY}}"
@@ -1677,11 +1677,11 @@ services:
       - "traefik.http.routers.kapowarr.tls=true"
       - "traefik.http.routers.kapowarr.service=kapowarr"
       - "traefik.http.services.kapowarr.loadbalancer.server.port=5656"
-      - "homepage.group=Books"
+      - "homepage.group=Download"
       - "homepage.name=Kapowarr"
       - "homepage.icon=kapowarr.png"
       - "homepage.href=https://kapowarr.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Comics manager"
+      - "homepage.description=Automated comic downloader"
     environment:
       - PUID=1000
       - PGID=1000
@@ -1775,7 +1775,7 @@ services:
       - "homepage.name=Kavita"
       - "homepage.icon=kavita.png"
       - "homepage.href=https://kavita.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Comics, manga and ebooks reader"
+      - "homepage.description=Comic, manga and ebook reader"
       - "homepage.widget.type=kavita"
       - "homepage.widget.url=http://pi-kavita:5000"
       # An API key, not username/password: Kavita's OIDC config sets
@@ -1912,7 +1912,7 @@ services:
       # Book library, audiobooks/ is served through Nextcloud.
       - ${DATA_LOCATION:-./data}/download:/downloads
     labels:
-      - "homepage.group=Books"
+      - "homepage.group=Download"
       - "homepage.name=Shelfmark"
       - "homepage.icon=shelfmark.png"
       - "homepage.href=https://shelfmark.${HOST_NAME:-pi.lan}"
@@ -1985,7 +1985,7 @@ services:
       # Not "and podcast player": Audiobookshelf downloads podcast episodes into
       # the library folder, and the only media mount here is :ro, so a podcast
       # library would fail with EROFS. Adding one means adding a writable mount.
-      - "homepage.description=Audiobook player with progress sync"
+      - "homepage.description=Audiobook library and player"
       - "homepage.widget.type=audiobookshelf"
       - "homepage.widget.url=http://pi-audiobookshelf"
       # An API key minted by scripts/homepage-widgets-bootstrap.sh. Audiobookshelf
@@ -2046,7 +2046,7 @@ services:
       - "homepage.name=ntfy"
       - "homepage.icon=ntfy.png"
       - "homepage.href=https://ntfy.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Self-hosted notifications"
+      - "homepage.description=Push notifications"
       - "homepage.widget.type=ntfy"
       - "homepage.widget.url=http://pi-ntfy"
       # The widget reads a single topic; monitoring is the one worth a glance on
@@ -2215,7 +2215,7 @@ services:
       - "homepage.group=Authentication"
       - "homepage.name=LLDAP"
       - "homepage.href=https://lldap.${HOST_NAME:-pi.lan}"
-      - "homepage.description=User directory management"
+      - "homepage.description=User and group directory"
       - "homepage.icon=lldap.png"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
@@ -2268,7 +2268,7 @@ services:
       - "homepage.name=Authelia"
       - "homepage.icon=authelia.png"
       - "homepage.href=https://auth.${HOST_NAME:-pi.lan}"
-      - "homepage.description=SSO authentication portal"
+      - "homepage.description=Single sign-on portal"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
       - "traefik.http.routers.authelia.rule=Host(`auth.${HOST_NAME:-pi.lan}`)"
@@ -2351,7 +2351,7 @@ services:
       # throughout the group because dashboard-icons has nothing for these.
       - "homepage.group=AI"
       - "homepage.name=llama.cpp"
-      - "homepage.description=Gemma 4 E2B inference"
+      - "homepage.description=Local language model engine"
       - "homepage.icon=mdi-brain"
     cpu_shares: *cpu-prio-idle
     cpuset: "1-3"
@@ -2393,7 +2393,7 @@ services:
     labels:
       - "homepage.group=AI"
       - "homepage.name=Piper"
-      - "homepage.description=Text-to-speech, French by default"
+      - "homepage.description=Text-to-speech engine"
       - "homepage.icon=mdi-text-to-speech"
     cpu_shares: *cpu-prio-idle
     # Same three cores as llama-cpp, leaving core 0 to traefik and DNS.
@@ -2442,7 +2442,7 @@ services:
     labels:
       - "homepage.group=AI"
       - "homepage.name=Parakeet"
-      - "homepage.description=Multilingual speech-to-text"
+      - "homepage.description=Speech-to-text engine"
       - "homepage.icon=mdi-microphone-message"
     cpu_shares: *cpu-prio-idle
     # Same three cores as llama-cpp and piper, leaving core 0 to traefik and DNS.
@@ -2514,7 +2514,7 @@ services:
     labels:
       - "homepage.group=AI"
       - "homepage.name=System Tools"
-      - "homepage.description=Server status for the local LLM"
+      - "homepage.description=Host status tools for the local AI"
       - "homepage.icon=mdi-tools"
     # No cpuset: a call only runs while llama-cpp waits for its result.
     cpu_shares: *cpu-prio-normal
@@ -2626,7 +2626,7 @@ services:
       - "homepage.group=AI"
       - "homepage.name=Open WebUI"
       - "homepage.href=https://ai.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Local AI chat"
+      - "homepage.description=AI chat interface"
       - "homepage.icon=open-webui.png"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
@@ -2695,7 +2695,7 @@ services:
       - "homepage.group=AI"
       - "homepage.name=Agentgateway"
       - "homepage.href=https://llm.${HOST_NAME:-pi.lan}/ui"
-      - "homepage.description=LLM and MCP gateway, models and keys"
+      - "homepage.description=LLM and MCP gateway"
       - "homepage.icon=agentgateway.png"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"

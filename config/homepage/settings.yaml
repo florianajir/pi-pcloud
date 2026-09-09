@@ -44,11 +44,11 @@ layout:
     icon: mdi-movie-open
     Storage:
       style: row
-      columns: 1
+      columns: 2
       icon: mdi-database
     Download:
       style: row
-      columns: 1
+      columns: 4
       icon: mdi-download
     Books:
       style: row
@@ -64,12 +64,16 @@ layout:
       icon: mdi-shield-key
     AI & Automation:
       style: row
-      columns: 2
+      columns: 1
       icon: mdi-robot
       AI:
         header: false
+        style: row
+        columns: 6
       Automation:
         header: false
+        style: row
+        columns: 3
   Administration:
     header: false
     tab: Administration
