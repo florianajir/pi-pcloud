@@ -2531,6 +2531,15 @@ services:
       - OAUTH_PROVIDER_NAME=Authelia
       - OAUTH_SCOPES=openid profile email
       - OAUTH_USERNAME_CLAIM=preferred_username
+      # Authelia publishes no end_session_endpoint (it implements no OIDC logout
+      # at all), so signing out here only dropped the local session and the
+      # still-valid portal cookie signed the user back in. Open WebUI looks for
+      # that endpoint in discovery first and falls through to this URL, which it
+      # then redirects to *verbatim* - no parameters appended, so unlike the
+      # same URL in nextcloud-oidc-bootstrap.sh it needs no placeholder to keep
+      # `rd` intact. `rd` returns to /auth, which shows the SSO button rather
+      # than bouncing straight back (OAUTH_AUTO_REDIRECT is off by default).
+      - WEBUI_AUTH_SIGNOUT_REDIRECT_URL=https://auth.${HOST_NAME:-pi.lan}/logout?rd=https%3A%2F%2Fai.${HOST_NAME:-pi.lan}%2Fauth
       - DATABASE_URL=postgresql://open-webui:${PASSWORD}@postgres/open-webui
       # The key is required by the client but ignored by llama-server, which runs
       # unauthenticated on the internal ai network - same for piper and parakeet.

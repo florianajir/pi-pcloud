@@ -11,3 +11,19 @@ oauth:
   profileSigningAlgorithm: 'none'
   tokenEndpointAuthMethod: 'client_secret_post'
   storageLabelClaim: 'preferred_username'
+  # Authelia implements no OIDC logout mechanism, so its discovery document
+  # publishes no end_session_endpoint and Immich fell back to its own login
+  # page: signing out of Immich left the portal session up, and the next visit
+  # signed the user straight back in. This field takes precedence over
+  # discovery, so it is the one place to inject Authelia's *portal* logout
+  # route - not OIDC, but the browser is redirected there carrying the session
+  # cookie, so the session actually ends.
+  #
+  # `rd` returns to Immich's own post-logout page. autoLaunch is on here, so
+  # the login page would otherwise bounce straight back to Authelia; the
+  # autoLaunch=0 that Immich itself appends for this case is kept, which means
+  # the `?` and `=` inside it must stay percent-encoded to remain part of `rd`.
+  # No placeholder parameter is needed to protect it, unlike the same URL in
+  # nextcloud-oidc-bootstrap.sh: Immich builds this with `new URL()` and
+  # `searchParams.set()`, so its id_token_hint is merged rather than appended.
+  endSessionEndpoint: 'https://auth.__HOST_NAME__/logout?rd=https%3A%2F%2Fimmich.__HOST_NAME__%2Fauth%2Flogin%3FautoLaunch%3D0'
