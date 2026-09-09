@@ -55,7 +55,9 @@ sequenceDiagram
 
 Standard authorization-code flow: the service redirects to Authelia's `/authorize`, Authelia authenticates the user against LLDAP (reusing an existing session if there is one), redirects back with a code, and the service exchanges it server-to-server for an ID token — a JWT signed RS256 with the key in `oidc_private_key.pem`. The service verifies the signature and provisions or updates the local user from the claims.
 
-Two consequences specific to this stack: **group membership travels in the `groups` claim**, which is why Nextcloud and Kavita can map LLDAP groups onto their own roles; and the token exchange is a *container-to-container* call, which is why the Authelia router carries no IP allowlist ([below](#the-middleware-chain)).
+Two consequences specific to this stack: **group membership travels in the `groups` claim**, which is why Nextcloud, Immich, Dockhand and Shelfmark can map the LLDAP `admin` group onto their own roles; and the token exchange is a *container-to-container* call, which is why the Authelia router carries no IP allowlist ([below](#the-middleware-chain)).
+
+**The `groups` claim is not in the ID Token, and it must not be put there.** Since Authelia gained support for the claims parameter the ID Token carries only what proves authorization happened — `groups`, `email`, `name` and `preferred_username` are served from the UserInfo endpoint against the access token. Every client here is fine with that, verified against each one's source: Kavita sets `GetClaimsFromUserInfoEndpoint`, Shelfmark falls back to an explicit `userinfo` call when the token's claims are too sparse, Dockhand merges the UserInfo response over the ID Token, Immich only skips UserInfo when the ID Token already carries `email` (it does not), and Nextcloud's `user_oidc` asks for the claims it needs in the ID Token through the standard claims parameter — which Authelia honours for any claim the client could have reached by scope. So this stack declares **no `claims_policies`**, and the `id_token` escape hatch in that block should stay unused: Authelia's own documentation calls it a break-glass measure for clients with a bug.
 
 **Logging out is not an OIDC operation here.** Authelia implements none of the OIDC logout mechanisms — RP-initiated, front-channel or back-channel — so its discovery document carries no `end_session_endpoint`. Left at that, `user_oidc` falls back to redirecting to the Nextcloud root, where the still-valid portal cookie signs the user straight back in and logging out looks like a page reload. The four clients that expose a logout URL therefore point at Authelia's *portal* logout route instead, with an `rd` back to their own login page: not OIDC, but a browser redirected there carries the session cookie, so the session genuinely ends. Redirect targets sit under the session cookie domain, which is what passes Authelia's `safe-redirection` check. Note the effect is stack-wide, not per-service — ending the Authelia session logs the user out of every other SSO service too.
 
@@ -79,7 +81,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Client | Scopes | Auth method | Policy | Notes |
 |--------|--------|-------------|--------|-------|
 | **Nextcloud** | openid profile email groups offline_access | client_secret_post | one_factor | Group provisioning enabled |
-| **Immich** | openid profile email | client_secret_post | one_factor | Mobile app callback |
+| **Immich** | openid profile email groups | client_secret_post | one_factor | Mobile app callback; `roleClaim` reads `groups`, so `admin` promotes *and* demotes on every login |
 | **Beszel** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required |
 | **Dockhand** | openid profile email groups | client_secret_post | **admin_only** | 2FA + `admin` group |
 | **Headplane** | openid profile email offline_access | client_secret_basic | **admin_only** | 2FA + `admin` group |
@@ -88,7 +90,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | **LiteLLM** | openid profile email | client_secret_basic | **admin_only** | 2FA + `admin` group. Gates the Admin UI only — `/v1` takes virtual keys and never sees OIDC. **No `groups` scope**: it reads a role out of the claims and accepts only its own names, so the admin is named by `PROXY_ADMIN_ID` instead |
 | **Agentgateway** | openid profile email | client_secret_basic | **admin_only** | 2FA + `admin` group. PKCE (S256) required — its browser flow always sends a code challenge |
 | **Vaultwarden** | openid profile email offline_access | client_secret_basic | one_factor | Master password still required |
-| **Kavita** | openid profile email groups offline_access | client_secret_post | one_factor | Roles come from the `groups` claim |
+| **Kavita** | openid profile email offline_access | client_secret_post | one_factor | **no `groups` scope** — role sync is off, so the claim would be ignored; roles come from `DefaultRoles` and admin is set in Kavita |
 | **Shelfmark** | openid profile email groups | client_secret_basic | one_factor | PKCE (S256) required; admin comes from the `admin` group; local login disabled |
 | **Audiobookshelf** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required; **no `groups` scope** — it reads the claim as a role and denies anyone outside admin/user/guest |
 
@@ -184,10 +186,16 @@ Authelia's rules in evaluation order (`config/authelia/configuration.yml.templat
 | `uptime.*`, `homepage.*`, `qbittorrent.*`, `prowlarr.*`, `kapowarr.*`, `ai.*` | any user | one_factor |
 | `headscale.*` path `/admin` | `admin` group | two_factor |
 | `backrest.*`, `pihole.*`, `traefik.*`, `lldap.*` | `admin` group | two_factor |
-| `lldap.*` (fallback) | any user | two_factor |
 | anything else | — | **deny** |
 
+**Nothing may follow the `admin` row for those four domains.** Rules are first-match, and a `subject` the user does not satisfy is not a match — so the bare `two_factor` rule for `lldap.*` that sat below it until the OIDC group audit let *every* account into the directory UI and made the admin gate above decorative. A user who needs to change their own password uses LLDAP's reset mail (`LLDAP_SMTP_OPTIONS__ENABLE_PASSWORD_RESET`), not the UI.
+
 **`admin` is the only group that means anything here.** Create it in the LLDAP UI and add your admin accounts; regular users need no group. The deny catch-all applies only to routers carrying the `authelia` middleware — OIDC services enforce their own policy from the client table above.
+
+Two things follow from having exactly one group, and both are load-bearing:
+
+- **LLDAP's own `lldap_*` groups are filtered out of the claim.** `lldap_admin`, `lldap_password_manager` and `lldap_strict_readonly` are the directory's *permission* model, not application roles, and unfiltered they travel to every client that asks for the scope — Nextcloud provisioned real groups from them, and the same class of problem is what forced the `groups` scope off Audiobookshelf. `groups_filter` is therefore `(&(member={dn})(!(cn=lldap_*)))`; LLDAP 0.6 supports both the negation and the `cn` substring. Keep family accounts out of `lldap_strict_readonly` regardless: it grants read access to the whole directory and is not needed to change one's own password.
+- **`admin` *is* Nextcloud's superuser group.** Nextcloud's built-in administrators group is called `admin`, so group provisioning maps the LLDAP group straight onto it — adding someone to `admin` to give them a Kavita or Dockhand admin makes them a Nextcloud server administrator too, with write access to the whole library tree through `files_external`. If a per-service admin is ever needed, it needs its own group, not this one.
 
 ## Two-factor authentication
 

@@ -39,7 +39,14 @@ authentication_backend:
     additional_users_dn: ou=people
     users_filter: (&(|({username_attribute}={input})(mail={input}))(objectClass=person))
     additional_groups_dn: ou=groups
-    groups_filter: (member={dn})
+    # The `lldap_*` groups are LLDAP's own permission model (write access to the
+    # directory, read-only browsing, password resets) - not application roles. Left
+    # unfiltered they travel in the `groups` claim to every client that asks for the
+    # scope, which is how Nextcloud ended up with provisioned `lldap_admin` and
+    # `lldap_strict_readonly` groups, and is the same class of problem that forced
+    # the `groups` scope off Audiobookshelf. LLDAP 0.6 supports `!` and a `cn`
+    # substring here, so one filter keeps the claim to groups that mean something.
+    groups_filter: (&(member={dn})(!(cn=lldap_*)))
     attributes:
       group_name: cn
       mail: mail
@@ -70,6 +77,13 @@ access_control:
         - 'group:admin'
       policy: two_factor
 
+    # Nothing follows this rule for these domains, and nothing should: rules are
+    # first-match, and a `subject` the user does not satisfy is not a match - so a
+    # bare `two_factor` rule for `lldap.__HOST_NAME__` sitting below this one (which
+    # is what shipped until the OIDC group audit) lets every account into the
+    # directory UI and makes the admin gate above decorative. Users who need to
+    # change their own password use LLDAP's reset mail, enabled on the container
+    # through LLDAP_SMTP_OPTIONS__ENABLE_PASSWORD_RESET.
     - domain:
         - 'backrest.__HOST_NAME__'
         - 'pihole.__HOST_NAME__'
@@ -77,9 +91,6 @@ access_control:
         - 'lldap.__HOST_NAME__'
       subject:
         - 'group:admin'
-      policy: two_factor
-
-    - domain: 'lldap.__HOST_NAME__'
       policy: two_factor
 
 session:
@@ -190,10 +201,15 @@ __OIDC_PRIVATE_KEY__
           - 'https://immich.__HOST_NAME__/auth/login'
           - 'https://immich.__HOST_NAME__/user-settings'
           - 'app.immich:///oauth-callback'
+        # `groups` feeds Immich's own role claim, pointed at `groups` in
+        # config/immich/oauth-config.yaml.template: it treats the claim as a list
+        # and looks for the literal values `admin` and `user`, so the LLDAP `admin`
+        # group promotes and demotes on every login with no custom claim to mint.
         scopes:
           - openid
           - profile
           - email
+          - groups
         response_types:
           - code
         grant_types:
@@ -402,11 +418,16 @@ __OIDC_PRIVATE_KEY__
         consent_mode: implicit
         redirect_uris:
           - 'https://kavita.__HOST_NAME__/signin-oidc'
+        # No `groups`: Kavita's role sync is off (see scripts/kavita-oidc-bootstrap.sh
+        # for why), so the claim would be received and ignored. This scope and Kavita's
+        # `CustomScopes` have to move together - Kavita appends CustomScopes to the
+        # authorization request without checking `scopes_supported`, so a scope set on
+        # one side only means `invalid_scope` and, with password login disabled, nobody
+        # can reach Kavita at all.
         scopes:
           - openid
           - profile
           - email
-          - groups
           - offline_access
         response_types:
           - code

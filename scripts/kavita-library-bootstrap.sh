@@ -7,10 +7,8 @@
 # Also adds every library to the OIDC default set, so accounts auto-provisioned
 # through Authelia can see a library added after they first logged in.
 #
-# Authenticates with an API key read out of kavita.db: our own OIDC config sets
-# DisablePasswordAuthentication, so there is no password login a script could use,
-# and /api/Plugin/authenticate is the one path that still works. That means this can
-# only run once a Kavita admin exists; before that it warns and skips.
+# Authenticates through lib.sh's kavita_token, which means this can only run once a
+# Kavita admin exists; before that it warns and skips.
 #
 # A post-start hook (scripts/stack-up.sh). Idempotent, best-effort: warns, never
 # fails the start.
@@ -65,15 +63,6 @@ kv_post() {
     docker exec -i "$KAVITA_CONTAINER" curl -sS -o /dev/null -w '%{http_code}' \
         -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
         --data @- "$API/$1"
-}
-
-get_token() {
-    local key=""
-    key="$(kavita_admin_api_key "$KAVITA_CONTAINER")"
-    [ -n "$key" ] || return 1
-    KAVITA_KEY="$key" docker exec -i -e KAVITA_KEY "$KAVITA_CONTAINER" sh -c \
-        'curl -sS -X POST "http://localhost:5000/api/Plugin/authenticate?apiKey=$KAVITA_KEY&pluginName=pi-web-bootstrap"' \
-        2>/dev/null | jq -r '.token // empty'
 }
 
 # The create and update endpoints take the same DTO; only "id" differs, and update
@@ -178,7 +167,7 @@ main() {
     container_is_running "$KAVITA_CONTAINER" || { log "Kavita not running, skipping"; return 0; }
     wait_for_http_endpoint "http://$KAVITA_CONTAINER:5000/api/health" "Kavita HTTP API" 60 5 >/dev/null 2>&1 || true
 
-    TOKEN="$(get_token || true)"
+    TOKEN="$(kavita_token "$KAVITA_CONTAINER" || true)"
     if [ -z "${TOKEN:-}" ]; then
         # Expected on a fresh install: no admin has registered yet, so no API key.
         log "WARNING: no Kavita admin API key yet; skipping library bootstrap"
