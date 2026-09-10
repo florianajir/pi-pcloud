@@ -132,6 +132,21 @@ fi
 
 printf 'trilium-api-contract.sh: %s\n' "$IMAGE"
 
+# --- 0. The healthcheck compose.yaml declares, on this architecture ---
+
+# Run here rather than trusted from the image: the bundled probe is wrapped in
+# `gosu` on arm64 and `su-exec` on amd64, so a command copied from one variant
+# fails on the other before reaching the server, and the container just sits
+# unhealthy. compose.yaml therefore drops the privilege step - this asserts
+# what it actually runs.
+hc="$(DATA_LOCATION=/nonexistent/trilium-contract COMPOSE_PROFILES=trilium \
+    docker compose --env-file /dev/null -f "$REPO_DIR/compose.yaml" \
+    config --format json 2>/dev/null \
+    | jq -r '.services.trilium.healthcheck.test | .[1:] | join(" ")')"
+# shellcheck disable=SC2086  # the command and its argument, split on purpose
+docker exec "$BOX" $hc >/dev/null 2>&1
+ok "compose.yaml's healthcheck command runs on $(docker version -f '{{.Server.Arch}}')" "$?" 0
+
 # --- 1. The setup wizard, which is how a fresh install is claimed ---
 
 status="$(probe "$BASE/api/setup/status")"

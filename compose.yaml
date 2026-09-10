@@ -2270,10 +2270,16 @@ services:
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_trilium_secret.txt:/run/secrets/oidc_trilium_secret:ro
     healthcheck:
       <<: *healthcheck-default
-      # The image's own HEALTHCHECK, re-declared only to put it on the stack's
-      # interval anchor. It is the only probe available: a Debian image with
-      # node and bash but no curl, wget or nc.
-      test: ["CMD-SHELL", "exec gosu node node /usr/src/app/docker_healthcheck.cjs"]
+      # The image's bundled probe - the only one available, since this ships
+      # node and bash but no curl, wget or nc. Re-declared to put it on the
+      # stack's interval anchor.
+      #
+      # Without the image's own privilege drop, which is NOT portable: the
+      # arm64 variant wraps it in `gosu` and the amd64 one in `su-exec`, so the
+      # upstream command copied verbatim fails on the other architecture before
+      # it ever reaches the server - CI went unhealthy for exactly that. The
+      # container is already root here and the probe is a plain HTTP GET.
+      test: ["CMD", "node", "/usr/src/app/docker_healthcheck.cjs"]
       start_period: 40s
     labels:
       - "homepage.group=Notes"
