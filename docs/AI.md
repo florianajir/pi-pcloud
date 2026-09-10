@@ -164,7 +164,11 @@ session cookie **and** a CSRF token — there is no ETAPI equivalent — and `PO
 to Authelia the moment SSO is enrolled. So the window in which any of it can be scripted is *before*
 that enrolment, which is where `scripts/trilium-bootstrap.sh` runs on a fresh install:
 
-1. sets the owner password to `${PASSWORD}` (`POST /set-password`), claiming the instance
+1. creates the initial document with `?skipDemoDb`, then sets the owner password to `${PASSWORD}`
+   (`POST /set-password`), claiming the instance. The 177-note *Trilium Demo* tree the wizard would
+   otherwise seed is left out — a personal knowledge base should start empty. The built-in help
+   subtree is separate and stays. Upstream reads that flag as `!== undefined`, so its *presence* is
+   the switch and `?skipDemoDb=false` would skip the demo just as thoroughly
 2. opens a session, reads the CSRF token off `GET /bootstrap`
 3. writes `aiEnabled`, `mcpEnabled` and an `llmProviders` entry pointing at `http://agentgateway:4000/v1`
    with `${TRILIUM_LLM_KEY}` — provider type `openai-compatible`, whose `baseURL` is honoured, rather

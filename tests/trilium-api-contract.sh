@@ -146,8 +146,13 @@ ok "a virgin instance reports isInitialized false" \
 # An empty body on purpose: the handler reads only `locale` and the
 # `skipDemoDb` query parameter. internal.openapi.yaml claims a password is
 # required here; it is not, and set-password below is what actually sets one.
+#
+# ?skipDemoDb exactly as the bootstrap sends it. Upstream tests
+# `skipDemoDb !== undefined`, so the switch is the parameter's *presence* - the
+# assertion further down is what would notice if that ever became a boolean,
+# because `=true` would then still read as true but a future `=false` would not.
 code="$(printf '{}' | probe -o /dev/null -w '%{http_code}' -X POST --data @- \
-    -H 'Content-Type: application/json' "$BASE/api/setup/new-document")"
+    -H 'Content-Type: application/json' "$BASE/api/setup/new-document?skipDemoDb=true")"
 succeeds "POST /api/setup/new-document accepts an empty body" "$code"
 
 ok "and the instance is initialized afterwards" \
@@ -218,7 +223,17 @@ etapi="$(printf '%s' "$token_body" | jq -r '.token // empty')"
 ok "POST /api/login/token returns the token under .token" \
    "$([ -n "$etapi" ] && echo yes || echo no)" yes
 
-# --- 6. The MCP endpoint that token is for ---
+# --- 6. The demo document ?skipDemoDb was supposed to leave out ---
+
+# Root's children, not a note count: the built-in help subtree lands under
+# _hidden either way, so counting rows cannot tell a skipped demo from a
+# seeded one. With the demo, root also carries "Trilium Demo", "Journal" and
+# "Miscellaneous"; without it, _hidden is the only child there is.
+root_children="$(probe -H "Authorization: $etapi" "$BASE/etapi/notes/root" \
+    | jq -c '.childNoteIds' 2>/dev/null)"
+ok "?skipDemoDb leaves root with only the hidden subtree" "$root_children" '["_hidden"]'
+
+# --- 7. The MCP endpoint that token is for ---
 
 mcp='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"contract","version":"1"}}}'
 code="$(printf '%s' "$mcp" | probe -o /dev/null -w '%{http_code}' -X POST --data @- \

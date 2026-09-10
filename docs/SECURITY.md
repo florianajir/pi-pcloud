@@ -143,8 +143,8 @@ make the option available — the last step is yours.
 
 On a fresh install:
 
-1. Nothing, normally: `scripts/trilium-bootstrap.sh` has already set the owner password to
-   `${PASSWORD}` on the first start, which is what closes the window in which anyone who
+1. Nothing, normally: `scripts/trilium-bootstrap.sh` has already created the document (without the
+   demo notes) and set the owner password to `${PASSWORD}` on the first start, which is what closes the window in which anyone who
    reached the instance from the LAN first would have become its owner. Kavita still has
    that window; Trilium no longer does. Change the password afterwards if you want — the
    stack only needs it until step 3, and never types it again.

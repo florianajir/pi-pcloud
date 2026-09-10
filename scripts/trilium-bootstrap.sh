@@ -60,9 +60,18 @@ claim_instance() {
     # The only destructive call in this script: new-document runs
     # discardExistingData() first. Reached solely when Trilium reports no schema
     # at all, and refused upstream with a 401 in every other state.
+    #
+    # ?skipDemoDb leaves out the 177-note "Trilium Demo" document the wizard
+    # would otherwise seed - a personal knowledge base should start empty, and
+    # the built-in help subtree (which is separate) stays either way.
+    #
+    # The value is not read: upstream tests `skipDemoDb !== undefined`, so the
+    # *presence* of the parameter is the switch and `?skipDemoDb=false` would
+    # skip the demo just as thoroughly. Do not "fix" this into a boolean.
     if [ "$(printf '%s' "$status" | jq -r '.isInitialized | tostring')" != "true" ]; then
-        log "Creating Trilium's initial document"
-        printf '{}' | api_send_json_stdin POST "$TRILIUM_URL" "/api/setup/new-document" >/dev/null 2>&1 || {
+        log "Creating Trilium's initial document (without the demo notes)"
+        printf '{}' \
+            | api_send_json_stdin POST "$TRILIUM_URL" "/api/setup/new-document?skipDemoDb=true" >/dev/null 2>&1 || {
             log "WARNING: Trilium refused to create the initial document"
             return 1
         }
