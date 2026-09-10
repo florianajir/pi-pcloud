@@ -4,8 +4,10 @@
 FROM henrygd/beszel-agent:0.19.0 AS upstream
 
 FROM alpine:3.24
-# Exact pin fails the build when the 3.24 branch bumps the package — bump it here.
-RUN apk add --no-cache smartmontools=7.5-r0
+# Pinned to the major, for the reason config/backrest/Dockerfile spells out:
+# alpine:3.24 above is the reproducibility boundary, and an exact pin inside it
+# only turns a patch bump into a failed build.
+RUN apk add --no-cache smartmontools=~7
 COPY --from=upstream /agent /agent
 VOLUME ["/var/lib/beszel-agent"]
 ENTRYPOINT ["/agent"]

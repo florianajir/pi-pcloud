@@ -62,6 +62,68 @@ llm:
         # optional for exactly this case.
   providers: []
   virtualModels: []
+# Groq on its own path, because the llm: section above cannot do either half of
+# what a Goose "OpenAI Compatible" provider needs. That section matches on model
+# *name* (the groq/* wildcard in the database), so every provider shares one /v1
+# and /v1/models can only ever list the wildcard itself - there is no way to
+# expand it into the provider's real catalogue. Upstream issue 1462 tracks that
+# gap; it is closed but unreleased, and its fix synthesises the list from the
+# configuration rather than fetching it, so it would not help here either.
+#
+# A top-level route does both, because policies.ai.routes maps a URL *suffix* to
+# a handler:
+#   /chat/completions -> completions : parsed, so tokenisation, budgets and
+#                                      guardrails still apply
+#   /models           -> passthrough : forwarded verbatim to Groq, which is what
+#                                      makes the catalogue real and dynamic
+# `models` is a third handler and the schema accepts it, but v1.5.0 answers it
+# with `501 Route 'Models' not implemented`.
+routes:
+  - name: groq
+    gateways: default
+    # /groq/v1, not /groq: urlRewrite strips the whole matched prefix, so the
+    # suffix ai.routes sees is /models and /chat/completions, and pathPrefix
+    # below puts the /v1 back on the upstream side. Split it the other way and
+    # the `completions` handler builds /openai/chat/completions, which Groq 404s.
+    matches:
+      - path:
+          pathPrefix: /groq/v1
+    policies:
+      urlRewrite:
+        path:
+          prefix: /
+      # The apiKey policy in the llm: section is attached to that section and
+      # does NOT cover this route. Without this block Groq would be reachable
+      # with no credential at all by anything that gets past lan@docker.
+      apiKey:
+        mode: strict
+        keys:
+          - key: ${LLM_API_KEY}
+            metadata:
+              user: goose
+      # api.groq.com is HTTPS-only. Without this the request leaves in plain
+      # text and Cloudflare answers `400 The plain HTTP request was sent to
+      # HTTPS port`.
+      backendTLS:
+        hostname: api.groq.com
+      # Replaces whatever the client sent, so a caller presents the gateway key
+      # above and never needs the Groq one.
+      backendAuth:
+        key: ${GROQ_API_KEY}
+      ai:
+        routes:
+          /chat/completions: completions
+          /models: passthrough
+          "*": passthrough
+    backends:
+      - ai:
+          name: groq
+          hostOverride: api.groq.com:443
+          pathPrefix: /openai/v1
+          provider:
+            custom:
+              formats:
+                - type: completions
 mcp:
   gateways: default
   targets: []

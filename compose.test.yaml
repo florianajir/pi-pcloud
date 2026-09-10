@@ -16,12 +16,13 @@ services:
     profiles: [ci-excluded]
 
   headplane:
-    # Two things, both downstream of headscale being excluded below. Its
-    # depends_on names headscale, so compose refuses to start it without one;
-    # and the Headscale API key it mounts is written by
-    # scripts/headscale-init.sh, which needs a headscale container to mint it
-    # from. A bind mount of a file that does not exist comes out a directory,
-    # so there is no starting it with a placeholder either.
+    # Not fixable by giving headscale a certificate, which was the first guess.
+    # Its config.yaml is written by scripts/headscale-init.sh - pre-start only
+    # touches the file so the bind mount is not a directory, and leaves it
+    # empty - and that hook ends in `tailscale up` against pi-tailscale, which
+    # a runner cannot have at all. main() dies on the missing container after
+    # two minutes of waiting, so the hook stays in HOOKS_SKIP whatever happens
+    # to TLS, and headplane would come up against an empty config.
     profiles: [ci-excluded]
 
   beszel-agent:
@@ -66,9 +67,18 @@ services:
     # only_start_if_oidc_is_available: true, deliberately, that is fatal.
     #
     # Fixable, but not in one line: it needs a CI-only CA whose leaf Traefik
-    # serves as its default certificate and whose root headscale trusts
-    # (SSL_CERT_FILE). That would also unblock agentgateway, headplane and
-    # scripts/headscale-init.sh, which is the argument for doing it.
+    # serves and whose root headscale trusts through SSL_CERT_FILE. The same
+    # CA would unblock agentgateway - its image already sets SSL_CERT_FILE
+    # itself, so that stack honours it - but not headplane, and not
+    # scripts/headscale-init.sh: both are blocked by tailscale instead.
+    #
+    # The awkward half is Traefik's side. Its static configuration comes from
+    # CLI flags, and Traefik takes flags, env and file as mutually exclusive
+    # sources - measured, not assumed: with the flags in place, a
+    # TRAEFIK_PROVIDERS_FILE_FILENAME in the environment leaves `providers`
+    # empty in the loaded static config. So the file provider that would carry
+    # a default certificate cannot be bolted on from here without overriding
+    # the whole `command` list.
     profiles: [ci-excluded]
 
   agentgateway:

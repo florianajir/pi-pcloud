@@ -5,26 +5,30 @@ FROM ghcr.io/garethgeorge/backrest:v1.14.1
 # server does not know (e.g. transaction_timeout, added in 17), and the restore
 # then aborts on its very first line under ON_ERROR_STOP. Verified in a restore
 # drill against a real dump. Bump this together with the server image.
-# Exact pins fail the build when the 3.24 branch bumps a package — bump them here.
-# Since this image is built in CI, that failure now lands on a pull request
-# rather than mid-`make update` on the Pi, which is where it used to: jq had
-# already moved 1.8.1-r0 -> 1.8.2-r0 under a pin nothing was rebuilding.
+# Pinned to the generation, not to `18.6-r0`, and the same for every apk line
+# below. The reproducibility boundary here is the base image's Alpine branch,
+# which is fixed: inside 3.24 a package only moves for a patch or a security
+# fix, so an exact pin bought almost nothing and cost a build. It cost one
+# already — jq went 1.8.1-r0 -> 1.8.2-r0 and nothing rebuilt this image until
+# CI started to, at which point the pin was simply unsatisfiable. `=~18` still
+# refuses 17 or 19, which is the constraint that actually matters; `=~1.7`
+# against today's jq fails, so these are real bounds and not decoration.
 # postgresql18-client lives in main, unlike the 16 client which was in community.
-RUN apk add --no-cache postgresql18-client=18.6-r0 jq=1.8.2-r0
+RUN apk add --no-cache postgresql18-client=~18 jq=~1
 # apache2-utils provides htpasswd, the only bcrypt tool available here; the
 # auth entrypoint needs it to turn BACKREST_AUTH_PASSWORD into config.json's
 # user. The host has no bcrypt tool, so this cannot happen in pre-start.
 # scripts/ntfy-pre-start.sh borrows the same htpasswd to *verify* a stored hash
 # rather than re-generating one on every start.
-RUN apk add --no-cache apache2-utils=2.4.68-r0
+RUN apk add --no-cache apache2-utils=~2.4
 # openldap-clients gives scripts/rotate-password.sh ldappasswd/ldapwhoami. Baked
 # rather than pulled at run time: fetching a package mid-rotation is the worst
 # time to fail, and the image the stack already builds is always on disk.
-RUN apk add --no-cache openldap-clients=2.6.14-r0
+RUN apk add --no-cache openldap-clients=~2.6
 # sqlite gives scripts/sqlite-backup.sh the `.backup` command, the only way to
 # get a consistent copy of a live WAL-mode database. restic copying the .db and
 # its -wal at different instants cannot.
-RUN apk add --no-cache sqlite=3.53.4-r0
+RUN apk add --no-cache sqlite=~3
 COPY auth-entrypoint.sh /usr/local/bin/auth-entrypoint.sh
 # Keep the base image's tini + /docker-entrypoint chain; only prepend the hook.
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/auth-entrypoint.sh"]
