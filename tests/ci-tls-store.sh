@@ -28,8 +28,11 @@
 #   <ca-dir>/ca-cert.pem         the root, 0644 - mounted into the two
 #                                containers above and named by SSL_CERT_FILE
 #
-# Never run against a real install: it overwrites the ACME store, and the
-# store on a real host holds the certificates Let's Encrypt issued.
+# It refuses to run when the store already exists, which is what stops it
+# being pointed at a real install: there, acme.json holds the certificates
+# Let's Encrypt issued, and reissuing them costs a duplicate-certificate rate
+# limit. CI wipes DATA_LOCATION before every run, so the guard never fires
+# there. CI_TLS_FORCE=1 overrides it for a dirty scratch directory.
 set -eu
 
 STORE_DIR="${1:?usage: $(basename "$0") <letsencrypt-dir> <ca-dir>}"
@@ -48,6 +51,16 @@ EMAIL="${EMAIL:-test@example.com}"
 # pull request. A CI job lives for minutes, so the only thing this number
 # controls is whether that call happens.
 DAYS="${CI_TLS_DAYS:-120}"
+
+# Before anything is generated, and before the directories are created: the
+# whole point is to not have written to a real store by the time we find out.
+if [ -e "$STORE_DIR/acme.json" ] && [ "${CI_TLS_FORCE:-0}" != 1 ]; then
+    printf '%s: %s already exists.\n' "$(basename "$0")" "$STORE_DIR/acme.json" >&2
+    printf 'This script overwrites it, and on a real host that file is the only copy of\n' >&2
+    printf "the certificates Let's Encrypt issued. If this really is a scratch directory,\n" >&2
+    printf 'delete it or re-run with CI_TLS_FORCE=1.\n' >&2
+    exit 1
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM HUP

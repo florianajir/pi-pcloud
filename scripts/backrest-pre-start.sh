@@ -306,14 +306,25 @@ mkdir -p "${CONFIG_DIR}"
 # but S3 repo may not be available"), and nothing rebuilt or restarted the
 # container often enough to notice; CI starting it from an empty DATA_LOCATION
 # is what did.
+#
+# Leaving the repo out is a real loss, not a formality, so the warning says so
+# in as many words: 's3-backup' is the only plan whose paths include /userdata,
+# and the only one whose hooks call db-backup.sh and sqlite-backup.sh. Dropping
+# it means the install backs up its .env and nothing else. That is still better
+# than the crash loop it replaces - a backrest that will not start backs up
+# nothing at all, and says so nowhere.
 S3_CONFIGURED=1
 if [ -z "${BACKREST_S3_URI}" ] || [ -z "${BACKREST_S3_REPO_PASSWORD}" ] || \
    [ -z "${S3_ACCESS_KEY_ID}" ] || [ -z "${S3_SECRET_ACCESS_KEY}" ]; then
   S3_CONFIGURED=0
-  log "WARNING: S3 credentials incomplete; the off-site repo and its plan are being left out"
+  log "WARNING: S3 credentials incomplete; leaving out the 's3' repo and the 's3-backup' plan"
   log "Set: BACKREST_S3_URI, BACKREST_S3_REPO_PASSWORD, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY"
-  log "Backups then run to ${LOCAL_REPO_URI} only. To add the off-site repo afterwards, set"
-  log "those four, delete ${CONFIG_FILE} and re-run: this script leaves an existing config alone."
+  log "Until you do, NOTHING under /userdata is backed up. 's3-backup' is the only plan that"
+  log "covers it and the only caller of db-backup.sh and sqlite-backup.sh, so no database dump"
+  log "runs either. What is left is the '${LOCAL_PLAN_ID}' plan, which snapshots the .env file"
+  log "into ${LOCAL_REPO_URI} and nothing else."
+  log "To add the off-site repo later: set those four, delete ${CONFIG_FILE} and re-run."
+  log "This script leaves an existing config alone, so it will not add the repo by itself."
 fi
 
 tmp_file="$(mktemp)"
