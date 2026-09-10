@@ -50,7 +50,7 @@ setup_status() {
 # What actually protects each step is the condition upstream enforces:
 # checkAppNotInitialized for the document, checkPasswordNotSet for the password.
 claim_instance() {
-    local status="" password="" code=""
+    local status="" password=""
 
     status="$(setup_status)" || {
         log "WARNING: Trilium did not answer /api/setup/status; skipping"
@@ -74,18 +74,16 @@ claim_instance() {
         return 1
     }
 
-    # The status, not curl's exit code: checkPasswordNotSet answers a *redirect*
-    # when a password is already set, and `curl -f` calls a 302 a success - so
-    # exit-code-only reporting announced it had claimed an instance it had not
-    # touched.
-    code="$(jq -cn --arg p "$password" '{password1: $p, password2: $p}' \
-        | docker_curl_stdin -X POST -o /dev/null -w '%{http_code}' \
+    # Attempted, never judged here. Success is `res.redirect("login")` and so is
+    # the refusal checkPasswordNotSet issues when a password already exists, so
+    # neither the status code nor curl's exit code can tell the two apart -
+    # reporting on either is how this hook came to announce it had claimed an
+    # instance it had not touched. Whether the stack owns the password is
+    # something only the sign-in below can answer, so that is where it is said.
+    jq -cn --arg p "$password" '{password1: $p, password2: $p}' \
+        | docker_curl_stdin -X POST -o /dev/null \
             -H 'Content-Type: application/json' \
-            "$TRILIUM_URL/set-password" 2>/dev/null || true)"
-    case "$code" in
-        200 | 201 | 204) log "Claimed Trilium: owner password set to PASSWORD" ;;
-        *) : ;;
-    esac
+            "$TRILIUM_URL/set-password" >/dev/null 2>&1 || true
 }
 
 # --- Authenticating as the owner ---
@@ -95,7 +93,7 @@ claim_instance() {
 # the password once SSO is enrolled, which is what makes this a fresh-install
 # path and not a repair tool.
 open_session() {
-    local password="" headers=""
+    local password="" headers="" session=""
 
     password="$(get_env_value PASSWORD)"
     [ -n "$password" ] || return 1
@@ -105,30 +103,46 @@ open_session() {
             -H 'Content-Type: application/json' \
             "$TRILIUM_URL/login" 2>/dev/null)" || return 1
 
-    printf '%s' "$headers" \
-        | tr -d '\r' \
-        | sed -n 's/^[Ss]et-[Cc]ookie: *\(trilium\.sid=[^;]*\).*/\1/p' \
-        | head -1
+    session="$(printf '%s' "$headers" | tr -d '\r' \
+        | sed -n 's/^[Ss]et-[Cc]ookie: *\(trilium\.sid=[^;]*\).*/\1/p' | head -1)"
+    [ -n "$session" ] || return 1
+
+    # A cookie is not a login. Trilium hands a session to a *failed* attempt too
+    # (sendLoginError touches it), so the bare Set-Cookie made a wrong password
+    # look like success and the failure only surfaced two calls later as a
+    # refused options write. /bootstrap says plainly whether anyone is logged in.
+    api_get_with_cookie "$TRILIUM_URL" "/bootstrap" "$session" 2>/dev/null \
+        | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 1
+
+    printf '%s' "$session"
 }
 
-# Echo "<csrf cookie>|<csrf token>". csrf-csrf binds the token to the session
-# id and hands out the cookie half in the same response, so both come from one
-# call to /bootstrap and have to travel together on the write below.
+# Echo "<cookie header>|<csrf token>" for the write below.
+#
+# One request, with -i, and not two. csrf-csrf binds the token to the session
+# id, and /bootstrap re-issues `trilium.sid` alongside `trilium-csrf` - so
+# fetching the headers and the body separately paired a token from one response
+# with the session cookie of another, and every PUT came back "Invalid CSRF
+# token" (visible only in Trilium's own log, never in the response). Whatever
+# cookies this response sets are the ones that belong with this token.
 csrf_material() {
-    local session="$1" headers="" body="" cookie="" token=""
+    local session="$1" response="" headers="" body="" cookies="" token=""
 
-    headers="$(docker_curl -D - -o /dev/null -H "Cookie: $session" \
-        "$TRILIUM_URL/bootstrap" 2>/dev/null)" || return 1
-    cookie="$(printf '%s' "$headers" | tr -d '\r' \
-        | sed -n 's/^[Ss]et-[Cc]ookie: *\(trilium-csrf=[^;]*\).*/\1/p' | head -1)"
+    response="$(docker_curl -i -H "Cookie: $session" "$TRILIUM_URL/bootstrap" 2>/dev/null)" || return 1
 
-    # overwrite: false upstream, so this second call returns the same token the
-    # cookie above was minted with rather than rotating it.
-    body="$(api_get_with_cookie "$TRILIUM_URL" "/bootstrap" "$session" 2>/dev/null)" || return 1
-    token="$(printf '%s' "$body" | jq -r '.csrfToken // empty')"
+    headers="$(printf '%s' "$response" | tr -d '\r' | sed -n '1,/^$/p')"
+    body="$(printf '%s' "$response" | tr -d '\r' | sed -n '/^$/,$p' | tail -n +2)"
 
+    token="$(printf '%s' "$body" | jq -r '.csrfToken // empty' 2>/dev/null)"
     [ -n "$token" ] || return 1
-    printf '%s|%s' "$cookie" "$token"
+
+    # Every cookie this response set, joined - the refreshed session id included,
+    # falling back to the one we came in with when it set none.
+    cookies="$(printf '%s' "$headers" \
+        | sed -n 's/^[Ss]et-[Cc]ookie: *\([^;]*\).*/\1/p' | paste -sd'; ' -)"
+    [ -n "$cookies" ] || cookies="$session"
+
+    printf '%s|%s' "$cookies" "$token"
 }
 
 # --- The options themselves ---
@@ -140,12 +154,15 @@ csrf_material() {
 gateway_models() {
     local key="$1"
 
+    # `select(.id | contains("*") | not)`: agentgateway also advertises wildcard
+    # entries like `tetrate/*`, which are catalogue placeholders rather than
+    # models. Stored, they would sit in Trilium's model picker and fail on use.
     docker_curl -H "Authorization: Bearer $key" "$AGENTGATEWAY_URL/v1/models" 2>/dev/null \
-        | jq -c '[.data[]? | {id: .id, name: .id}]' 2>/dev/null
+        | jq -c '[.data[]? | select(.id | contains("*") | not) | {id: .id, name: .id}]' 2>/dev/null
 }
 
 apply_options() {
-    local session="$1" csrf_cookie="$2" csrf_token="$3"
+    local cookies="$1" csrf_token="$2"
     local key_file="" key="" models="" providers="" current="" desired=""
 
     key_file="$(resolve_data_location_path)/agentgateway/secrets/trilium_llm_key"
@@ -174,7 +191,7 @@ apply_options() {
 
     # Only write when something actually differs: every PUT is an entity change
     # Trilium syncs and shows in its options history.
-    current="$(api_get_with_cookie "$TRILIUM_URL" "/api/options" "$session" 2>/dev/null)" || current='{}'
+    current="$(api_get_with_cookie "$TRILIUM_URL" "/api/options" "$cookies" 2>/dev/null)" || current='{}'
     if printf '%s' "$current" | jq -e --argjson d "$desired" \
         'to_entries | map(select(.key as $k | $d | has($k))) | from_entries == $d' >/dev/null 2>&1; then
         log "Trilium AI and MCP options already match"
@@ -182,7 +199,7 @@ apply_options() {
     fi
 
     printf '%s' "$desired" | docker_curl_stdin -X PUT \
-        -H "Cookie: $session; $csrf_cookie" \
+        -H "Cookie: $cookies" \
         -H "x-csrf-token: $csrf_token" \
         -H 'Content-Type: application/json' \
         "$TRILIUM_URL/api/options" >/dev/null 2>&1 \
@@ -218,9 +235,13 @@ mint_etapi_token() {
     # still works on an enrolled instance. It 401s when the owner chose their
     # own password in the setup wizard, which is not an error worth shouting
     # about: it is the normal state of an instance this stack did not claim.
+    # `.token`: /api/login/token answers {"token": ...}, not the {"authToken": ...}
+    # the internal OpenAPI document advertises (and that /etapi/auth/login really
+    # does return). Reading the spec rather than the response meant a mint that
+    # logged 200 server-side was reported here as a failure. Both accepted.
     token="$(jq -cn --arg p "$password" '{password: $p, tokenName: "agentgateway-mcp"}' \
         | api_send_json_stdin POST "$TRILIUM_URL" "/api/login/token" 2>/dev/null \
-        | jq -r '.authToken // empty')"
+        | jq -r '.token // .authToken // empty')"
     if [ -z "$token" ]; then
         log "No ETAPI token minted: Trilium's owner password is not PASSWORD."
         log "  Create one in Trilium (Options -> ETAPI) and write it to $token_file,"
@@ -266,11 +287,13 @@ main() {
     # enrolled instance can therefore still get its MCP target wired.
     session="$(open_session)"
     if [ -n "$session" ]; then
+        log "Signed in to Trilium as the owner (its password is PASSWORD)"
         material="$(csrf_material "$session")" || material=""
         if [ -n "$material" ]; then
             csrf_cookie="${material%%|*}"
             csrf_token="${material#*|}"
-            apply_options "$session" "$csrf_cookie" "$csrf_token" || true
+            # csrf_cookie already carries the session id, so it replaces it
+            apply_options "$csrf_cookie" "$csrf_token" || true
         else
             log "WARNING: could not obtain a CSRF token from Trilium"
         fi
