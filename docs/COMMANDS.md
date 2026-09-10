@@ -40,6 +40,7 @@ The command is a symlink to `scripts/pi-pcloud` inside the checkout, so `git pul
 | `make config` | Interactive checklist to choose which optional services run |
 | `make check-env` | Validate the required `.env` variables |
 | `make recovery-kit` | Print the five values that open the off-site backup, as two sheets to store apart — verified against the live repository first ([Monitoring](MONITORING.md#the-off-site-half-needs-a-key-that-is-not-on-this-machine)) |
+| `make api-keys` | Print the gateway base URLs and the tokens that open them, to paste into a client on another machine ([Local AI](AI.md#the-key-that-is-not-password)) |
 | `make test` | Run the installer, CLI, `check-env`, start-sequence and compose-invariant suites (temporary copies only, no host changes) |
 | `make lint` | Run every static check CI runs: shell syntax and `shellcheck -s dash` over every tracked shell file, `yamllint`, `ruff`, `hadolint`, `actionlint` and a `gitleaks` history scan. A gate whose tool is missing is reported as skipped; `LINT_STRICT=1` makes a skip fail |
 

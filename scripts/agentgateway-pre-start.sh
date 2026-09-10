@@ -1,6 +1,6 @@
 #!/bin/sh
 # Prepares what agentgateway cannot get for itself: a writable data directory,
-# and an env_file carrying the three secrets its config reads from the
+# and an env_file carrying the four secrets its config reads from the
 # environment.
 #
 # An env_file rather than the `export $(cat ...)` entrypoint the other services
@@ -27,13 +27,14 @@ WRITER_UID="${WRITER_UID:-1000}"
 WRITER_GID="${WRITER_GID:-1000}"
 
 main() {
-    local data_dir="" secrets_dir="" cookie_file="" key_file=""
-    local client_secret="" cookie_secret="" llm_api_key=""
+    local data_dir="" secrets_dir="" cookie_file="" key_file="" agent_key_file=""
+    local client_secret="" cookie_secret="" llm_api_key="" agent_api_key=""
 
     data_dir="$(resolve_data_location_path)/agentgateway"
     secrets_dir="$data_dir/secrets"
     cookie_file="$secrets_dir/cookie_secret"
     key_file="$secrets_dir/llm_api_key"
+    agent_key_file="$secrets_dir/agent_api_key"
 
     mkdir -p "$secrets_dir"
     safe_chmod 700 "$secrets_dir"
@@ -58,6 +59,17 @@ main() {
         safe_chmod 600 "$key_file"
         log "Generated the agentgateway LLM API key"
     fi
+    # What tools on other machines present to the /groq/v1 and /openrouter/v1
+    # routes. Separate from the key above so revoking one does not lock the
+    # other out. Generated rather than taken from .env, because neither value
+    # Compose could substitute for a missing one is safe: empty exits at startup
+    # and a placeholder would be a password readable off a tracked file.
+    if [ ! -s "$agent_key_file" ]; then
+        write_file_atomic "$agent_key_file" generate_secret \
+            || die "Failed to generate the agentgateway agent API key"
+        safe_chmod 600 "$agent_key_file"
+        log "Generated the agentgateway agent API key"
+    fi
     # -R, and after the writes: a root-run systemd boot leaves both a 0700
     # directory the next non-root run cannot mktemp in and 0600 files it cannot
     # read, and this is a blocking pre-start hook.
@@ -65,6 +77,7 @@ main() {
 
     cookie_secret="$(cat "$cookie_file")"
     llm_api_key="sk-$(cat "$key_file")"
+    agent_api_key="sk-$(cat "$agent_key_file")"
 
     client_secret="$(get_oidc_secret agentgateway)" || client_secret=""
     if [ -z "$client_secret" ]; then
@@ -73,8 +86,9 @@ main() {
     fi
 
     mkdir -p "$AGW_ENV_DIR"
-    printf 'OIDC_COOKIE_SECRET=%s\nUI_CLIENT_SECRET=%s\nLLM_API_KEY=%s\n' \
-        "$cookie_secret" "$client_secret" "$llm_api_key" | write_secret_file "$AGW_ENV_FILE" \
+    printf 'OIDC_COOKIE_SECRET=%s\nUI_CLIENT_SECRET=%s\nLLM_API_KEY=%s\nAGENT_API_KEY=%s\n' \
+        "$cookie_secret" "$client_secret" "$llm_api_key" "$agent_api_key" \
+        | write_secret_file "$AGW_ENV_FILE" \
         || die "Failed to write $AGW_ENV_FILE"
     safe_chmod 600 "$AGW_ENV_FILE"
     # The systemd unit runs this as root; without this the file lands root:root

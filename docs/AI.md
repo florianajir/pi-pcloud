@@ -126,7 +126,13 @@ each surface has to gate itself:
 |---------|----------|--------|
 | `/ui` | `ui.policies.oidc` | Authelia, `admin_only` — the `admin` group with 2FA |
 | `/v1` | `llm.policies.apiKey`, `mode: strict` | 401 without a key |
+| `/groq/v1`, `/openrouter/v1` | each route's own `policies.apiKey` | 401 without a key |
 | `/mcp` | whatever policy is attached to the target | **nothing by default** |
+
+The third row repeats the second rather than inheriting it: `llm.policies.apiKey`
+is attached to the `llm:` section and does not cover a top-level route. Drop that
+block from either path route and the provider behind it is reachable with no
+credential by anything that clears the LAN allowlist.
 
 The gateway runs the OIDC flow itself against the `agentgateway` Authelia client — authorization code
 with PKCE, callback `https://llm.<HOST_NAME>/oauth/callback`. A forward-auth in front of it would
@@ -160,6 +166,17 @@ caller and the gateway cannot drift apart.
 Open WebUI mounts **that file alone**, not the directory it sits in: `cookie_secret` next to it signs
 the admin session cookie, and the chat has no business being able to read it.
 
+`agent_api_key` is generated the same way, for tools running on other machines, so revoking one does not
+lock the other out. The stored value carries no prefix — the `sk-` belongs to the credential:
+
+```bash
+make api-keys   # both tokens, with the base URL each one opens
+```
+
+Neither is settable from `.env`, and neither can be a key you created in the UI: a route declared in
+`config.yaml` cannot reference one held in the database. The UI's own keys still work on `/v1`, the
+surface the UI manages.
+
 There is no salt key to lose sleep over. Provider credentials added through the UI are stored by
 agentgateway in the SQLite database, which backrest snapshots whole.
 
@@ -183,6 +200,23 @@ Anything OpenAI-compatible is a `custom` provider. z.ai's free GLM tier, for exa
 `https://api.z.ai/api/paas/v4` and a `model` of `glm-4.7-flash` — add it under **Models** in the UI and
 it lands in SQLite, no file edit and no restart. Pair it with a token rate limit: the free tiers are
 quota'd per day, and a runaway agent loop is exactly what exhausts one.
+
+### …and why Groq and OpenRouter are not
+
+They sit on their own paths, `/groq/v1` and `/openrouter/v1`, as top-level `routes:` in `config.yaml`.
+The reason is `GET /v1/models`. A provider added through the UI is reached by *model name*, so a
+wildcard entry like `groq/*` is all `/v1/models` lists — the wildcard itself, not the models behind it.
+A tool that builds its picker from that endpoint sees nothing usable.
+
+A top-level route serves the real catalogue, because `policies.ai.routes` maps a URL suffix to a
+handler: `/chat/completions` stays `completions`, so tokenisation and budgets still apply, while
+`/models` is `passthrough` and answers with the provider's own list. A `models` handler that would
+synthesise the list locally exists in the schema; v1.5.0 answers it `501 Route 'Models' not implemented`.
+
+The cost: these routes are invisible to the UI, which lists only `llm.provider` and `llm.model`
+resources. A third provider this way is a file edit and a `docker compose up -d agentgateway`, not a
+form. Use the UI when you are willing to name the models by hand, a path route when the client needs to
+discover them.
 
 ### Two things that will bite you
 
