@@ -193,6 +193,15 @@ jobs:
           test -f ./config/headscale/config.yaml
           test -f ./config/headscale/policy.hujson
 
+      # After the chmod above, never before it: Traefik refuses an acme.json
+      # that is wider than 0600, and `chmod -R a+rX` would make it 0644.
+      - name: Issue the certificate CI's own containers trust
+        run: |
+          set -euo pipefail
+          sh ./tests/ci-tls-store.sh \
+            /tmp/pi-pcloud-ci-data/traefik/letsencrypt \
+            /tmp/pi-pcloud-ci-data/traefik/ci-tls
+
       - name: Pull images
         run: |
           set -euo pipefail
@@ -226,8 +235,8 @@ jobs:
           # at four containers.
           started="$(docker compose ps --services | wc -l)"
           echo "started ${started} services"
-          if [ "${started}" -lt 26 ]; then
-            echo "::error::only ${started} services started, expected at least 26"
+          if [ "${started}" -lt 28 ]; then
+            echo "::error::only ${started} services started, expected at least 28"
             exit 1
           fi
 
@@ -247,9 +256,13 @@ jobs:
       - name: Run the bootstraps the boot sequence runs
         timeout-minutes: 10
         env:
-          # headscale is ci-excluded, so there is no container for its init to
-          # talk to; pihole-bootstrap downloads twenty blocklists and updates
-          # gravity, which is a network flake looking for somewhere to happen.
+          # headscale-init.sh ends in `tailscale up` against pi-tailscale, and
+          # that container needs /dev/net/tun and real VPN auth, so it is
+          # ci-excluded and always will be - main() dies on the missing
+          # container after two minutes of waiting. Headscale itself now runs
+          # here; this hook is the part of its setup CI cannot reach.
+          # pihole-bootstrap downloads twenty blocklists and updates gravity,
+          # which is a network flake looking for somewhere to happen.
           HOOKS_SKIP: headscale-init.sh pihole-bootstrap.sh
         run: sh ./scripts/run-hooks.sh post-start blocking
 

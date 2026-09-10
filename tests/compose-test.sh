@@ -225,6 +225,8 @@ ok "the computed list asks for the optional services" \
 # because it spent its whole life on the excluded list below this line.
 ok "and for the one that only its own name selects" \
     "$(profile_lines | grep -cx 'stremio-lan')" 1
+ok "and for the gateway that used to ride in on open-webui's profile" \
+    "$(profile_lines | grep -cx 'agentgateway')" 1
 ok "and for none compose.test.yaml excludes" \
     "$(profile_lines | grep -cxE 'gluetun|qbittorrent|stremio|llama-cpp|parakeet|piper|headplane')" 0
 ok "and never for the catch-all, which would re-enable them" \

@@ -58,43 +58,6 @@ services:
     # junk-token requests at Cloudflare's real API.
     profiles: [ci-excluded]
 
-  headscale:
-    # Not a name resolution problem - compose.yaml pins auth.$HOST_NAME at
-    # Traefik's frontend address for exactly this call, and that works here. It
-    # is TLS: the ACME resolver cannot issue anything against a placeholder
-    # Cloudflare token, so Traefik answers with its own generated certificate
-    # and headscale's discovery call fails verification. With
-    # only_start_if_oidc_is_available: true, deliberately, that is fatal.
-    #
-    # Fixable, but not in one line: it needs a CI-only CA whose leaf Traefik
-    # serves and whose root headscale trusts through SSL_CERT_FILE. The same
-    # CA would unblock agentgateway - its image already sets SSL_CERT_FILE
-    # itself, so that stack honours it - but not headplane, and not
-    # scripts/headscale-init.sh: both are blocked by tailscale instead.
-    #
-    # The awkward half is Traefik's side. Its static configuration comes from
-    # CLI flags, and Traefik takes flags, env and file as mutually exclusive
-    # sources - measured, not assumed: with the flags in place, a
-    # TRAEFIK_PROVIDERS_FILE_FILENAME in the environment leaves `providers`
-    # empty in the loaded static config. So the file provider that would carry
-    # a default certificate cannot be bolted on from here without overriding
-    # the whole `command` list.
-    profiles: [ci-excluded]
-
-  agentgateway:
-    # Same untrusted certificate as headscale: its ui.policies.oidc makes it
-    # fetch the discovery document from https://auth.$HOST_NAME before it
-    # serves anything, and it exits when that fails - so Traefik's docker
-    # provider never loads its router and the probe reports a 404 rather than
-    # the 403 it expects.
-    #
-    # !override, not a plain list: compose *appends* profiles across files, so
-    # without it this service stays reachable through the `open-webui` profile
-    # it carries in production - and CI, which starts open-webui, would start
-    # the one container it cannot run. tests/ci-profiles.py refuses exactly that
-    # collision; it is what caught gluetun riding in on `shelfmark`.
-    profiles: !override [ci-excluded]
-
   llama-cpp:
     # Needs the 4.4GB of Gemma 4 weights that scripts/llama-cpp-pre-start.sh
     # seeds into the llama_models volume, which CI does not run.
@@ -109,6 +72,35 @@ services:
     # Same as piper: the build bakes in ~660MB of Parakeet weights, and nothing
     # else in the stack depends on it being up.
     profiles: [ci-excluded]
+
+  # --- headscale and agentgateway: trust the CI certificate authority ---
+  #
+  # Both fetch Authelia's OIDC discovery document over TLS before they serve
+  # anything, and both exit when that fails - headscale because
+  # only_start_if_oidc_is_available is deliberately true, agentgateway because
+  # of ui.policies.oidc. That is what kept them out of CI: the ACME resolver
+  # holds a placeholder Cloudflare token here, so Traefik used to answer with
+  # its own generated certificate and verification failed.
+  #
+  # tests/ci-tls-store.sh now issues a throwaway CA and files its leaf in the
+  # ACME store compose.yaml already mounts, so Traefik serves it without any
+  # change to its configuration. These two only need the root.
+  #
+  # SSL_CERT_FILE rather than a mount over the system bundle: headscale is Go
+  # and agentgateway's image sets this same variable itself, which is how we
+  # know its TLS stack reads it. Nothing here talks to the public internet, so
+  # replacing the bundle rather than appending to it costs nothing.
+  headscale:
+    environment:
+      - SSL_CERT_FILE=/ci-tls/ca-cert.pem
+    volumes:
+      - ${DATA_LOCATION:-./data}/traefik/ci-tls:/ci-tls:ro
+
+  agentgateway:
+    environment:
+      - SSL_CERT_FILE=/ci-tls/ca-cert.pem
+    volumes:
+      - ${DATA_LOCATION:-./data}/traefik/ci-tls:/ci-tls:ro
 
   # --- open-webui: run without the excluded inference backend ---
   open-webui:
