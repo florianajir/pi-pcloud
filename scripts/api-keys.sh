@@ -38,24 +38,26 @@ main() {
 
   Gateway API keys — treat these like passwords.
 
-  Local model (Open WebUI uses this one too)
-    Base URL  https://llm.$host_name/v1
+  These are what a client presents TO the gateway. They are not the provider
+  keys: GROQ_API_KEY and OPENROUTER_API_KEY stay in .env, are held by the
+  gateway, and are never sent by a client. One token therefore opens every
+  provider, and which models you get depends on the URL, not on the token.
+
+  For tools on other machines
+    Token     $agent_key
+    opens     https://llm.$host_name/groq/v1         Groq, full catalogue
+              https://llm.$host_name/openrouter/v1   OpenRouter, full catalogue
+
+  Open WebUI's own — also accepted on the two URLs above
     Token     $llm_key
+    opens     https://llm.$host_name/v1              the local model
 
-  Groq — full upstream model catalogue
-    Base URL  https://llm.$host_name/groq/v1
-    Token     $agent_key
+  Two tokens rather than one so that revoking a tool on a laptop does not log
+  Open WebUI out of the models.
 
-  OpenRouter — full upstream model catalogue
-    Base URL  https://llm.$host_name/openrouter/v1
-    Token     $agent_key
-
-  The two path routes accept the local-model token as well; the separate one
-  exists so revoking a tool on a laptop does not lock Open WebUI out.
-
-  Reachable from the LAN and the tailnet only. Rotate by deleting the file in
-  $secrets_dir and running \`make config\`, then
-  \`docker compose up -d agentgateway\` - \`restart\` keeps the old value.
+  Reachable from the LAN and the tailnet only. Rotate one by deleting its file
+  in $secrets_dir, then \`make config\` and
+  \`docker compose up -d agentgateway\` — \`restart\` keeps the old value.
 
 EOF
 }
