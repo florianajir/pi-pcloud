@@ -174,6 +174,11 @@ services:
       - VAULTWARDEN_DB_PASSWORD=${PASSWORD}
       - VAULTWARDEN_SQL_BACKUP_DIR=/userdata/vaultwarden/backups
       - VAULTWARDEN_SQL_BACKUP_KEEP=7
+      - FRESHRSS_DB_NAME=freshrss
+      - FRESHRSS_DB_USER=freshrss
+      - FRESHRSS_DB_PASSWORD=${PASSWORD}
+      - FRESHRSS_SQL_BACKUP_DIR=/userdata/freshrss/backups
+      - FRESHRSS_SQL_BACKUP_KEEP=7
       - RESTIC_PACK_SIZE=32
       - GOMEMLIMIT=1200MiB
       # Backrest's API serves the repo password and S3 keys to anyone who can reach
@@ -213,6 +218,11 @@ services:
       # Writable so the db-backup.sh hook can drop its pg_dump here, like lldap's.
       - ${DATA_LOCATION:-./data}/vaultwarden/backups:/userdata/vaultwarden/backups
       - ${DATA_LOCATION:-./data}/lldap/backups:/userdata/lldap/backups
+      # Subscriptions and read state are in Postgres; what is only here is
+      # data/config.php (the system settings) and data/users/*/config.php.
+      - ${DATA_LOCATION:-./data}/freshrss:/userdata/freshrss:ro
+      # Writable so the db-backup.sh hook can drop its pg_dump here, like lldap's.
+      - ${DATA_LOCATION:-./data}/freshrss/backups:/userdata/freshrss/backups
       - ${DATA_LOCATION:-./data}/authelia-config:/userdata/authelia-config
       - ${DATA_LOCATION:-./data}/open-webui/backups:/userdata/open-webui/backups
       # The only copy of the models, providers and MCP targets added through its
@@ -2013,6 +2023,149 @@ services:
     mem_limit: 1g
     oom_score_adj: *oom-score-deprioritize
 
+  freshrss:
+    <<: *service-defaults
+    # The Debian image, deliberately not -alpine: mod_auth_openidc is only built
+    # into this variant, and OIDC_ENABLED below makes Apache refuse to start
+    # without it ("The auth_openidc_module is not available").
+    image: freshrss/freshrss:1.30.0@sha256:258b8edfc8a76a61f60d2d6a14d8f8d12495d78abf38646a2137612dfa264a21
+    container_name: pi-freshrss
+    profiles: ["freshrss", "all"]
+    networks:
+      # frontend for Traefik, and for the feed fetches themselves: unlike the
+      # other library services this one's whole job is outbound HTTP to
+      # arbitrary hosts, so an internal-only segment would break it.
+      - frontend
+      # postgres is on internal segments only; this is FreshRSS's own.
+      - rss
+    extra_hosts:
+      # Authelia's discovery document, fetched by mod_auth_openidc through
+      # Traefik on the first authorization request.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 80
+    # Neither OIDC_CLIENT_SECRET nor OIDC_CLIENT_CRYPTO_KEY has a *_FILE variant:
+    # Apache expands both out of its own environment while parsing
+    # FreshRSS.Apache.conf, so they have to be real env vars. Same trick as
+    # vaultwarden and open-webui. `$$@` is compose's escape for `$@`, which
+    # passes `command:` below through to the image's entrypoint unchanged.
+    entrypoint:
+      - sh
+      - -c
+      - 'export OIDC_CLIENT_SECRET="$(cat /run/secrets/oidc_freshrss_secret)" OIDC_CLIENT_CRYPTO_KEY="$(cat /run/secrets/freshrss_oidc_crypto_key)" && exec ./Docker/entrypoint.sh "$$@"'
+      - sh
+    # An `entrypoint:` in compose also **clears the image's CMD**, and the image
+    # entrypoint ends in `exec "$$@"` - so without this the container ran the
+    # setup, execed nothing and exited 0, with the logs stopping after "Enabling
+    # module auth_openidc." rather than saying anything was wrong.
+    #
+    # It is the image's own CMD with its two conditionals collapsed, because
+    # both are constants here: CRON_MIN is always set, and OIDC_ENABLED is
+    # always 1. Re-check it against `docker inspect` on an image bump.
+    command:
+      - /bin/bash
+      - -o
+      - pipefail
+      - -c
+      - 'cron && . /etc/apache2/envvars && exec apache2 -D FOREGROUND -D OIDC_ENABLED'
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      # Feed refresh. The image only installs its crontab when CRON_MIN is set,
+      # so without this nothing ever updates except the browser's own on-demand
+      # refresh. Off the hour, away from the 0-minute jobs elsewhere.
+      #
+      # It is also what makes the entrypoint dump the whole environment - this
+      # service's OIDC client secret and Postgres password included - to a 0644
+      # /var/www/FreshRSS/Docker/env.txt, so the cron job can source it. That
+      # path is in the container's writable layer, not under the data mount
+      # below, so it reaches neither the host disk nor a backup; see
+      # docs/SECURITY.md#accepted-risks.
+      - CRON_MIN=13,43
+      # Traefik's address alone, matching IMMICH_TRUSTED_PROXIES and Nextcloud's
+      # TRUSTED_PROXIES. The /24 this replaces trusted every container on
+      # frontend, so any of them could set X-Forwarded-For and choose the
+      # address FreshRSS logs and rate-limits on. RemoteIP only rewrites for a
+      # peer in this list; Traefik is the only peer that ever reaches :80.
+      - TRUSTED_PROXY=172.30.11.250/32
+      # journald already has Traefik's access log for this route; a second copy
+      # of every feed poll is noise.
+      - ENABLE_ACCESS_LOG=0
+      - OIDC_ENABLED=1
+      - OIDC_PROVIDER_METADATA_URL=https://auth.${HOST_NAME:-pi.lan}/.well-known/openid-configuration
+      - OIDC_CLIENT_ID=freshrss
+      # No `groups`: FreshRSS takes no roles from the token. The admin is the
+      # account FRESHRSS_USER creates below; everyone else is auto-registered as
+      # a plain user on first sign-in (http_auth_auto_register, on by default),
+      # which is why Authelia's one_factor policy is the real gate on who gets in.
+      - OIDC_SCOPES=openid profile email
+      # The claim that becomes the FreshRSS username. Authelia sends the LLDAP
+      # uid, so each account gets its own subscriptions and read state rather
+      # than everyone landing on the admin's.
+      - OIDC_REMOTE_USER_CLAIM=preferred_username
+      # TLS terminates at Traefik. Without these mod_auth_openidc builds its
+      # redirect_uri from the internal http:// request and Authelia rejects it
+      # as unregistered.
+      - OIDC_X_FORWARDED_HEADERS=X-Forwarded-Proto X-Forwarded-Host
+      - DB_PASSWORD=${PASSWORD}
+      # Read on the first run only: the entrypoint exits 3 ("already installed")
+      # on every later start. `--auth-type http_auth` is what makes FreshRSS
+      # trust the REMOTE_USER that mod_auth_openidc sets.
+      #
+      # `$$` so compose leaves the reference alone and the container's own shell
+      # expands it - the entrypoint runs this string through `eval` and then
+      # word-splits the result, so a PASSWORD containing whitespace would not
+      # survive. The generated one is `openssl rand -hex 32`.
+      - FRESHRSS_INSTALL=--api-enabled --auth-type http_auth --base-url https://rss.${HOST_NAME:-pi.lan} --db-type pgsql --db-host postgres --db-base freshrss --db-user freshrss --db-password $${DB_PASSWORD} --default-user ${ADMIN_USER:-admin} --language ${DEFAULT_LANGUAGE:-en} --title pi-pcloud
+      # Same, for the admin account. The password is only ever used by the
+      # Google Reader API (`/api/greader.php`), which mobile readers speak and
+      # which is outside the OIDC-protected path - the web UI has no password
+      # field at all under http_auth.
+      - FRESHRSS_USER=--user ${ADMIN_USER:-admin} --password $${DB_PASSWORD} --api-password $${DB_PASSWORD} --email ${EMAIL} --language ${DEFAULT_LANGUAGE:-en}
+    volumes:
+      - ${DATA_LOCATION:-./data}/freshrss:/var/www/FreshRSS/data
+      - ./config/freshrss/healthcheck.sh:/healthcheck.sh:ro
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_freshrss_secret.txt:/run/secrets/oidc_freshrss_secret:ro
+      # Generated by scripts/freshrss-pre-start.sh. mod_auth_openidc encrypts its
+      # session cookie and its cache with this; regenerating it only logs
+      # everyone out, so it is not derived from PASSWORD either.
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/freshrss_oidc_crypto_key:/run/secrets/freshrss_oidc_crypto_key:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-default
+      # The image ships no HEALTHCHECK, and its own cli/health.php is only half
+      # of one: it proves Apache is serving but issues no query, so it reports
+      # healthy against a dead Postgres - which is also what the Uptime Kuma
+      # monitor watches. The mounted script runs that probe *and* a SELECT 1.
+      test: ["CMD", "/healthcheck.sh"]
+      start_period: 60s
+    labels:
+      - "homepage.group=News"
+      - "homepage.name=FreshRSS"
+      - "homepage.icon=freshrss.png"
+      - "homepage.href=https://rss.${HOST_NAME:-pi.lan}"
+      - "homepage.description=RSS and Atom feed reader"
+      # No homepage.widget: the freshrss widget authenticates with the account's
+      # API password, and publishing one account's unread count on a shared
+      # dashboard would be the admin's reading list, not the viewer's.
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # lan@docker alone, no authelia@docker: FreshRSS runs the OIDC flow itself
+      # over mod_auth_openidc, and forward-auth on top would also cover
+      # /api/greader.php - the endpoint mobile readers use, which cannot pass an
+      # interactive portal. Same rationale as Kavita's OPDS clients.
+      - "traefik.http.routers.freshrss.rule=Host(`rss.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.freshrss.entrypoints=websecure"
+      - "traefik.http.routers.freshrss.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.freshrss.tls=true"
+      - "traefik.http.services.freshrss.loadbalancer.server.port=80"
+    cpu_shares: *cpu-prio-batch
+    # Apache prefork plus PHP: idle is ~60 MB, and the refresh cron adds one
+    # more PHP process that parses whatever a feed returns.
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize
+
   ntfy:
     <<: *service-defaults
     image: binwiederhier/ntfy:v2.28.0
@@ -2745,6 +2898,7 @@ services:
       - auth
       - ai
       - vault
+      - rss
     healthcheck:
       <<: *healthcheck-fast
       test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres}"]
@@ -2914,6 +3068,13 @@ networks:
   vault:
     driver: bridge
     name: vault
+    internal: true
+  # FreshRSS and postgres only. FreshRSS reaches the internet over `frontend`
+  # (it fetches feeds), so this segment carries nothing but its database
+  # traffic - the same split as vault, immich, nextcloud and ai.
+  rss:
+    driver: bridge
+    name: rss
     internal: true
   # Same idea for backrest, whose API returns the restic key and the S3 keys to any
   # authenticated caller: on frontend that port was open to ~24 containers, here to

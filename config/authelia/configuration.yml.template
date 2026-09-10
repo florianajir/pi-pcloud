@@ -444,6 +444,38 @@ __OIDC_PRIVATE_KEY__
         token_endpoint_auth_method: client_secret_basic
         userinfo_signed_response_alg: none
 
+      - client_id: freshrss
+        client_name: FreshRSS
+        client_secret: '{{ secret "/config/secrets/oidc_freshrss_secret_hash" }}'
+        public: false
+        authorization_policy: one_factor
+        consent_mode: implicit
+        # mod_auth_openidc's own callback path, fixed by the image's
+        # FreshRSS.Apache.conf (OIDCRedirectURI /i/oidc/) - not configurable
+        # through an environment variable, so it has to match exactly.
+        redirect_uris:
+          - 'https://rss.__HOST_NAME__/i/oidc/'
+        # The image's FreshRSS.Apache.conf sets no OIDCPKCEMethod, but
+        # mod_auth_openidc defaults to S256 anyway - the authorization request it
+        # builds does carry a code_challenge (verified against the running
+        # container), so requiring it costs nothing. Drop this if a future image
+        # ever pins OIDCPKCEMethod to none.
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        # No `groups`: FreshRSS derives no roles from the token - the admin is
+        # the account created by FRESHRSS_USER, everyone else is auto-registered
+        # as a plain user. This policy is what decides who gets in at all.
+        scopes:
+          - openid
+          - profile
+          - email
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+        token_endpoint_auth_method: client_secret_basic
+        userinfo_signed_response_alg: none
+
 notifier:
   disable_startup_check: true
   smtp:

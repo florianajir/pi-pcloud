@@ -1,6 +1,6 @@
 # PostgreSQL major upgrades
 
-Six services share one PostgreSQL cluster: `immich`, `nextcloud`, `authelia`, `lldap`, `open-webui`, `vaultwarden`. A major version bump therefore moves all six at once, or none of them.
+Seven services share one PostgreSQL cluster: `immich`, `nextcloud`, `authelia`, `lldap`, `open-webui`, `vaultwarden`, `freshrss`. A major version bump therefore moves all seven at once, or none of them.
 
 It is a **dump and restore**, not `pg_upgrade`. The `ghcr.io/immich-app/postgres` image ships exactly one major's binaries and `pg_upgrade` needs both, so it would take a custom image carrying two Postgres builds plus VectorChord. The dump also rebuilds the vchord indexes at the new extension version, which is the rebuild the VectorChord release notes ask for after any vchord change anyway.
 
@@ -10,7 +10,7 @@ It is a **dump and restore**, not `pg_upgrade`. The `ghcr.io/immich-app/postgres
 
 **Never start the stack on the new compose file before the migration has run.**
 
-The data directory moves with the major (see below), so a `make start` on the new checkout finds nothing at the new path, initialises an empty cluster, and `config/postgres/init-databases.sh` obligingly creates all six roles and all six *empty* databases. Every service then connects successfully — to nothing. Nextcloud reports itself uninstalled, Immich starts re-running its migrations, and both begin writing into the empty cluster. The old data is still intact, but you are now merging two divergent clusters instead of doing a migration.
+The data directory moves with the major (see below), so a `make start` on the new checkout finds nothing at the new path, initialises an empty cluster, and `config/postgres/init-databases.sh` obligingly creates all seven roles and all seven *empty* databases. Every service then connects successfully — to nothing. Nextcloud reports itself uninstalled, Immich starts re-running its migrations, and both begin writing into the empty cluster. The old data is still intact, but you are now merging two divergent clusters instead of doing a migration.
 
 Between checking out the new compose file and finishing `make pg-upgrade`, the only commands that are safe are the ones on this page. Not `make start`, not `make update`, not `make restart`, and not the `pi-pcloud` service starting on its own after a reboot — if the host reboots mid-procedure, run the migration before doing anything else.
 
@@ -38,7 +38,7 @@ That is not just a compatibility detail — it is the rollback. The old cluster 
 
    `vchord.control` sets `superuser = true`, which is why the `immich` role — deliberately not a superuser — cannot install or update it itself. `scripts/postgres-bootstrap.sh` runs `ALTER EXTENSION ... UPDATE` as `postgres` on every boot, so later vchord bumps *within* a major (where the data directory is reused) are hands-off. Immich's own `pg_dumpall`-based backup is off in `config/immich/config.yaml` for the same reason; leave it off.
 
-3. **Bump the Backrest client in the same change.** `config/backrest/Dockerfile` pins `postgresqlNN-client`, and `scripts/db-backup.sh` dumps through it. A client older than the server refuses to dump at all, so an unbumped Backrest silently stops backing up all six databases the night after the cutover.
+3. **Bump the Backrest client in the same change.** `config/backrest/Dockerfile` pins `postgresqlNN-client`, and `scripts/db-backup.sh` dumps through it. A client older than the server refuses to dump at all, so an unbumped Backrest silently stops backing up all seven databases the night after the cutover.
 
 4. **Check free space.** The script wants 3× the cluster size and refuses to start below it: the dumps are roughly one copy and the new cluster another.
 
@@ -69,7 +69,7 @@ docker exec pi-postgres psql -U postgres -Atc 'SHOW server_version;'
 make pg-upgrade to=$(grep -m1 'image: ghcr.io/immich-app/postgres:' compose.yaml | awk '{print $2}')
 ```
 
-`make pg-upgrade` then, in order: pulls the target image, **stops only the Postgres-backed services** (immich, nextcloud, authelia, lldap, open-webui, vaultwarden, plus backrest so no scheduled dump fires mid-window), dumps roles and all six databases, counts every row in every table, stops Postgres, starts a throwaway container on the new data directory, restores into it, runs `ANALYZE` per database so the new cluster starts with planner statistics, **re-counts every table and compares the two lists whole**, and refuses to touch `compose.yaml` if they differ at all. On a mismatch it stops with the old cluster untouched and the new one left in place for inspection.
+`make pg-upgrade` then, in order: pulls the target image, **stops only the Postgres-backed services** (immich, nextcloud, authelia, lldap, open-webui, vaultwarden, freshrss, plus backrest so no scheduled dump fires mid-window), dumps roles and all seven databases, counts every row in every table, stops Postgres, starts a throwaway container on the new data directory, restores into it, runs `ANALYZE` per database so the new cluster starts with planner statistics, **re-counts every table and compares the two lists whole**, and refuses to touch `compose.yaml` if they differ at all. On a mismatch it stops with the old cluster untouched and the new one left in place for inspection.
 
 **The DNS/VPN path never stops.** Pi-hole, unbound, headscale and tailscale use no Postgres (headscale is SQLite), so devices on the tailnet keep resolving and routing through the whole cutover. What the window does cost: the stopped services themselves are unreachable, and SSO logins fail while Authelia is down — established Tailscale connections and plain internet access are unaffected. The writers stop *before* the dump on purpose: anything written between the dump and the switch would otherwise be silently absent from the new cluster.
 
@@ -125,7 +125,7 @@ Do these in order — each one exercises a different failure mode, and the first
 | 5 | **Vaultwarden** | Unlock the vault and open one entry | Its diesel migrations ran against restored data |
 | 6 | **Nextcloud** | `docker exec pi-nextcloud php occ status` then `docker exec pi-nextcloud php occ db:add-missing-indices` | `installed: true` and no missing indices; a `dbpassword` mismatch shows here first |
 | 7 | **Open WebUI** | Load a past conversation, not just the login page | SQLAlchemy reads restored history rather than an empty database |
-| 8 | Backups still work | Run the Backrest plan by hand and check all six `db-backup.sh` hooks succeed | The client/server major mismatch from step 5 of the cutover |
+| 8 | Backups still work | Run the Backrest plan by hand and check all seven `db-backup.sh` hooks succeed | The client/server major mismatch from step 5 of the cutover |
 | 9 | Row counts | Already verified by the script; `--keep-dumps` leaves `counts.before`/`counts.after` for a second look | — |
 
 Only once all nine pass:

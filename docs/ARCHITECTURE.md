@@ -78,6 +78,7 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **Kapowarr** | Comics and manga manager; feeds the Kavita libraries | users |
 | **Shelfmark** | Book and audiobook search; files what it downloads into the Kavita Books library | users |
 | **Audiobookshelf** | Audiobook player for `download/audiobooks/`, with Audible metadata matching and progress sync | users |
+| **FreshRSS** | RSS/Atom reader; per-account subscriptions and read state in Postgres, refreshed by its own cron | users, and Google Reader API clients |
 | **Stremio + Comet** | Streaming server and its debrid addon | users |
 | **stremio-lan** | The same Stremio server on a LAN macvlan address instead of the VPN, for DLNA casting — mutually exclusive with `stremio` | users, LAN renderers |
 | **Open WebUI** | Local AI chat frontend — see [Local AI](AI.md) | users |
@@ -109,7 +110,7 @@ flowchart TB
         AutheliaB --- PG_Auth[(postgres)]
         AutheliaB --- Redis_Auth[(redis)]
     end
-    subgraph app["nextcloud · immich · ai · vault · ntfy — internal"]
+    subgraph app["nextcloud · immich · ai · vault · rss · ntfy — internal"]
         App["each app + only its own backends"]
     end
     subgraph dns["dns_internal — 172.30.53.0/24, no gateway"]
@@ -407,6 +408,34 @@ The trade-off is real and deliberate: `Downloads` is writable too, and
 qBittorrent seeds from there, so deleting a file in Nextcloud can break the
 torrent still serving it. Kapowarr's moves are copy-then-delete, so avoid
 reorganising `Comics`/`Manga` while it has a task running.
+
+### Feeds
+
+FreshRSS is the odd one out in this group: it has no file library at all. Subscriptions,
+articles and per-account read state live in the shared PostgreSQL (database and role
+`freshrss`), reached over its own `internal: true` `rss` segment; `${DATA_LOCATION}/freshrss`
+holds only `data/config.php`, the per-user `config.php` files, and caches. It is on
+`frontend` as well, and unlike the other library services that is not just for Traefik —
+fetching arbitrary feeds *is* the job, so an internal-only placement would break it.
+
+Refreshing is the image's own cron, enabled by `CRON_MIN` (twice an hour here). Left
+unset the image installs no crontab at all and feeds only update when a browser asks.
+
+The SSO wiring is unusual too, and it is why the **Debian** image is pinned rather than
+`-alpine`: the OIDC flow runs in Apache through `mod_auth_openidc`, which only that
+variant ships. Apache guards `/i/` — the whole web UI — and passes the
+`preferred_username` claim down as `REMOTE_USER`; FreshRSS is installed with
+`--auth-type http_auth` and trusts it, auto-registering an account on first sign-in
+(`http_auth_auto_register`, on by default). So Authelia's `one_factor` policy on the
+client is the entire access decision, and every LLDAP account gets its own reading list
+rather than sharing the admin's. `/api/greader.php` is deliberately outside that gate,
+because feed-reader apps cannot complete an interactive portal; it checks the account's
+own API password, which is `PASSWORD` and is rotated by `rotate-password.sh`.
+
+That password lands in two places a rotation has to reach together — the `freshrss`
+Postgres role and `data/config.php`, written once at install — which is the same shape
+as Nextcloud's `dbpassword`, and handled the same way: `cli/reconfigure.php` first,
+`ALTER ROLE` second.
 
 **Recommended layout:** clone onto the SSD and symlink it into place, so systemd and the docs agree on one path.
 

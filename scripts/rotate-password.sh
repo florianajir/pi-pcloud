@@ -89,7 +89,7 @@ confirm() {
     else
         echo "⚠️  This will rotate PASSWORD everywhere it's persisted:"
         echo "   Postgres roles (postgres, immich, nextcloud, authelia, lldap, open-webui,"
-        echo "   vaultwarden), the LLDAP admin account (LDAP password-modify, not env),"
+        echo "   vaultwarden, freshrss), the LLDAP admin account (LDAP password-modify, not env),"
         echo "   Authelia's ldap_password + db_password secrets, Nextcloud (DB + admin"
         echo "   login), Pi-hole, Beszel, ntfy, qBittorrent, Prowlarr, Kapowarr, Dockhand,"
         echo "   and recreates the containers that bake it into their environment."
@@ -185,7 +185,7 @@ rotate_postgres_roles() {
     if ! container_is_running "pi-postgres"; then
         note "✘ SKIPPED all postgres roles (pi-postgres not running)"
         IMMICH_ROLE_OK=0; AUTHELIA_ROLE_OK=0; LLDAP_ROLE_OK=0; OPEN_WEBUI_ROLE_OK=0
-        VAULTWARDEN_ROLE_OK=0
+        VAULTWARDEN_ROLE_OK=0; FRESHRSS_ROLE_OK=0
         return 0
     fi
     rotate_postgres_role postgres postgres
@@ -194,8 +194,9 @@ rotate_postgres_roles() {
     rotate_postgres_role lldap lldap            && LLDAP_ROLE_OK=1      || LLDAP_ROLE_OK=0
     rotate_postgres_role open-webui open-webui  && OPEN_WEBUI_ROLE_OK=1 || OPEN_WEBUI_ROLE_OK=0
     rotate_postgres_role vaultwarden vaultwarden && VAULTWARDEN_ROLE_OK=1 || VAULTWARDEN_ROLE_OK=0
-    # nextcloud is rotated in rotate_nextcloud_db_password(), after config.php
-    # is updated - see the ordering note there.
+    # nextcloud is rotated in rotate_nextcloud_db_password() and freshrss in
+    # rotate_freshrss(), each after its own config.php is updated - see the
+    # ordering notes there.
 }
 
 # --- LLDAP: the actual admin login password (LDAP password-modify, not env) ---
@@ -390,6 +391,63 @@ rotate_nextcloud_admin_password() {
         fi
     done
     note "✘ FAILED to reset Nextcloud admin password (tried '$EMAIL', '$ADMIN_USER') - reset manually via occ user:resetpassword"
+}
+
+# --- FreshRSS: data/config.php dbpassword + the admin account's API password ---
+# Same shape as Nextcloud, and for the same reason: FreshRSS keeps its database
+# password in data/config.php, written once at install, so rotating the role
+# alone would lock it out for good. reconfigure.php rewrites that file, and
+# update-user.php resets the password the Google Reader API checks (the web UI
+# has none - it trusts REMOTE_USER from mod_auth_openidc). update-user.php needs
+# the database, so it runs while the OLD role password is still valid; the gap
+# between config.php and the ALTER ROLE self-heals on the next request.
+#
+# The new password reaches both through `docker exec -e` by name. Spelled out on
+# the exec's own argv it would sit in the *host* process table; this way only the
+# container's php argv carries it, and FreshRSS's CLI has no env-var or stdin
+# variant to do better.
+
+rotate_freshrss() {
+    FRESHRSS_ROLE_OK=0
+
+    if ! container_is_running "pi-freshrss"; then
+        note "… SKIPPED FreshRSS (pi-freshrss not running)"
+        return 0
+    fi
+
+    if FRESHRSS_NEW_PASSWORD="$NEW_PASSWORD" docker exec -e FRESHRSS_NEW_PASSWORD pi-freshrss \
+        sh -c './cli/update-user.php --user "$1" --password "$FRESHRSS_NEW_PASSWORD" --api-password "$FRESHRSS_NEW_PASSWORD"' \
+        _ "$ADMIN_USER" >/dev/null 2>&1; then
+        note "✔ Reset the FreshRSS API password for user '$ADMIN_USER'"
+    else
+        note "✘ FAILED to reset the FreshRSS API password for '$ADMIN_USER' - existing feed-reader apps keep working on the old one"
+    fi
+
+    if FRESHRSS_NEW_PASSWORD="$NEW_PASSWORD" docker exec -e FRESHRSS_NEW_PASSWORD pi-freshrss \
+        sh -c './cli/reconfigure.php --db-password "$FRESHRSS_NEW_PASSWORD"' >/dev/null 2>&1; then
+        note "✔ Updated FreshRSS data/config.php db password"
+    else
+        note "✘ FAILED to update FreshRSS data/config.php - NOT rotating postgres role 'freshrss', or FreshRSS would be locked out of its DB"
+        return 1
+    fi
+
+    if rotate_postgres_role freshrss freshrss; then
+        FRESHRSS_ROLE_OK=1
+    else
+        return 1
+    fi
+
+    # The mounted healthcheck, not the image's own cli/health.php: that one
+    # fetches /api/, which reads data/config.php and issues no query, so it
+    # exits 0 against a database this rotation may just have locked it out of -
+    # and FRESHRSS_ROLE_OK would stay 1 on a broken install. /healthcheck.sh
+    # adds FreshRSS_DatabaseDAO::testConnection() (see config/freshrss).
+    if docker exec pi-freshrss /healthcheck.sh >/dev/null 2>&1; then
+        note "✔ Verified FreshRSS can still reach its DB"
+    else
+        note "✘ FreshRSS DB connectivity check FAILED after the rotation - check manually"
+        FRESHRSS_ROLE_OK=0
+    fi
 }
 
 # --- ntfy: regenerate the admin user hash and reload it ---
@@ -732,6 +790,9 @@ main() {
         rotate_nextcloud_db_password
         rotate_nextcloud_admin_password
 
+        log "=== FreshRSS (data/config.php + API password, then its role) ==="
+        rotate_freshrss
+
         log "=== Remaining Postgres roles ==="
         rotate_postgres_roles
 
@@ -771,6 +832,7 @@ main() {
         [ "$OPEN_WEBUI_ROLE_OK" = "1" ]  || _stale_dumps="$_stale_dumps open-webui"
         [ "$VAULTWARDEN_ROLE_OK" = "1" ] || _stale_dumps="$_stale_dumps vaultwarden"
         [ "$IMMICH_ROLE_OK" = "1" ]      || _stale_dumps="$_stale_dumps immich"
+        [ "$FRESHRSS_ROLE_OK" = "1" ]    || _stale_dumps="$_stale_dumps freshrss"
         if [ -n "$_stale_dumps" ]; then
             note "⚠ backrest now holds the new PASSWORD, but these roles did not rotate:$_stale_dumps"
             note "  Their db-backup.sh dumps will fail until the role is fixed. nextcloud and"

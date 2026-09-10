@@ -92,6 +92,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | **Kavita** | openid profile email offline_access | client_secret_post | one_factor | **no `groups` scope** — role sync is off, so the claim would be ignored; roles come from `DefaultRoles` and admin is set in Kavita |
 | **Shelfmark** | openid profile email groups | client_secret_basic | one_factor | PKCE (S256) required; admin comes from the `admin` group; local login disabled |
 | **Audiobookshelf** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required; **no `groups` scope** — it reads the claim as a role and denies anyone outside admin/user/guest |
+| **FreshRSS** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required — the flow runs in Apache (`mod_auth_openidc`), not in FreshRSS, and the module sends a code challenge by default even though the image's `FreshRSS.Apache.conf` never sets `OIDCPKCEMethod`. **No `groups` scope** — FreshRSS derives no roles from the token, so `one_factor` is the whole access decision |
 
 `admin_only` is a named policy in the template: deny by default, `two_factor` for members of the `admin` group.
 
@@ -112,6 +113,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Kavita | ✓ | — | ✓ | LAN-only + own accounts / OIDC — OPDS clients can't pass an interactive portal |
 | Shelfmark | ✓ | — | ✓ | LAN-only + OIDC only; password login disabled (`DISABLE_LOCAL_AUTH`), so requests and download history stay per-user |
 | Audiobookshelf | ✓ | — | ✓ | LAN-only + OIDC only; local login disabled once the bootstrap holds an API key, so the shared `PASSWORD` is not a second way into everyone's listening history. No forward-auth: the mobile apps can't pass an interactive portal, and they have their own OIDC redirect URI |
+| FreshRSS | ✓ | — | ✓ | LAN-only + OIDC. Apache's `mod_auth_openidc` guards `/i/` (the whole web UI) and maps `preferred_username` onto a per-user FreshRSS account, auto-created on first sign-in — so Authelia's `one_factor` policy is what decides who has a reading list at all. `/api/greader.php` is deliberately outside that: feed-reader apps can't pass an interactive portal, and it checks the account's own API password. No forward-auth for the same reason (as with Kavita's OPDS clients) |
 | n8n | ✓ | — | — | LAN-only + its own auth |
 | ntfy | ✓ | — | — | LAN-only + its own accounts and ACLs (`deny-all` default) |
 | Homepage | ✓ | ✓ | — | LAN-only + SSO |
@@ -127,7 +129,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Stremio | ✓ | — | — | LAN-only; streaming clients and cast receivers can't do the portal |
 | Comet | partial | — | — | Split in two routers. `/s/<PUBLIC_API_TOKEN>/` is public so an addon installed on a Stremio account resolves off-tailnet; `/configure` is excluded from it, and `/`, `/health` and `/admin*` stay LAN-only. No forward-auth on either — Stremio fetches manifests programmatically. The public half carries `rate-limit-auth`, because each request fans out to Torrentio/MediaFusion/Zilean from the Pi's WAN IP. Its two passwords are generated per-service (`config/comet/comet.env`), never `${PASSWORD}` |
 
-Services with their own account system (Immich, Kavita, Shelfmark, Audiobookshelf) deliberately do **not** stack forward-auth on top of OIDC — their apps and clients cannot complete an interactive portal.
+Services with their own account system (Immich, Kavita, Shelfmark, Audiobookshelf, FreshRSS) deliberately do **not** stack forward-auth on top of OIDC — their apps and clients cannot complete an interactive portal.
 
 ## The middleware chain
 
@@ -246,6 +248,7 @@ Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/se
 | `redis_password` | The shared Redis password — see [below](#the-shared-redis-is-authenticated). Written by `scripts/redis-pre-start.sh` |
 | `vaultwarden_admin_token` | Vaultwarden `/admin` token, plaintext — the one you type. Written by `scripts/vaultwarden-pre-start.sh`, never mounted into any container |
 | `vaultwarden_admin_token_hash` | Argon2id digest of the above, the only form Vaultwarden receives |
+| `freshrss_oidc_crypto_key` | `OIDCCryptoPassphrase` for FreshRSS's `mod_auth_openidc` — it encrypts that module's session cookie and cache, so it is independent of `PASSWORD` and regenerating it only signs everyone out. Written by `scripts/freshrss-pre-start.sh` |
 
 Two more are generated per-service under `${DATA_LOCATION}`, mode `600`, for the same reason as the
 Vaultwarden token — `llm.<HOST_NAME>` carries no forward-auth, so a `PASSWORD` leak must not also be
@@ -366,8 +369,8 @@ greps for `PONG`; `make check-secrets` proves the same thing from outside.
 
 Every service that needs nothing but an ingress route gets a two-member segment
 with Traefik rather than a seat on `frontend`. `backup`, `dockhand` and
-`vaultwarden_web` are that pattern; `auth`, `immich`, `nextcloud`, `ai`, `vault`
-and `ntfy` are the `internal: true` data segments behind it. Three
+`vaultwarden_web` are that pattern; `auth`, `immich`, `nextcloud`, `ai`, `vault`,
+`rss` and `ntfy` are the `internal: true` data segments behind it. Three
 single-member networks — `egress_unbound`, `egress_immich`, `egress_ddns` — exist
 only because a bridge is the sole way to give a container the internet: their
 occupants need egress and no peer at all, so one member is the correct size.
@@ -420,6 +423,17 @@ which both consumers support natively (Open WebUI's tool server already carries
 `auth_type`/`key` fields, Uptime Kuma monitors take custom headers). That is five
 integration points and a tenth `rotate-secret` target, weighed against a
 conditional disclosure behind a prerequisite compromise - deferred, not dismissed.
+
+**FreshRSS writes its whole environment to a world-readable file inside its own
+container.** Setting `CRON_MIN` is what installs the image's refresh crontab, and
+the entrypoint's way of handing the environment to that cron job is to dump
+`/proc/self/environ` to `/var/www/FreshRSS/Docker/env.txt`, mode 0644 — so the
+OIDC client secret and the `freshrss` Postgres password are readable by any
+process in that container. It sits in the container's writable layer, outside the
+`/var/www/FreshRSS/data` mount, so it never reaches the host data disk or a
+Backrest snapshot, and the only other process in there is Apache running the
+application those values belong to. The alternative is dropping `CRON_MIN` and
+having feeds refresh only when a browser is open, which is not a reader.
 
 **Pi-hole's public upstreams see a share of normal traffic.** See
 [Networking → The DNS pipeline](NETWORKING.md#the-dns-pipeline): dnsmasq spreads
