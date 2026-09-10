@@ -121,6 +121,7 @@ test:
 	@sh tests/services-test.sh
 	@sh tests/stack-up-test.sh
 	@sh tests/compose-test.sh
+	@sh tests/trilium-api-contract.sh
 	@sh tests/routing-test.sh
 	@sh tests/sarif-merge-test.sh
 

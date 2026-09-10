@@ -154,11 +154,8 @@ csrf_material() {
 gateway_models() {
     local key="$1"
 
-    # `select(.id | contains("*") | not)`: agentgateway also advertises wildcard
-    # entries like `tetrate/*`, which are catalogue placeholders rather than
-    # models. Stored, they would sit in Trilium's model picker and fail on use.
     docker_curl -H "Authorization: Bearer $key" "$AGENTGATEWAY_URL/v1/models" 2>/dev/null \
-        | jq -c '[.data[]? | select(.id | contains("*") | not) | {id: .id, name: .id}]' 2>/dev/null
+        | jq -c '[.data[]? | {id: .id, name: .id}]' 2>/dev/null
 }
 
 apply_options() {
@@ -217,14 +214,15 @@ mint_etapi_token() {
     local token_file="" password="" token=""
 
     token_file="$(trilium_etapi_token_file)"
-    # Not `[ -s "$token_file" ] && return 1`: under `set -e` an and-list whose
-    # first command fails takes the whole script down with it.
+    # Three outcomes, not two: 0 minted, 2 already there, 1 could not. main()
+    # has to tell "nothing to do" from "the contract moved", because only the
+    # second should fail a boot.
     #
-    # A token pasted here by hand counts: on an instance whose password this
-    # stack did not set, that file is the only way the MCP target ever gets a
-    # credential, and re-running this hook must not overwrite it.
+    # A token pasted here by hand counts as already there: on an instance whose
+    # password this stack did not set, that file is the only way the MCP target
+    # ever gets a credential, and re-running this hook must not overwrite it.
     if [ -s "$token_file" ]; then
-        return 1
+        return 2
     fi
 
     password="$(get_env_value PASSWORD)"
@@ -248,6 +246,7 @@ mint_etapi_token() {
         log "  then re-run this hook - agentgateway's MCP target reads it from there."
         return 1
     fi
+
 
     mkdir -p "$(dirname "$token_file")"
     safe_chmod 700 "$(dirname "$token_file")"
@@ -275,7 +274,7 @@ refresh_agentgateway() {
 }
 
 main() {
-    local session="" material="" csrf_cookie="" csrf_token=""
+    local session="" material="" csrf_cookie="" csrf_token="" owned=0 failed=0
 
     wait_for_http_endpoint "$TRILIUM_URL/api/setup/status" "Trilium" 60 2 || return 0
 
@@ -287,15 +286,17 @@ main() {
     # enrolled instance can therefore still get its MCP target wired.
     session="$(open_session)"
     if [ -n "$session" ]; then
+        owned=1
         log "Signed in to Trilium as the owner (its password is PASSWORD)"
         material="$(csrf_material "$session")" || material=""
         if [ -n "$material" ]; then
             csrf_cookie="${material%%|*}"
             csrf_token="${material#*|}"
             # csrf_cookie already carries the session id, so it replaces it
-            apply_options "$csrf_cookie" "$csrf_token" || true
+            apply_options "$csrf_cookie" "$csrf_token" || failed=1
         else
             log "WARNING: could not obtain a CSRF token from Trilium"
+            failed=1
         fi
     else
         # The normal state once the owner has enrolled SSO: /login stops
@@ -307,8 +308,28 @@ main() {
         log "  Leaving Trilium's AI and MCP options alone; set them in Options -> AI."
     fi
 
+    # Not `mint && refresh || case`: that runs the handler when *refresh* fails
+    # too, and then $? is the wrong command's. The else branch still sees
+    # mint_etapi_token's status because nothing runs in between.
     if mint_etapi_token; then
         refresh_agentgateway
+    else
+        case "$?" in
+            2) : ;;          # already there, nothing to do
+            *) [ "$owned" -eq 0 ] || failed=1 ;;
+        esac
+    fi
+
+    # Non-zero only when this instance was ours to configure and configuring it
+    # did not work - which on a fresh install means the endpoints this hook
+    # drives have moved, and CI runs post-start hooks blocking so the boot goes
+    # red instead of green-with-a-warning. An instance the stack does not own is
+    # not a failure: declining is the correct behaviour there, and returning 1
+    # for it would make every later `make update` fail on a working setup.
+    if [ "$failed" -eq 1 ]; then
+        log "ERROR: Trilium is owned by this stack but could not be configured;"
+        log "  run tests/trilium-api-contract.sh - the API this hook drives may have moved."
+        return 1
     fi
 }
 

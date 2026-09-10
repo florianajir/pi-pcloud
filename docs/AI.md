@@ -171,6 +171,12 @@ that enrolment, which is where `scripts/trilium-bootstrap.sh` runs on a fresh in
    than `openai`, which talks to api.openai.com whatever you set
 4. mints an ETAPI token (`POST /api/login/token`) for agentgateway's MCP target
 
+Every one of those calls is a private endpoint rather than a published API, and they have moved before —
+`/api/login/token` answers `{"token": ...}` while the project's own `internal.openapi.yaml` still says
+`{"authToken": ...}`. `tests/trilium-api-contract.sh` asserts each of them against the pinned image, so an
+image bump that breaks the wiring fails a test instead of quietly wiring nothing. Run it against a
+candidate image before bumping; see [CONTRIBUTING](../CONTRIBUTING.md).
+
 Step 4 is the only one that still works afterwards: that route verifies the password itself instead of
 deferring to Authelia. The rest is a fresh-install path and says so when it declines —
 
