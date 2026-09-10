@@ -220,8 +220,13 @@ profile_lines() { printf '%s' "$ci_profiles" | tr ',' '\n'; }
 
 ok "the computed list asks for the optional services" \
     "$(profile_lines | grep -cx 'nextcloud')" 1
+# stremio-lan is the one profile outside the `all` catch-all, so it is the one
+# the selector reaches only by naming the service itself. Asserted positively
+# because it spent its whole life on the excluded list below this line.
+ok "and for the one that only its own name selects" \
+    "$(profile_lines | grep -cx 'stremio-lan')" 1
 ok "and for none compose.test.yaml excludes" \
-    "$(profile_lines | grep -cxE 'gluetun|qbittorrent|stremio|stremio-lan|llama-cpp|parakeet|piper|headplane')" 0
+    "$(profile_lines | grep -cxE 'gluetun|qbittorrent|stremio|llama-cpp|parakeet|piper|headplane')" 0
 ok "and never for the catch-all, which would re-enable them" \
     "$(profile_lines | grep -cx 'all')" 0
 

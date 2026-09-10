@@ -5,16 +5,30 @@ services:
   # --- Services excluded from CI ---
   # These services need special hardware, real credentials, or capabilities that are
   # unavailable on GitHub Actions runners.
+  #
+  # Each entry says which of those it is, and the one it is not: "not worth
+  # testing" is never a reason here. Everything absent from this list starts,
+  # including every core service - backrest and stremio-lan used to be here on
+  # reasons that had stopped being true.
 
   tailscale:
     # Requires /dev/net/tun, SYS_MODULE capability, and real VPN auth.
     profiles: [ci-excluded]
 
   headplane:
+    # Two things, both downstream of headscale being excluded below. Its
+    # depends_on names headscale, so compose refuses to start it without one;
+    # and the Headscale API key it mounts is written by
+    # scripts/headscale-init.sh, which needs a headscale container to mint it
+    # from. A bind mount of a file that does not exist comes out a directory,
+    # so there is no starting it with a placeholder either.
     profiles: [ci-excluded]
 
   beszel-agent:
-    # Depends on Traefik TLS endpoint which is not functional in CI.
+    # It registers with the hub over HUB_URL=https://beszel.$HOST_NAME, i.e.
+    # through Traefik, whose CI certificate nothing trusts (see headscale
+    # below). network_mode: host rules out the obvious workaround of naming
+    # pi-beszel directly, since Docker's DNS is not there.
     profiles: [ci-excluded]
 
   gluetun:
@@ -34,23 +48,35 @@ services:
     profiles: [ci-excluded]
 
   ddns-updater:
-    # Requires valid Cloudflare zone and API token.
-    profiles: [ci-excluded]
-
-  backrest:
-    # Depends on the full healthy stack; not suitable for CI.
+    # Requires a valid Cloudflare zone and API token. Not merely degraded
+    # without them: the image ships its own HEALTHCHECK
+    # (`ddns-updater healthcheck`), which reports failure until a record has
+    # actually been published, so a placeholder token leaves the container
+    # permanently unhealthy and `up --wait` never returns. Disabling that
+    # healthcheck to get it started would also point every pull request's
+    # junk-token requests at Cloudflare's real API.
     profiles: [ci-excluded]
 
   headscale:
-    # Fetches OIDC discovery from https://auth.test.local at startup, which does
-    # not resolve on GitHub Actions runners.
+    # Not a name resolution problem - compose.yaml pins auth.$HOST_NAME at
+    # Traefik's frontend address for exactly this call, and that works here. It
+    # is TLS: the ACME resolver cannot issue anything against a placeholder
+    # Cloudflare token, so Traefik answers with its own generated certificate
+    # and headscale's discovery call fails verification. With
+    # only_start_if_oidc_is_available: true, deliberately, that is fatal.
+    #
+    # Fixable, but not in one line: it needs a CI-only CA whose leaf Traefik
+    # serves as its default certificate and whose root headscale trusts
+    # (SSL_CERT_FILE). That would also unblock agentgateway, headplane and
+    # scripts/headscale-init.sh, which is the argument for doing it.
     profiles: [ci-excluded]
 
   agentgateway:
-    # Same as headscale: its ui.policies.oidc makes it fetch the discovery
-    # document from https://auth.test.local before it serves anything, and it
-    # exits when that fails - so Traefik's docker provider never loads its
-    # router and the probe reports a 404 rather than the 403 it expects.
+    # Same untrusted certificate as headscale: its ui.policies.oidc makes it
+    # fetch the discovery document from https://auth.$HOST_NAME before it
+    # serves anything, and it exits when that fails - so Traefik's docker
+    # provider never loads its router and the probe reports a 404 rather than
+    # the 403 it expects.
     #
     # !override, not a plain list: compose *appends* profiles across files, so
     # without it this service stays reachable through the `open-webui` profile
@@ -72,14 +98,6 @@ services:
   parakeet:
     # Same as piper: the build bakes in ~660MB of Parakeet weights, and nothing
     # else in the stack depends on it being up.
-    profiles: [ci-excluded]
-
-  stremio-lan:
-    # Wants an address on the LAN segment, which is a bridge here, and its
-    # pre-start hook checks STREMIO_IP against a subnet a runner does not have.
-    # Named here rather than left out of the selection: tests/ci-profiles.py
-    # computes what CI starts from this file, so "not selected" has to be said
-    # in the one place that says it for every other service too.
     profiles: [ci-excluded]
 
   # --- open-webui: run without the excluded inference backend ---
@@ -192,6 +210,25 @@ services:
       lan:
         # Must be within the CI bridge subnet defined below (192.168.88.0/24).
         ipv4_address: "192.168.88.250"
+
+  # --- stremio-lan: the other tenant of the LAN segment ---
+  # Same reason as Pi-hole above, and the same fix: compose.yaml takes its
+  # address from ${STREMIO_IP:-192.168.1.251}, which is outside the CI bridge,
+  # and `up` then fails with "Invalid address ... does not belong to any of
+  # this network's subnets".
+  #
+  # Pinned here rather than by putting STREMIO_IP and HOST_LAN_SUBNET in the
+  # workflow's .env: HOST_LAN_SUBNET also feeds this network's own ipam config
+  # in compose.yaml, and setting it to the CI subnet would leave the merged
+  # network declaring 192.168.88.0/24 twice.
+  #
+  # This is the only Stremio mode CI can run - the default one is inside
+  # gluetun's network namespace, and gluetun needs credentials no runner has.
+  stremio-lan:
+    networks:
+      frontend: {}
+      lan:
+        ipv4_address: "192.168.88.251"
 
 # macvlan needs a real physical parent interface and promiscuous mode, neither of
 # which a GitHub Actions VM runner has.

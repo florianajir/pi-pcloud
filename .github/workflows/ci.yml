@@ -226,8 +226,8 @@ jobs:
           # at four containers.
           started="$(docker compose ps --services | wc -l)"
           echo "started ${started} services"
-          if [ "${started}" -lt 24 ]; then
-            echo "::error::only ${started} services started, expected at least 24"
+          if [ "${started}" -lt 26 ]; then
+            echo "::error::only ${started} services started, expected at least 26"
             exit 1
           fi
 
