@@ -2864,19 +2864,6 @@ services:
     environment:
       # Expanded by agentgateway inside /config.yaml, not by Compose.
       - HOST_NAME=${HOST_NAME:-pi.lan}
-      # The Groq key the /groq/v1 route presents upstream. Here and not in
-      # agentgateway.env, because agentgateway-pre-start.sh rewrites that file
-      # whole from three generated secrets - a hand-added fourth line would
-      # survive exactly until the next `make config`, and agentgateway refuses
-      # to start on a reference it cannot resolve.
-      #
-      # The default is a non-empty placeholder rather than "": backendAuth
-      # rejects an empty key with `data did not match any variant of untagged
-      # enum BackendAuthCompat` and the process exits 1, which on a host with
-      # no Groq key would take the whole gateway - and open-webui's models -
-      # down with it. With a placeholder the gateway starts and only
-      # /groq/v1 answers 401, from Groq.
-      - GROQ_API_KEY=${GROQ_API_KEY:-unset}
     env_file:
       # OIDC_COOKIE_SECRET, UI_CLIENT_SECRET and LLM_API_KEY, written by
       # scripts/agentgateway-pre-start.sh. Frozen at container creation, so a
