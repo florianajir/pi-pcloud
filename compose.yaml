@@ -1258,9 +1258,35 @@ services:
       backup: {}
     expose:
       - 3000
+    # Neither secret has a *_FILE variant: Next.js freezes both at module load.
+    # Same trick as freshrss, vaultwarden and open-webui.
+    entrypoint:
+      - sh
+      - -c
+      - 'export HOMEPAGE_AUTH_SECRET="$(cat /run/secrets/homepage_auth_secret)" HOMEPAGE_OIDC_CLIENT_SECRET="$(cat /run/secrets/oidc_homepage_secret)" && exec /usr/local/bin/docker-entrypoint.sh "$$@"'
+      - sh
+    # An `entrypoint:` in compose **clears the image's CMD**, and the image
+    # entrypoint ends in `exec "$$@"` - without this the container execs nothing
+    # and exits 0. Re-check against `docker inspect` on an image bump.
+    command: ["node", "server.js"]
     environment:
       - TZ=${TIMEZONE:-Europe/Paris}
       - HOMEPAGE_ALLOWED_HOSTS=homepage.${HOST_NAME:-pi.lan}
+      # Homepage's own auth (v2.0+), stacked on the authelia@docker forward-auth
+      # the router already carries - see docs/SECURITY.md for why both.
+      - HOMEPAGE_AUTH_ENABLED=true
+      # Becomes NEXTAUTH_URL, which the redirect_uri is built from - so it has
+      # to match the Authelia client registration exactly.
+      - HOMEPAGE_EXTERNAL_URL=https://homepage.${HOST_NAME:-pi.lan}
+      - HOMEPAGE_OIDC_ISSUER=https://auth.${HOST_NAME:-pi.lan}
+      - HOMEPAGE_OIDC_CLIENT_ID=homepage
+      - HOMEPAGE_OIDC_NAME=Authelia
+      # Explicit, so this and the Authelia client's `scopes:` are visibly one
+      # decision. No `groups`: homepage has no roles.
+      - HOMEPAGE_OIDC_SCOPE=openid profile email
+      # v2.3.0. Skips the page whose only control is a sign-in button.
+      # /auth/signin?autologin=0 still reaches it if the redirect ever loops.
+      - HOMEPAGE_OIDC_AUTO_LOGIN=true
       # Read by widget labels as {{HOMEPAGE_VAR_x}}.
       - HOMEPAGE_VAR_ADMIN_USER=${ADMIN_USER:-admin}
       - HOMEPAGE_VAR_ADMIN_PASSWORD=${PASSWORD}
@@ -1286,6 +1312,9 @@ services:
     extra_hosts:
       # So the widget's https:// call passes Nextcloud's trusted-domains check.
       - "nextcloud.${HOST_NAME:-pi.lan}:172.30.11.250"
+      # Authelia's discovery and token endpoints, fetched server-side by
+      # next-auth. Same entry freshrss carries.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
     volumes:
       - ./config/homepage:/app/config
       # /app/public is the only path homepage serves over HTTP (/api/config is
@@ -1305,6 +1334,12 @@ services:
       - ./config/homepage/icons/android-chrome-512x512.png:/app/public/android-chrome-512x512.png:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /sys:/sys:ro
+      # Read by the entrypoint above. Not under ./config/homepage: that whole
+      # directory is the container's /app/config.
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_homepage_secret.txt:/run/secrets/oidc_homepage_secret:ro
+      # Signs the session cookie. From scripts/homepage-pre-start.sh, and
+      # independent of PASSWORD - regenerating it only signs everyone out.
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/homepage_auth_secret:/run/secrets/homepage_auth_secret:ro
     tmpfs:
       - /app/config/logs
     labels:
@@ -1324,6 +1359,15 @@ services:
       - "traefik.http.services.homepage.loadbalancer.server.port=3000"
     depends_on:
       - traefik
+    healthcheck:
+      <<: *healthcheck-default
+      # Not the auth-exempt /api/healthcheck: that answers 200 from a homepage
+      # whose auth stack failed to initialise, and Uptime Kuma's external check
+      # cannot see it either (forward-auth 302s an anonymous probe). This path
+      # is outside the middleware matcher, so it cannot redirect into a false
+      # 200 - it is 200 or 500, and busybox wget exits 1 on 5xx. localhost needs
+      # no Host header: the middleware always allows it.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/auth/providers"]
     cpu_shares: *cpu-prio-normal
     mem_limit: 192m
     oom_score_adj: *oom-score-deprioritize

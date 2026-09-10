@@ -476,6 +476,39 @@ __OIDC_PRIVATE_KEY__
         token_endpoint_auth_method: client_secret_basic
         userinfo_signed_response_alg: none
 
+      - client_id: homepage
+        client_name: Homepage
+        client_secret: '{{ secret "/config/secrets/oidc_homepage_secret_hash" }}'
+        public: false
+        authorization_policy: one_factor
+        consent_mode: implicit
+        # Fixed by NextAuth: provider id `homepage-oidc`, path built from
+        # HOMEPAGE_EXTERNAL_URL. Not configurable on the client side.
+        redirect_uris:
+          - 'https://homepage.__HOST_NAME__/api/auth/callback/homepage-oidc'
+        # [...nextauth].js declares checks: pkce, state, nonce.
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        # No `groups`: homepage has no roles - every signed-in account sees the
+        # same dashboard, so this policy is the whole access decision. It matches
+        # the `homepage.__HOST_NAME__` access_control rule above.
+        scopes:
+          - openid
+          - profile
+          - email
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+        # next-auth v4 leaves openid-client at its default, basic.
+        token_endpoint_auth_method: client_secret_basic
+        # Unused rather than wrong: `idToken: true` means next-auth builds its
+        # profile from the ID Token and never calls UserInfo, so homepage sees no
+        # `email` or `name` - both UserInfo-only here. It needs neither, and so
+        # needs no `claims_policy`: all it reads off the session is that there is
+        # one, to draw the sign-out button.
+        userinfo_signed_response_alg: none
+
 notifier:
   disable_startup_check: true
   smtp:

@@ -70,7 +70,7 @@ Only Nextcloud needs the odd-looking trailing `&ignored=`, and it is load-bearin
 | **Immich** | `oauth.endSessionEndpoint` (takes precedence over discovery) | `config/immich/oauth-config.yaml.template` |
 | **Open WebUI** | `WEBUI_AUTH_SIGNOUT_REDIRECT_URL` | `compose.yaml` |
 
-The remaining clients have nowhere to put one, so signing out of them leaves the portal session standing and the next visit signs the user back in: Kavita, Beszel, Dockhand and Headplane expose no such field, Shelfmark implements no logout handling of its own, and Vaultwarden offers no override (it is `SSO_AUTH_ONLY_NOT_SESSION` here in any case). Headscale is not affected — it holds no browser session, only device registrations.
+The remaining clients have nowhere to put one, so signing out of them leaves the portal session standing and the next visit signs the user back in: Kavita, Beszel, Dockhand and Headplane expose no such field, Shelfmark implements no logout handling of its own, Homepage hardcodes its sign-out redirect to `/auth/signin?autologin=0` (which is exactly why that escape hatch exists — landing on `/` would auto-login straight back), and Vaultwarden offers no override (it is `SSO_AUTH_ONLY_NOT_SESSION` here in any case). Headscale is not affected — it holds no browser session, only device registrations.
 
 **The LDAP bind is tuned for a busy host, not a fast one.** `authentication_backend.ldap` raises `timeout` to `15s` and enables `pooling` (5 connections, 2 retries). Authelia's 5-second default is shorter than an I/O stall on a host under swap pressure, and a bind that times out *during* a token grant does not fail politely: the client sees a `500`, which for a refresh grant costs it the token it was rotating. Pooling keeps connections warm so a stall costs a retry instead of a session.
 
@@ -93,6 +93,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | **Shelfmark** | openid profile email groups | client_secret_basic | one_factor | PKCE (S256) required; admin comes from the `admin` group; local login disabled |
 | **Audiobookshelf** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required; **no `groups` scope** — it reads the claim as a role and denies anyone outside admin/user/guest |
 | **FreshRSS** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required — the flow runs in Apache (`mod_auth_openidc`), not in FreshRSS, and the module sends a code challenge by default even though the image's `FreshRSS.Apache.conf` never sets `OIDCPKCEMethod`. **No `groups` scope** — FreshRSS derives no roles from the token, so `one_factor` is the whole access decision |
+| **Homepage** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required. **No `groups` scope** — homepage has no roles, so `one_factor` is the whole access decision. Its NextAuth provider is declared `idToken: true`, so it never calls UserInfo and sees no `email` or `name` — it needs neither, the only thing it reads off the session is that there is one. One of the two clients that keep forward-auth *as well* (with Headplane): see the matrix below |
 
 `admin_only` is a named policy in the template: deny by default, `two_factor` for members of the `admin` group.
 
@@ -116,7 +117,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | FreshRSS | ✓ | — | ✓ | LAN-only + OIDC. Apache's `mod_auth_openidc` guards `/i/` (the whole web UI) and maps `preferred_username` onto a per-user FreshRSS account, auto-created on first sign-in — so Authelia's `one_factor` policy is what decides who has a reading list at all. `/api/greader.php` is deliberately outside that: feed-reader apps can't pass an interactive portal, and it checks the account's own API password. No forward-auth for the same reason (as with Kavita's OPDS clients) |
 | n8n | ✓ | — | — | LAN-only + its own auth |
 | ntfy | ✓ | — | — | LAN-only + its own accounts and ACLs (`deny-all` default) |
-| Homepage | ✓ | ✓ | — | LAN-only + SSO |
+| Homepage | ✓ | ✓ | ✓ | LAN-only + SSO + its own OIDC — all three, as Headplane already does, and here it costs nothing to: `HOMEPAGE_OIDC_AUTO_LOGIN=true` (v2.3.0) sends an unauthenticated visitor straight to Authelia rather than to a page whose only control is a sign-in button, and the forward-auth hop in front has already established that same session — so the dashboard still opens in one hop. Stacking is not redundant: forward-auth only guards the Traefik path, and `/api/*` — which proxies every widget's credentials — is reachable from anything on `frontend` that dials `:3000` with a forged `Host: homepage.<HOST_NAME>`, which is all `HOMEPAGE_ALLOWED_HOSTS` checks. `/api/healthcheck` and `/api/config/custom.css` stay public by design |
 | Uptime Kuma | ✓ | ✓ | — | LAN-only + SSO |
 | qBittorrent | ✓ | ✓ | — | LAN-only + SSO |
 | Prowlarr / Kapowarr | ✓ | ✓ | — | LAN-only + SSO |
@@ -129,7 +130,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Stremio | ✓ | — | — | LAN-only; streaming clients and cast receivers can't do the portal |
 | Comet | partial | — | — | Split in two routers. `/s/<PUBLIC_API_TOKEN>/` is public so an addon installed on a Stremio account resolves off-tailnet; `/configure` is excluded from it, and `/`, `/health` and `/admin*` stay LAN-only. No forward-auth on either — Stremio fetches manifests programmatically. The public half carries `rate-limit-auth`, because each request fans out to Torrentio/MediaFusion/Zilean from the Pi's WAN IP. Its two passwords are generated per-service (`config/comet/comet.env`), never `${PASSWORD}` |
 
-Services with their own account system (Immich, Kavita, Shelfmark, Audiobookshelf, FreshRSS) deliberately do **not** stack forward-auth on top of OIDC — their apps and clients cannot complete an interactive portal.
+Services with their own account system (Immich, Kavita, Shelfmark, Audiobookshelf, FreshRSS) deliberately do **not** stack forward-auth on top of OIDC — their apps and clients cannot complete an interactive portal. Homepage and Headplane are not on that list: neither has such clients — both are only ever opened in a browser, which completes both hops.
 
 ## The middleware chain
 
@@ -249,6 +250,7 @@ Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/se
 | `vaultwarden_admin_token` | Vaultwarden `/admin` token, plaintext — the one you type. Written by `scripts/vaultwarden-pre-start.sh`, never mounted into any container |
 | `vaultwarden_admin_token_hash` | Argon2id digest of the above, the only form Vaultwarden receives |
 | `freshrss_oidc_crypto_key` | `OIDCCryptoPassphrase` for FreshRSS's `mod_auth_openidc` — it encrypts that module's session cookie and cache, so it is independent of `PASSWORD` and regenerating it only signs everyone out. Written by `scripts/freshrss-pre-start.sh` |
+| `homepage_auth_secret` | `HOMEPAGE_AUTH_SECRET` — the key NextAuth signs and encrypts Homepage's session cookie with. Independent of `PASSWORD`; regenerating it only signs everyone out. Written by `scripts/homepage-pre-start.sh` |
 
 Two more are generated per-service under `${DATA_LOCATION}`, mode `600`, for the same reason as the
 Vaultwarden token — `llm.<HOST_NAME>` carries no forward-auth, so a `PASSWORD` leak must not also be

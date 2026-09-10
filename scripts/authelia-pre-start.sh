@@ -138,7 +138,7 @@ main() {
     fi
 
     # Add a client here when declaring one in configuration.yml.template.
-    for client in nextcloud immich beszel dockhand headplane headscale open-webui kavita vaultwarden shelfmark audiobookshelf agentgateway freshrss; do
+    for client in nextcloud immich beszel dockhand headplane headscale open-webui kavita vaultwarden shelfmark audiobookshelf agentgateway freshrss homepage; do
         generate_oidc_secret "oidc_${client}_secret"
     done
 

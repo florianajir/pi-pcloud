@@ -54,9 +54,13 @@ fi
 
 # redis-pre-start.sh before authelia-pre-start.sh: the latter restarts Authelia
 # when configuration.yml changes, and that config carries the Redis password.
+# homepage-pre-start.sh after it too: homepage mounts the OIDC client secret
+# that one generates. No comments inside the list - it is word-split, so a '#'
+# there is an entry, not a comment.
 PRE_START_HOOKS='
 redis-pre-start.sh
 authelia-pre-start.sh
+homepage-pre-start.sh
 headscale-pre-start.sh
 backrest-pre-start.sh
 ntfy-pre-start.sh
