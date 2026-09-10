@@ -299,10 +299,26 @@ fi
 
 mkdir -p "${CONFIG_DIR}"
 
+# Whether the off-site repository can be described at all. Without a URI the
+# template renders `"uri": ""` and backrest refuses the whole file - `repo s3:
+# uri is required`, FATAL, on every start - so it is dropped instead.
+#
+# A real loss, not a formality, which is why the warning spells it out:
+# 's3-backup' is the only plan whose paths include /userdata and the only
+# caller of db-backup.sh and sqlite-backup.sh. Still better than the crash
+# loop it replaces, which backed up nothing and said so nowhere.
+S3_CONFIGURED=1
 if [ -z "${BACKREST_S3_URI}" ] || [ -z "${BACKREST_S3_REPO_PASSWORD}" ] || \
    [ -z "${S3_ACCESS_KEY_ID}" ] || [ -z "${S3_SECRET_ACCESS_KEY}" ]; then
-  log "WARNING: S3 credentials incomplete; Backrest will start but S3 repo may not be available"
+  S3_CONFIGURED=0
+  log "WARNING: S3 credentials incomplete; leaving out the 's3' repo and the 's3-backup' plan"
   log "Set: BACKREST_S3_URI, BACKREST_S3_REPO_PASSWORD, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY"
+  log "Until you do, NOTHING under /userdata is backed up and no database dump runs:"
+  log "'s3-backup' is the only plan covering it, and the only caller of db-backup.sh and"
+  log "sqlite-backup.sh. What is left is '${LOCAL_PLAN_ID}', which snapshots .env into"
+  log "${LOCAL_REPO_URI} and nothing else."
+  log "To add the off-site repo later: set those four, delete ${CONFIG_FILE} and re-run."
+  log "An existing config is left alone, so it will not appear by itself."
 fi
 
 tmp_file="$(mktemp)"
@@ -327,6 +343,19 @@ jq \
     | gsub("__BACKREST_S3_REGION__"; $region)
     else . end)' \
   "${TEMPLATE_FILE}" > "${tmp_file}" || die "failed to render config from template"
+
+# Repo and plan together: a plan whose repo is gone fails the same validation.
+if [ "${S3_CONFIGURED}" -eq 0 ]; then
+  tmp_patch="$(mktemp)"
+  if jq '.repos = ((.repos // []) | map(select(.id != "s3")))
+       | .plans = ((.plans // []) | map(select(.repo != "s3")))' \
+      "${tmp_file}" > "${tmp_patch}" && [ -s "${tmp_patch}" ]; then
+    mv "${tmp_patch}" "${tmp_file}"
+  else
+    rm -f "${tmp_patch}"
+    die "failed to drop the unconfigured S3 repo from the rendered config"
+  fi
+fi
 
 mv "${tmp_file}" "${CONFIG_FILE}"
 ensure_local_env_repo

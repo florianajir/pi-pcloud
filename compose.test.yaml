@@ -4,17 +4,23 @@
 services:
   # --- Services excluded from CI ---
   # These services need special hardware, real credentials, or capabilities that are
-  # unavailable on GitHub Actions runners.
+  # unavailable on GitHub Actions runners. Each entry says which. Everything
+  # absent from this list starts, core services included.
 
   tailscale:
     # Requires /dev/net/tun, SYS_MODULE capability, and real VPN auth.
     profiles: [ci-excluded]
 
   headplane:
+    # Not a TLS problem. Its config.yaml is written by headscale-init.sh, and
+    # that hook ends in `tailscale up` against pi-tailscale, so main() dies
+    # whatever the certificate does - leaving headplane the empty placeholder
+    # file pre-start creates.
     profiles: [ci-excluded]
 
   beszel-agent:
-    # Depends on Traefik TLS endpoint which is not functional in CI.
+    # Registers over HUB_URL=https://beszel.$HOST_NAME, and network_mode: host
+    # rules out naming pi-beszel directly instead - no Docker DNS there.
     profiles: [ci-excluded]
 
   gluetun:
@@ -34,30 +40,11 @@ services:
     profiles: [ci-excluded]
 
   ddns-updater:
-    # Requires valid Cloudflare zone and API token.
+    # Requires a real Cloudflare zone and token, and is not merely degraded
+    # without them: the image's own HEALTHCHECK fails until a record has been
+    # published, so a placeholder leaves it permanently unhealthy and
+    # `up --wait` never returns.
     profiles: [ci-excluded]
-
-  backrest:
-    # Depends on the full healthy stack; not suitable for CI.
-    profiles: [ci-excluded]
-
-  headscale:
-    # Fetches OIDC discovery from https://auth.test.local at startup, which does
-    # not resolve on GitHub Actions runners.
-    profiles: [ci-excluded]
-
-  agentgateway:
-    # Same as headscale: its ui.policies.oidc makes it fetch the discovery
-    # document from https://auth.test.local before it serves anything, and it
-    # exits when that fails - so Traefik's docker provider never loads its
-    # router and the probe reports a 404 rather than the 403 it expects.
-    #
-    # !override, not a plain list: compose *appends* profiles across files, so
-    # without it this service stays reachable through the `open-webui` profile
-    # it carries in production - and CI, which starts open-webui, would start
-    # the one container it cannot run. tests/ci-profiles.py refuses exactly that
-    # collision; it is what caught gluetun riding in on `shelfmark`.
-    profiles: !override [ci-excluded]
 
   llama-cpp:
     # Needs the 4.4GB of Gemma 4 weights that scripts/llama-cpp-pre-start.sh
@@ -74,13 +61,28 @@ services:
     # else in the stack depends on it being up.
     profiles: [ci-excluded]
 
-  stremio-lan:
-    # Wants an address on the LAN segment, which is a bridge here, and its
-    # pre-start hook checks STREMIO_IP against a subnet a runner does not have.
-    # Named here rather than left out of the selection: tests/ci-profiles.py
-    # computes what CI starts from this file, so "not selected" has to be said
-    # in the one place that says it for every other service too.
-    profiles: [ci-excluded]
+  # --- headscale and agentgateway: trust the CI certificate authority ---
+  #
+  # Both fetch Authelia's OIDC discovery document over TLS at startup and exit
+  # when it fails, which is what used to keep them out: the ACME resolver holds
+  # a placeholder token, so Traefik served its own generated certificate.
+  # tests/ci-tls-store.sh files a throwaway leaf in the ACME store instead;
+  # these two only need its root.
+  #
+  # Replacing the system bundle rather than appending to it is safe - nothing
+  # here reaches the public internet - and SSL_CERT_FILE is what both read:
+  # headscale is Go, and agentgateway's own image already sets this variable.
+  headscale:
+    environment:
+      - SSL_CERT_FILE=/ci-tls/ca-cert.pem
+    volumes:
+      - ${DATA_LOCATION:-./data}/traefik/ci-tls:/ci-tls:ro
+
+  agentgateway:
+    environment:
+      - SSL_CERT_FILE=/ci-tls/ca-cert.pem
+    volumes:
+      - ${DATA_LOCATION:-./data}/traefik/ci-tls:/ci-tls:ro
 
   # --- open-webui: run without the excluded inference backend ---
   open-webui:
@@ -192,6 +194,20 @@ services:
       lan:
         # Must be within the CI bridge subnet defined below (192.168.88.0/24).
         ipv4_address: "192.168.88.250"
+
+  # --- stremio-lan: the other tenant of the LAN segment ---
+  # Same fix as Pi-hole above: ${STREMIO_IP:-192.168.1.251} is outside the CI
+  # bridge, and `up` fails with "Invalid address ... does not belong to any of
+  # this network's subnets".
+  #
+  # Pinned here rather than through the workflow's .env, because
+  # HOST_LAN_SUBNET also feeds this network's ipam config in compose.yaml and
+  # would leave the merged network declaring 192.168.88.0/24 twice.
+  stremio-lan:
+    networks:
+      frontend: {}
+      lan:
+        ipv4_address: "192.168.88.251"
 
 # macvlan needs a real physical parent interface and promiscuous mode, neither of
 # which a GitHub Actions VM runner has.

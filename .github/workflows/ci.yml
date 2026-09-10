@@ -185,6 +185,14 @@ jobs:
             /tmp/pi-pcloud-ci-data/nextcloud-config \
             /tmp/pi-pcloud-ci-data/nextcloud-themes
 
+          # agentgateway is the same shape one uid along: it runs as
+          # 1000:1000 and opens SQLite under /data, which the project owner
+          # owns on the Pi. A runner's user is uid 1001, so the directory
+          # backrest's pre-start creates is one the container cannot write and
+          # it exits with "unable to open database file".
+          sudo install -d -m 0755 -o 1000 -g 1000 \
+            /tmp/pi-pcloud-ci-data/agentgateway
+
           # Guard against bind-mount path type mismatches in CI
           test -f ./config/headplane/config.yaml
           test ! -d ./config/headplane/config.yaml
@@ -192,6 +200,15 @@ jobs:
           test ! -d /tmp/pi-pcloud-ci-data/authelia-config/secrets/vaultwarden_admin_token_hash
           test -f ./config/headscale/config.yaml
           test -f ./config/headscale/policy.hujson
+
+      # After the chmod above, never before it: Traefik refuses an acme.json
+      # that is wider than 0600, and `chmod -R a+rX` would make it 0644.
+      - name: Issue the certificate CI's own containers trust
+        run: |
+          set -euo pipefail
+          sh ./tests/ci-tls-store.sh \
+            /tmp/pi-pcloud-ci-data/traefik/letsencrypt \
+            /tmp/pi-pcloud-ci-data/traefik/ci-tls
 
       - name: Pull images
         run: |
@@ -226,8 +243,24 @@ jobs:
           # at four containers.
           started="$(docker compose ps --services | wc -l)"
           echo "started ${started} services"
-          if [ "${started}" -lt 24 ]; then
-            echo "::error::only ${started} services started, expected at least 24"
+          if [ "${started}" -lt 28 ]; then
+            echo "::error::only ${started} services started, expected at least 28"
+            exit 1
+          fi
+
+          # `up --wait` calls a container with no healthcheck ready as soon
+          # as it is running, and agentgateway has none by necessity - its
+          # image is distroless, nothing to probe with. A crash loop then
+          # surfaces minutes later as a routing failure instead. Restarting is
+          # never a legitimate steady state here.
+          restarting="$(docker compose ps --format '{{.Service}} {{.State}}' \
+            | awk '$2 == "restarting" { print $1 }')"
+          if [ -n "${restarting}" ]; then
+            echo "::error::these services are in a restart loop: ${restarting}"
+            # Word splitting is the point: one service name per line, and no
+            # service name contains a space.
+            # shellcheck disable=SC2086
+            docker compose logs --timestamps --tail 40 ${restarting}
             exit 1
           fi
 
@@ -247,9 +280,10 @@ jobs:
       - name: Run the bootstraps the boot sequence runs
         timeout-minutes: 10
         env:
-          # headscale is ci-excluded, so there is no container for its init to
-          # talk to; pihole-bootstrap downloads twenty blocklists and updates
-          # gravity, which is a network flake looking for somewhere to happen.
+          # headscale itself now runs here, but headscale-init.sh ends in
+          # `tailscale up` against a container that needs /dev/net/tun, so
+          # main() dies on it. pihole-bootstrap downloads twenty blocklists and
+          # updates gravity, which is a network flake looking for a home.
           HOOKS_SKIP: headscale-init.sh pihole-bootstrap.sh
         run: sh ./scripts/run-hooks.sh post-start blocking
 
