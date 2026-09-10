@@ -31,10 +31,16 @@ main() {
 
     # Idempotent: returns immediately once the secret file and the client stanza
     # both exist, and otherwise runs authelia-pre-start.sh to mint them.
-    ensure_authelia_oidc_materials trilium "Trilium" || {
-        log "WARNING: could not prepare Trilium OIDC materials; SSO will not be offered"
-        return 0
-    }
+    #
+    # Deliberately not tolerated. A pre-start hook runs blocking, and the
+    # alternative to stopping here is the failure this whole script exists to
+    # prevent: `export VAR="$(cat <missing>)"` exits 0, so the container would
+    # start, pass its healthcheck and only reveal the empty client secret to
+    # whoever next tries to sign in. authelia-pre-start.sh runs earlier in the
+    # same phase, so by now it has already succeeded - if this fails, something
+    # is wrong that a silent warning would bury.
+    ensure_authelia_oidc_materials trilium "Trilium" \
+        || die "Could not prepare Trilium's OIDC client secret"
 
     log "Ensured Trilium data directory and OIDC materials"
 }

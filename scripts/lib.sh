@@ -459,6 +459,22 @@ ensure_authelia_oidc_materials() {
     secret_file="$data_root/authelia-config/secrets/oidc_${client_id}_secret.txt"
     pre_start_script="$PROJECT_DIR/scripts/authelia-pre-start.sh"
 
+    # A container that started before this secret existed leaves a *directory*
+    # here: compose materialises a missing bind source as one. Every guard below
+    # then reads as success - `-r` is true for a directory, and
+    # generate_oidc_secret's `[ ! -s ]` is false because a directory has a size -
+    # so the client is quietly never given a secret, and the service comes up
+    # healthy with an empty one. rmdir, not rm -rf: it only clears the empty
+    # directory compose made, and a non-empty one is somebody else's data.
+    if [ -d "$secret_file" ]; then
+        if rmdir "$secret_file" 2>/dev/null; then
+            log "Removed the empty directory compose left at $secret_file (it started before the secret existed)"
+        else
+            log "ERROR: $secret_file is a non-empty directory; refusing to touch it"
+            return 1
+        fi
+    fi
+
     if [ -r "$secret_file" ] && [ -f "$config_file" ] && grep -q "client_id: ${client_id}" "$config_file" 2>/dev/null; then
         return 0
     fi

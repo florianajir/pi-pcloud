@@ -2299,12 +2299,20 @@ services:
       - "traefik.docker.network=frontend"
       - "traefik.http.routers.trilium.rule=Host(`notes.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.trilium.entrypoints=websecure"
+      # frame-deny@docker would send DENY, which blocks *same-origin* framing
+      # too - and Trilium frames itself twice: the print/PDF-export view
+      # (`?print#<notePath>`, in NoteDetail-*.js) and the bundled pdf.js viewer
+      # (`pdfjs/web/viewer.html`, in PdfViewer-*.js). Both answer 200, so DENY
+      # breaks printing and PDF preview with nothing in the server log. Trilium
+      # already sends SAMEORIGIN itself through helmet; this only stops Traefik
+      # overwriting it. Same fix as nextcloud-frame and vaultwarden-frame.
+      - "traefik.http.middlewares.trilium-frame.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN"
       # lan@docker alone, no authelia@docker: Trilium runs the OIDC flow itself
       # and owns its session. Forward-auth on top would also cover /etapi and
       # /api/clipper - the scripting API and the Web Clipper extension, neither
       # of which can complete an interactive portal. Same rationale as Kavita's
       # OPDS clients and FreshRSS's Google Reader API.
-      - "traefik.http.routers.trilium.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.trilium.middlewares=trilium-frame@docker,lan@docker"
       - "traefik.http.routers.trilium.tls=true"
       - "traefik.http.services.trilium.loadbalancer.server.port=8080"
     cpu_shares: *cpu-prio-batch

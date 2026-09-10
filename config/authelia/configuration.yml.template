@@ -490,11 +490,17 @@ __OIDC_PRIVATE_KEY__
         # exposed as a setting - only the host part moves, via oauthBaseUrl.
         redirect_uris:
           - 'https://notes.__HOST_NAME__/callback'
-        # No PKCE, deliberately. Trilium delegates to express-openid-connect,
-        # whose authorizationParams it fills with response_type and scope only -
-        # no code_challenge is ever sent, so `require_pkce: true` would reject
-        # every authorization request. Matches Authelia's own Trilium guide.
-        require_pkce: false
+        # Authelia's own Trilium guide says `require_pkce: false`, and reading
+        # Trilium's source agrees - it fills authorizationParams with
+        # response_type and scope only. Both are misleading: the challenge is
+        # added a layer down, by the bundled express-openid-connect, which does
+        # `if (response_type.includes("code"))` and then always sets
+        # code_challenge_method=S256. Verified in the v0.105.0 main.cjs bundle,
+        # which also carries the library's own "the authorization request will
+        # use PKCE" debug string. `false` would merely stop requiring what is
+        # sent anyway; requiring it matches every other client here.
+        require_pkce: true
+        pkce_challenge_method: 'S256'
         # No `groups`: Trilium has no roles at all. The identity it enrolls is
         # the owner of the whole instance, and there is exactly one.
         scopes:
