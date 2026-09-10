@@ -58,6 +58,10 @@ layout:
       style: row
       columns: 2
       icon: mdi-rss
+    Notes:
+      style: row
+      columns: 2
+      icon: mdi-notebook-outline
     Video:
       style: row
       columns: 2

@@ -136,9 +136,10 @@ Services with their own account system (Immich, Kavita, Shelfmark, Audiobookshel
 
 ### Trilium's SSO has to be enrolled by hand, once
 
-Trilium is the one OIDC client in the stack that nothing bootstraps, because nothing
-can: binding an identity requires a browser session that is *already* signed in as the
-owner. Setting the environment variables only makes the option available.
+Trilium is the one OIDC client whose *enrollment* no script performs, because none can:
+binding an identity requires a browser session that is already signed in as the owner.
+`scripts/trilium-pre-start.sh` prepares the client secret, and the environment variables
+make the option available — the last step is yours.
 
 On a fresh install:
 
