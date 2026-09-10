@@ -300,31 +300,25 @@ fi
 mkdir -p "${CONFIG_DIR}"
 
 # Whether the off-site repository can be described at all. Without a URI the
-# template renders `"uri": ""`, and backrest refuses the whole file for it -
-# `validation after migration: repo s3: uri is required`, FATAL, on every
-# start. The warning here used to promise the opposite ("Backrest will start
-# but S3 repo may not be available"), and nothing rebuilt or restarted the
-# container often enough to notice; CI starting it from an empty DATA_LOCATION
-# is what did.
+# template renders `"uri": ""` and backrest refuses the whole file - `repo s3:
+# uri is required`, FATAL, on every start - so it is dropped instead.
 #
-# Leaving the repo out is a real loss, not a formality, so the warning says so
-# in as many words: 's3-backup' is the only plan whose paths include /userdata,
-# and the only one whose hooks call db-backup.sh and sqlite-backup.sh. Dropping
-# it means the install backs up its .env and nothing else. That is still better
-# than the crash loop it replaces - a backrest that will not start backs up
-# nothing at all, and says so nowhere.
+# A real loss, not a formality, which is why the warning spells it out:
+# 's3-backup' is the only plan whose paths include /userdata and the only
+# caller of db-backup.sh and sqlite-backup.sh. Still better than the crash
+# loop it replaces, which backed up nothing and said so nowhere.
 S3_CONFIGURED=1
 if [ -z "${BACKREST_S3_URI}" ] || [ -z "${BACKREST_S3_REPO_PASSWORD}" ] || \
    [ -z "${S3_ACCESS_KEY_ID}" ] || [ -z "${S3_SECRET_ACCESS_KEY}" ]; then
   S3_CONFIGURED=0
   log "WARNING: S3 credentials incomplete; leaving out the 's3' repo and the 's3-backup' plan"
   log "Set: BACKREST_S3_URI, BACKREST_S3_REPO_PASSWORD, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY"
-  log "Until you do, NOTHING under /userdata is backed up. 's3-backup' is the only plan that"
-  log "covers it and the only caller of db-backup.sh and sqlite-backup.sh, so no database dump"
-  log "runs either. What is left is the '${LOCAL_PLAN_ID}' plan, which snapshots the .env file"
-  log "into ${LOCAL_REPO_URI} and nothing else."
+  log "Until you do, NOTHING under /userdata is backed up and no database dump runs:"
+  log "'s3-backup' is the only plan covering it, and the only caller of db-backup.sh and"
+  log "sqlite-backup.sh. What is left is '${LOCAL_PLAN_ID}', which snapshots .env into"
+  log "${LOCAL_REPO_URI} and nothing else."
   log "To add the off-site repo later: set those four, delete ${CONFIG_FILE} and re-run."
-  log "This script leaves an existing config alone, so it will not add the repo by itself."
+  log "An existing config is left alone, so it will not appear by itself."
 fi
 
 tmp_file="$(mktemp)"
@@ -350,8 +344,7 @@ jq \
     else . end)' \
   "${TEMPLATE_FILE}" > "${tmp_file}" || die "failed to render config from template"
 
-# Dropped rather than rendered empty, for the reason above. Both together:
-# a plan whose repo is gone fails the same validation the repo would have.
+# Repo and plan together: a plan whose repo is gone fails the same validation.
 if [ "${S3_CONFIGURED}" -eq 0 ]; then
   tmp_patch="$(mktemp)"
   if jq '.repos = ((.repos // []) | map(select(.id != "s3")))

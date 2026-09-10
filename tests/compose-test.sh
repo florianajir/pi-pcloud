@@ -220,9 +220,8 @@ profile_lines() { printf '%s' "$ci_profiles" | tr ',' '\n'; }
 
 ok "the computed list asks for the optional services" \
     "$(profile_lines | grep -cx 'nextcloud')" 1
-# stremio-lan is the one profile outside the `all` catch-all, so it is the one
-# the selector reaches only by naming the service itself. Asserted positively
-# because it spent its whole life on the excluded list below this line.
+# stremio-lan sits outside the `all` catch-all, so the selector reaches it only
+# by naming the service. Asserted positively: it used to be excluded.
 ok "and for the one that only its own name selects" \
     "$(profile_lines | grep -cx 'stremio-lan')" 1
 ok "and for the gateway that used to ride in on open-webui's profile" \

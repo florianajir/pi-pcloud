@@ -4,32 +4,23 @@
 services:
   # --- Services excluded from CI ---
   # These services need special hardware, real credentials, or capabilities that are
-  # unavailable on GitHub Actions runners.
-  #
-  # Each entry says which of those it is, and the one it is not: "not worth
-  # testing" is never a reason here. Everything absent from this list starts,
-  # including every core service - backrest and stremio-lan used to be here on
-  # reasons that had stopped being true.
+  # unavailable on GitHub Actions runners. Each entry says which. Everything
+  # absent from this list starts, core services included.
 
   tailscale:
     # Requires /dev/net/tun, SYS_MODULE capability, and real VPN auth.
     profiles: [ci-excluded]
 
   headplane:
-    # Not fixable by giving headscale a certificate, which was the first guess.
-    # Its config.yaml is written by scripts/headscale-init.sh - pre-start only
-    # touches the file so the bind mount is not a directory, and leaves it
-    # empty - and that hook ends in `tailscale up` against pi-tailscale, which
-    # a runner cannot have at all. main() dies on the missing container after
-    # two minutes of waiting, so the hook stays in HOOKS_SKIP whatever happens
-    # to TLS, and headplane would come up against an empty config.
+    # Not a TLS problem. Its config.yaml is written by headscale-init.sh, and
+    # that hook ends in `tailscale up` against pi-tailscale, so main() dies
+    # whatever the certificate does - leaving headplane the empty placeholder
+    # file pre-start creates.
     profiles: [ci-excluded]
 
   beszel-agent:
-    # It registers with the hub over HUB_URL=https://beszel.$HOST_NAME, i.e.
-    # through Traefik, whose CI certificate nothing trusts (see headscale
-    # below). network_mode: host rules out the obvious workaround of naming
-    # pi-beszel directly, since Docker's DNS is not there.
+    # Registers over HUB_URL=https://beszel.$HOST_NAME, and network_mode: host
+    # rules out naming pi-beszel directly instead - no Docker DNS there.
     profiles: [ci-excluded]
 
   gluetun:
@@ -49,13 +40,10 @@ services:
     profiles: [ci-excluded]
 
   ddns-updater:
-    # Requires a valid Cloudflare zone and API token. Not merely degraded
-    # without them: the image ships its own HEALTHCHECK
-    # (`ddns-updater healthcheck`), which reports failure until a record has
-    # actually been published, so a placeholder token leaves the container
-    # permanently unhealthy and `up --wait` never returns. Disabling that
-    # healthcheck to get it started would also point every pull request's
-    # junk-token requests at Cloudflare's real API.
+    # Requires a real Cloudflare zone and token, and is not merely degraded
+    # without them: the image's own HEALTHCHECK fails until a record has been
+    # published, so a placeholder leaves it permanently unhealthy and
+    # `up --wait` never returns.
     profiles: [ci-excluded]
 
   llama-cpp:
@@ -75,21 +63,15 @@ services:
 
   # --- headscale and agentgateway: trust the CI certificate authority ---
   #
-  # Both fetch Authelia's OIDC discovery document over TLS before they serve
-  # anything, and both exit when that fails - headscale because
-  # only_start_if_oidc_is_available is deliberately true, agentgateway because
-  # of ui.policies.oidc. That is what kept them out of CI: the ACME resolver
-  # holds a placeholder Cloudflare token here, so Traefik used to answer with
-  # its own generated certificate and verification failed.
+  # Both fetch Authelia's OIDC discovery document over TLS at startup and exit
+  # when it fails, which is what used to keep them out: the ACME resolver holds
+  # a placeholder token, so Traefik served its own generated certificate.
+  # tests/ci-tls-store.sh files a throwaway leaf in the ACME store instead;
+  # these two only need its root.
   #
-  # tests/ci-tls-store.sh now issues a throwaway CA and files its leaf in the
-  # ACME store compose.yaml already mounts, so Traefik serves it without any
-  # change to its configuration. These two only need the root.
-  #
-  # SSL_CERT_FILE rather than a mount over the system bundle: headscale is Go
-  # and agentgateway's image sets this same variable itself, which is how we
-  # know its TLS stack reads it. Nothing here talks to the public internet, so
-  # replacing the bundle rather than appending to it costs nothing.
+  # Replacing the system bundle rather than appending to it is safe - nothing
+  # here reaches the public internet - and SSL_CERT_FILE is what both read:
+  # headscale is Go, and agentgateway's own image already sets this variable.
   headscale:
     environment:
       - SSL_CERT_FILE=/ci-tls/ca-cert.pem
@@ -214,18 +196,13 @@ services:
         ipv4_address: "192.168.88.250"
 
   # --- stremio-lan: the other tenant of the LAN segment ---
-  # Same reason as Pi-hole above, and the same fix: compose.yaml takes its
-  # address from ${STREMIO_IP:-192.168.1.251}, which is outside the CI bridge,
-  # and `up` then fails with "Invalid address ... does not belong to any of
+  # Same fix as Pi-hole above: ${STREMIO_IP:-192.168.1.251} is outside the CI
+  # bridge, and `up` fails with "Invalid address ... does not belong to any of
   # this network's subnets".
   #
-  # Pinned here rather than by putting STREMIO_IP and HOST_LAN_SUBNET in the
-  # workflow's .env: HOST_LAN_SUBNET also feeds this network's own ipam config
-  # in compose.yaml, and setting it to the CI subnet would leave the merged
-  # network declaring 192.168.88.0/24 twice.
-  #
-  # This is the only Stremio mode CI can run - the default one is inside
-  # gluetun's network namespace, and gluetun needs credentials no runner has.
+  # Pinned here rather than through the workflow's .env, because
+  # HOST_LAN_SUBNET also feeds this network's ipam config in compose.yaml and
+  # would leave the merged network declaring 192.168.88.0/24 twice.
   stremio-lan:
     networks:
       frontend: {}

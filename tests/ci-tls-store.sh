@@ -2,37 +2,27 @@
 # A certificate CI's own containers trust, handed to Traefik the way ACME
 # would have.
 #
-# Two services fetch Authelia's OIDC discovery document over TLS *at startup*
-# and exit when it fails: headscale (only_start_if_oidc_is_available: true,
-# deliberately) and agentgateway (ui.policies.oidc). On a runner the ACME
-# resolver holds a placeholder Cloudflare token and can issue nothing, so
-# Traefik answers with its own generated certificate, verification fails, and
-# both were parked in compose.test.yaml's ci-excluded list for it.
+# headscale and agentgateway fetch Authelia's OIDC discovery document over TLS
+# at startup and exit when it fails, and CI's ACME resolver holds a
+# placeholder token, so Traefik served its own generated certificate.
 #
-# The fix has to give Traefik a certificate without touching compose.yaml.
-# That rules out the file provider, which is where a `defaultCertificate`
-# normally lives: Traefik treats CLI flags, environment and file as mutually
-# exclusive static-configuration sources, and compose.yaml configures it
-# entirely with flags - measured, not assumed. With those flags in place a
-# TRAEFIK_PROVIDERS_FILE_FILENAME in the environment leaves `providers` empty
-# in the loaded static configuration.
+# The certificate has to reach Traefik without touching compose.yaml, which
+# rules out the file provider where a `defaultCertificate` normally lives:
+# Traefik takes CLI flags, environment and file as mutually exclusive static
+# configuration sources, and compose.yaml uses flags. Measured - with them in
+# place, TRAEFIK_PROVIDERS_FILE_FILENAME leaves `providers` empty.
 #
-# So the certificate goes in through the one door already open: the ACME
-# store. compose.yaml mounts ${DATA_LOCATION}/traefik/letsencrypt at
-# /letsencrypt, and a store that already holds a certificate covering a domain
-# is a domain Traefik never asks the CA for. Nothing in compose.yaml changes,
-# and CI exercises the real certificate-serving path rather than a CI-only one.
+# So it goes in through the ACME store compose.yaml already mounts at
+# /letsencrypt: a domain the store covers is one Traefik never asks the CA
+# for, and it serves the leaf through its normal path.
 #
 # Usage: ci-tls-store.sh <letsencrypt-dir> <ca-dir>
 #   <letsencrypt-dir>/acme.json  the store, 0600 - Traefik refuses it wider
-#   <ca-dir>/ca-cert.pem         the root, 0644 - mounted into the two
-#                                containers above and named by SSL_CERT_FILE
+#   <ca-dir>/ca-cert.pem         the root, 0644 - named by SSL_CERT_FILE
 #
-# It refuses to run when the store already exists, which is what stops it
-# being pointed at a real install: there, acme.json holds the certificates
-# Let's Encrypt issued, and reissuing them costs a duplicate-certificate rate
-# limit. CI wipes DATA_LOCATION before every run, so the guard never fires
-# there. CI_TLS_FORCE=1 overrides it for a dirty scratch directory.
+# Refuses to run when the store already exists, so it cannot be pointed at a
+# real install's certificates; CI_TLS_FORCE=1 overrides. CI wipes
+# DATA_LOCATION every run, so the guard never fires there.
 set -eu
 
 STORE_DIR="${1:?usage: $(basename "$0") <letsencrypt-dir> <ca-dir>}"
@@ -45,15 +35,12 @@ RESOLVER="${CI_TLS_RESOLVER:-cloudflare}"
 DOMAIN="${HOST_NAME:-test.local}"
 EMAIL="${EMAIL:-test@example.com}"
 
-# Long enough that Traefik never tries to renew it. It renews at a third of
-# certificatesDuration remaining, 30 days by default, and a renewal here would
-# mean a real ACME call to Let's Encrypt with a placeholder token on every
-# pull request. A CI job lives for minutes, so the only thing this number
-# controls is whether that call happens.
+# Long enough that Traefik never renews: it renews at a third of
+# certificatesDuration remaining, 30 days by default, and a renewal here means
+# a real Let's Encrypt call with a placeholder token on every pull request.
 DAYS="${CI_TLS_DAYS:-120}"
 
-# Before anything is generated, and before the directories are created: the
-# whole point is to not have written to a real store by the time we find out.
+# Before anything is generated or any directory created.
 if [ -e "$STORE_DIR/acme.json" ] && [ "${CI_TLS_FORCE:-0}" != 1 ]; then
     printf '%s: %s already exists.\n' "$(basename "$0")" "$STORE_DIR/acme.json" >&2
     printf 'This script overwrites it, and on a real host that file is the only copy of\n' >&2
@@ -67,10 +54,9 @@ trap 'rm -rf "$WORK"' EXIT INT TERM HUP
 
 mkdir -p "$STORE_DIR" "$CA_DIR"
 
-# A real two-certificate chain, not a self-signed leaf doubling as its own
-# root: Go's verifier wants a parent with basicConstraints CA:true, and the
-# rules for when it will accept a leaf out of the root pool are subtle enough
-# that issuing properly is the shorter path.
+# A real chain rather than a self-signed leaf in the root pool: Go's verifier
+# wants a parent with basicConstraints CA:true, and issuing properly is the
+# shorter path than working out when it accepts a leaf as its own root.
 openssl req -x509 -newkey rsa:2048 -nodes \
     -keyout "$WORK/ca-key.pem" -out "$WORK/ca-cert.pem" -days "$DAYS" \
     -subj "/CN=pi-pcloud CI CA" \
@@ -81,9 +67,8 @@ openssl req -newkey rsa:2048 -nodes \
     -keyout "$WORK/leaf-key.pem" -out "$WORK/leaf.csr" \
     -subj "/CN=${DOMAIN}" >/dev/null 2>&1
 
-# Both the apex and the wildcard, which is what the routers ask for: the
-# traefik and headscale routers name them explicitly in tls.domains, and every
-# other host in the stack is one label deep so the wildcard covers it.
+# Apex and wildcard: the traefik and headscale routers name both in
+# tls.domains, and every other host is one label deep.
 cat > "$WORK/leaf.ext" <<EXT
 subjectAltName = DNS:${DOMAIN}, DNS:*.${DOMAIN}
 extendedKeyUsage = serverAuth
@@ -94,10 +79,9 @@ openssl x509 -req -in "$WORK/leaf.csr" \
     -CA "$WORK/ca-cert.pem" -CAkey "$WORK/ca-key.pem" -CAcreateserial \
     -out "$WORK/leaf-cert.pem" -days "$DAYS" -extfile "$WORK/leaf.ext" >/dev/null 2>&1
 
-# The ACME account. Traefik parses this with x509.ParsePKCS1PrivateKey, so it
-# has to be traditional DER rather than the PKCS#8 openssl 3 writes by
-# default. Never used - no domain is left for the resolver to order - but an
-# account it cannot parse is an error at startup.
+# The ACME account. Never used, since no domain is left to order, but one
+# Traefik cannot parse is an error at startup - and it uses
+# x509.ParsePKCS1PrivateKey, so traditional DER, not openssl 3's PKCS#8.
 openssl genrsa -traditional 2048 2>/dev/null > "$WORK/acct-key.pem"
 openssl rsa -in "$WORK/acct-key.pem" -traditional -outform DER \
     -out "$WORK/acct-key.der" >/dev/null 2>&1
@@ -114,9 +98,9 @@ def b64(name):
     return base64.b64encode((work / name).read_bytes()).decode()
 
 
-# Field names are Traefik's own: types.Certificate tags domain/certificate/key
-# in lower case, everything around it keeps the Go field name. A key it does
-# not recognise is silently dropped, which would look like an empty store.
+# Field names are Traefik's own - types.Certificate tags
+# domain/certificate/key lower case, the rest keep their Go names. An
+# unrecognised key is dropped silently, which looks like an empty store.
 store = {
     os.environ["CI_TLS_RESOLVER"]: {
         "Account": {
@@ -145,9 +129,8 @@ PY
 chmod 600 "$STORE_DIR/acme.json"
 
 cp "$WORK/ca-cert.pem" "$CA_DIR/ca-cert.pem"
-# World-readable on purpose: agentgateway runs as uid 1000 and headscale as
-# root, and this is a root certificate whose private key was in a temporary
-# directory this script has already deleted.
+# World-readable on purpose: agentgateway runs as uid 1000, headscale as root,
+# and this is a public certificate - its key was in $WORK, already gone.
 chmod 644 "$CA_DIR/ca-cert.pem"
 
 printf '%s: %s and %s issued for %s, valid %s days\n' \

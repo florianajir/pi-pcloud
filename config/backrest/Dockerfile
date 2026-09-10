@@ -5,14 +5,11 @@ FROM ghcr.io/garethgeorge/backrest:v1.14.1
 # server does not know (e.g. transaction_timeout, added in 17), and the restore
 # then aborts on its very first line under ON_ERROR_STOP. Verified in a restore
 # drill against a real dump. Bump this together with the server image.
-# Pinned to the generation, not to `18.6-r0`, and the same for every apk line
-# below. The reproducibility boundary here is the base image's Alpine branch,
-# which is fixed: inside 3.24 a package only moves for a patch or a security
-# fix, so an exact pin bought almost nothing and cost a build. It cost one
-# already — jq went 1.8.1-r0 -> 1.8.2-r0 and nothing rebuilt this image until
-# CI started to, at which point the pin was simply unsatisfiable. `=~18` still
-# refuses 17 or 19, which is the constraint that actually matters; `=~1.7`
-# against today's jq fails, so these are real bounds and not decoration.
+# Pinned to the generation, here and on every apk line below. The
+# reproducibility boundary is the base image's Alpine branch, and inside 3.24 a
+# package only moves for a patch — an exact pin bought little and cost a build
+# (jq went 1.8.1-r0 -> 1.8.2-r0 unnoticed until CI rebuilt this). Still a real
+# bound: `=~18` refuses 17 or 19, and `=~1.7` fails against today's jq.
 # postgresql18-client lives in main, unlike the 16 client which was in community.
 RUN apk add --no-cache postgresql18-client=~18 jq=~1
 # apache2-utils provides htpasswd, the only bcrypt tool available here; the
