@@ -73,18 +73,17 @@ main() {
         safe_chmod 600 "$agent_key_file"
         log "Generated the agentgateway agent API key"
     fi
-    # Trilium's own /v1 credential, separate from open-webui's for the same
-    # reason agent_api_key is: revoking the notes' access to the models must not
-    # log the chat out, and the two are written by different hooks.
+    # Trilium's own /v1 credential, separate for the same reason agent_api_key
+    # is: revoking the notes' access to the models must not log the chat out.
     if [ ! -s "$trilium_key_file" ]; then
         write_file_atomic "$trilium_key_file" generate_secret \
             || die "Failed to generate the Trilium LLM API key"
         safe_chmod 600 "$trilium_key_file"
         log "Generated the Trilium LLM API key"
     fi
-    # The inbound credential for /mcp. That surface is a different one from /v1
-    # and has no gate of its own by default (docs/AI.md), and everything behind
-    # it reads and writes every note - so it is nobody else's key.
+    # The inbound credential for /mcp, a different surface from /v1 with no
+    # gate of its own by default (docs/AI.md). Everything behind it reads and
+    # writes every note, so it is nobody else's key.
     if [ ! -s "$mcp_key_file" ]; then
         write_file_atomic "$mcp_key_file" generate_secret \
             || die "Failed to generate the agentgateway MCP API key"
@@ -102,16 +101,13 @@ main() {
     trilium_llm_key="sk-$(cat "$trilium_key_file")"
     mcp_api_key="sk-$(cat "$mcp_key_file")"
 
-    # Minted by scripts/trilium-bootstrap.sh, which runs post-start - so on a
-    # fresh boot there is nothing here yet and the MCP target presents a token
-    # Trilium answers 401 to. That bootstrap re-runs this hook and recreates
-    # agentgateway once it holds the real one, so the gap closes inside the same
-    # `make update`.
+    # Minted post-start by scripts/trilium-bootstrap.sh, which re-runs this
+    # hook and recreates agentgateway once it holds the real one - so the gap
+    # closes inside the same `make update`.
     #
-    # The placeholder is not cosmetic: config.yaml expands this reference, and
-    # an empty expansion leaves a null where agentgateway wants a string, which
-    # makes it refuse the entire mcp: section at startup. A wrong token degrades
-    # to 401 on one target; an empty one takes the gateway down.
+    # The placeholder is not cosmetic: an empty expansion leaves a null where
+    # config.yaml wants a string and agentgateway refuses the whole mcp:
+    # section. A wrong token 401s one target; an empty one downs the gateway.
     trilium_etapi_token="$(read_trilium_etapi_token)"
     [ -n "$trilium_etapi_token" ] || trilium_etapi_token="pending-trilium-bootstrap"
 

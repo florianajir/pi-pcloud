@@ -1,15 +1,12 @@
 #!/bin/sh
-# Pre-start: make sure Trilium's OIDC client secret exists as a *file* before
-# the container binds it, and create the data directory.
+# Pre-start: create the data directory, and make sure Trilium's OIDC client
+# secret exists as a *file* before the container binds it.
 #
-# Without this, enabling Trilium on an already-installed host starts it before
-# any hook has written the secret, and the Docker daemon materialises the
-# missing bind source as an empty **directory**. The container still comes up
-# healthy - Trilium only reads the secret when someone tries to sign in - so the
-# failure is invisible until authelia-pre-start.sh later refuses to overwrite a
-# directory with a file. `make enable` runs only `<service>-pre-start.sh`, and
-# Trilium is the first OIDC client whose secret is written by nothing else:
-# every other one has a hook of its own that happens to run first.
+# `make enable` runs only `<service>-pre-start.sh`, and Trilium is the first
+# OIDC client whose secret is written by no hook of its own - so without this
+# the container starts first and Docker materialises the missing bind source as
+# an empty directory. It still comes up healthy, because the secret is read
+# only at sign-in.
 #
 # A pre-start hook (scripts/run-hooks.sh). Idempotent.
 
@@ -24,21 +21,16 @@ main() {
 
     if [ ! -d "$data_location/trilium" ]; then
         mkdir -p "$data_location/trilium"
-        # The container chowns its data directory to uid 1000 on every start, so
-        # this is only about keeping it inspectable from the host in between.
+        # The container chowns this to uid 1000 at every start; this only keeps
+        # it inspectable from the host in between.
         fix_ownership "$data_location/trilium"
     fi
 
-    # Idempotent: returns immediately once the secret file and the client stanza
-    # both exist, and otherwise runs authelia-pre-start.sh to mint them.
+    # Idempotent: a no-op once the secret and the client stanza both exist.
     #
-    # Deliberately not tolerated. A pre-start hook runs blocking, and the
-    # alternative to stopping here is the failure this whole script exists to
-    # prevent: `export VAR="$(cat <missing>)"` exits 0, so the container would
-    # start, pass its healthcheck and only reveal the empty client secret to
-    # whoever next tries to sign in. authelia-pre-start.sh runs earlier in the
-    # same phase, so by now it has already succeeded - if this fails, something
-    # is wrong that a silent warning would bury.
+    # Fatal on purpose. The alternative is the failure this script exists to
+    # prevent: `export VAR="$(cat <missing>)"` exits 0, so the container starts
+    # healthy and only reveals the empty secret at the next sign-in.
     ensure_authelia_oidc_materials trilium "Trilium" \
         || die "Could not prepare Trilium's OIDC client secret"
 

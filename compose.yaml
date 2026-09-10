@@ -2214,77 +2214,65 @@ services:
   trilium:
     <<: *service-defaults
     # ghcr, not docker.io/triliumnext/notes: that repository stopped at v0.95.0
-    # (June 2025) when the project renamed, and its `latest` is over a year
-    # behind. Multi-arch index, arm64 included - verified with imagetools.
+    # when the project renamed. Multi-arch index, arm64 included.
     image: ghcr.io/triliumnext/trilium:v0.105.0@sha256:cc6a15edd7ac3df9bb98ad39dd40af8ffda6c1c0bfafe37c26137ddcbecdb7e5
     container_name: pi-trilium
     profiles: ["trilium", "all"]
     networks:
-      # frontend only: SQLite, so no database segment. Egress matters though -
-      # the OIDC discovery probe and the token exchange both leave the container.
+      # frontend only: SQLite, so no database segment. Egress still matters -
+      # the OIDC discovery probe and token exchange leave the container.
       - frontend
     extra_hosts:
-      # Authelia's discovery document. Trilium probes it lazily on the first
-      # sign-in attempt, not at boot, so a missing entry surfaces as a failed
-      # login rather than a container that refuses to start.
+      # Authelia's discovery document, probed lazily at the first sign-in - so
+      # a missing entry is a failed login, not a container that will not start.
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
     expose:
       - 8080
-    # oauthClientSecret has no *_FILE variant - config.ts reads it from the
-    # environment or from config.ini, and rendering the secret into an ini file
-    # on the host would leave it at rest outside the secrets directory. Same
-    # trick as freshrss, vaultwarden and open-webui.
-    #
-    # `$$@` is compose's escape for `$@`, passing `command:` below through to
-    # the image's own entrypoint unchanged.
+    # oauthClientSecret has no *_FILE variant: config.ts reads it from the
+    # environment or from config.ini, and rendering it into an ini file would
+    # leave the secret at rest outside the secrets directory. Same trick as
+    # freshrss, vaultwarden and open-webui. `$$@` is compose's escape for `$@`.
     entrypoint:
       - sh
       - -c
       - 'export TRILIUM_MULTIFACTORAUTHENTICATION_OAUTHCLIENTSECRET="$(cat /run/secrets/oidc_trilium_secret)" && exec docker-entrypoint.sh "$$@"'
       - sh
-    # An `entrypoint:` in compose also clears the image's CMD, and this image's
-    # entrypoint ends in `exec "$$@"` - without this the container would exec
-    # nothing and exit 0 silently, exactly as freshrss did. This is the image's
-    # CMD verbatim; re-check it against `docker inspect` on an image bump.
+    # An `entrypoint:` in compose clears the image's CMD, and this image's
+    # entrypoint ends in `exec "$$@"` - without this the container execs nothing
+    # and exits 0 silently, as freshrss did. Re-check against `docker inspect`
+    # on an image bump.
     command:
       - sh
       - ./start-docker.sh
     environment:
       - TZ=${TIMEZONE:-Europe/Paris}
-      # Explicit rather than inherited: with it unset the data directory is
-      # derived from the *runtime user's* home, so a future USER_UID would move
-      # the database out from under the mount below.
+      # Explicit: unset, the data directory follows the *runtime user's* home,
+      # so a future USER_UID would move the database out from under the mount.
       - TRILIUM_DATA_DIR=/home/node/trilium-data
-      # The modern names. TRILIUM_OAUTH_* still work as aliases, but they are
-      # what config.ts calls legacy, and only a subset of the settings has one.
-      # Traefik's address alone, matching FreshRSS's TRUSTED_PROXY and Immich's
-      # IMMICH_TRUSTED_PROXIES. Left at its `false` default Express sees every
-      # request as plain HTTP from the proxy, so the session cookie never gets
-      # its Secure flag and every client is logged as 172.30.11.250. A bare
-      # `true` is the wrong fix and upstream says so in routes/mcp.ts: it trusts
-      # the left-most X-Forwarded-For, so anything on `frontend` could forge
-      # `127.0.0.1` and take the loopback path into /mcp. A /32 trusts one hop.
+      # Traefik's address alone, as with FreshRSS's TRUSTED_PROXY. At the
+      # `false` default Express sees plain HTTP, so the session cookie loses its
+      # Secure flag and every client logs as the proxy. A bare `true` is the
+      # wrong fix - upstream's routes/mcp.ts notes it trusts the left-most
+      # X-Forwarded-For, so a neighbour could forge 127.0.0.1 into /mcp.
       - TRILIUM_NETWORK_TRUSTEDREVERSEPROXY=172.30.11.250/32
+      # The modern spellings; TRILIUM_OAUTH_* are aliases config.ts calls legacy
+      # and only some settings have one.
       - TRILIUM_MULTIFACTORAUTHENTICATION_OAUTHBASEURL=https://notes.${HOST_NAME:-pi.lan}
       - TRILIUM_MULTIFACTORAUTHENTICATION_OAUTHCLIENTID=trilium
       - TRILIUM_MULTIFACTORAUTHENTICATION_OAUTHISSUERBASEURL=https://auth.${HOST_NAME:-pi.lan}
       - TRILIUM_MULTIFACTORAUTHENTICATION_OAUTHISSUERNAME=Authelia
-      # Left unset deliberately: oauthScope defaults to `openid profile email`,
-      # and oauthClientAuthMethod / oauthIdTokenSigningAlg auto-detect from the
-      # discovery document (resolving to client_secret_basic and RS256 against
-      # Authelia). Naming them would pin values the provider already advertises.
-      #
-      # No `groups`: Trilium has no roles, and only one identity can be enrolled
-      # at a time - see the enrollment note in docs/SECURITY.md.
+      # oauthScope, oauthClientAuthMethod and oauthIdTokenSigningAlg are left
+      # unset: they default to `openid profile email` and auto-detect from the
+      # discovery document. No `groups` - Trilium has no roles, and only one
+      # identity can be enrolled. See docs/SECURITY.md.
     volumes:
       - ${DATA_LOCATION:-./data}/trilium:/home/node/trilium-data
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_trilium_secret.txt:/run/secrets/oidc_trilium_secret:ro
     healthcheck:
       <<: *healthcheck-default
       # The image's own HEALTHCHECK, re-declared only to put it on the stack's
-      # interval anchor - it ships just a start_period, leaving the rest at
-      # Docker's 30s default. The bundled script is the only probe available:
-      # this is a Debian image with node and bash but no curl, wget or nc.
+      # interval anchor. It is the only probe available: a Debian image with
+      # node and bash but no curl, wget or nc.
       test: ["CMD-SHELL", "exec gosu node node /usr/src/app/docker_healthcheck.cjs"]
       start_period: 40s
     labels:
@@ -2299,25 +2287,21 @@ services:
       - "traefik.docker.network=frontend"
       - "traefik.http.routers.trilium.rule=Host(`notes.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.trilium.entrypoints=websecure"
-      # frame-deny@docker would send DENY, which blocks *same-origin* framing
-      # too - and Trilium frames itself twice: the print/PDF-export view
-      # (`?print#<notePath>`, in NoteDetail-*.js) and the bundled pdf.js viewer
-      # (`pdfjs/web/viewer.html`, in PdfViewer-*.js). Both answer 200, so DENY
-      # breaks printing and PDF preview with nothing in the server log. Trilium
-      # already sends SAMEORIGIN itself through helmet; this only stops Traefik
-      # overwriting it. Same fix as nextcloud-frame and vaultwarden-frame.
+      # frame-deny would send DENY, which blocks *same-origin* framing too, and
+      # Trilium frames itself twice: the print/PDF view (`?print#`) and the
+      # bundled pdf.js viewer. Both break silently. It already sends SAMEORIGIN
+      # via helmet; this only stops Traefik overwriting it, as nextcloud-frame
+      # and vaultwarden-frame do.
       - "traefik.http.middlewares.trilium-frame.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN"
-      # lan@docker alone, no authelia@docker: Trilium runs the OIDC flow itself
-      # and owns its session. Forward-auth on top would also cover /etapi and
-      # /api/clipper - the scripting API and the Web Clipper extension, neither
-      # of which can complete an interactive portal. Same rationale as Kavita's
-      # OPDS clients and FreshRSS's Google Reader API.
+      # lan@docker alone: Trilium runs the OIDC flow itself. Forward-auth would
+      # also cover /etapi, /api/clipper and /mcp, none of which can complete an
+      # interactive portal. Same rationale as Kavita's OPDS clients.
       - "traefik.http.routers.trilium.middlewares=trilium-frame@docker,lan@docker"
       - "traefik.http.routers.trilium.tls=true"
       - "traefik.http.services.trilium.loadbalancer.server.port=8080"
     cpu_shares: *cpu-prio-batch
-    # Node with the whole note tree and the search index in memory; idle sits
-    # around 200 MB and an import or a full-text reindex is the peak.
+    # Node with the note tree and search index in memory: ~200 MB idle, peaking
+    # on an import or a full-text reindex.
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
 

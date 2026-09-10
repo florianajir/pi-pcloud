@@ -43,9 +43,8 @@ llm:
         - key: ${LLM_API_KEY}
           metadata:
             user: open-webui
-        # Trilium's AI assistant, wired by scripts/trilium-bootstrap.sh into the
-        # `llmProviders` option as an `openai-compatible` provider. Its own key
-        # so revoking the notes' access to the models leaves the chat alone.
+        # Trilium's AI assistant, wired by scripts/trilium-bootstrap.sh. Its own
+        # key, so revoking the notes' access to the models leaves the chat alone.
         - key: ${TRILIUM_LLM_KEY}
           metadata:
             user: trilium
@@ -183,50 +182,42 @@ routes:
 mcp:
   gateways: default
   policies:
-    # /mcp is a third surface, and it inherits nothing: llm.policies.apiKey is
-    # attached to the llm: section and does not cover it, so without this block
-    # every target below is reachable by anything that clears the LAN allowlist.
-    # See the surface table in docs/AI.md.
+    # /mcp inherits nothing: llm.policies.apiKey is attached to the llm:
+    # section and does not cover it, so without this block every target below
+    # is open to anything that clears the LAN allowlist. See docs/AI.md.
     apiKey:
       mode: strict
       keys:
-        # Written by scripts/agentgateway-pre-start.sh. Distinct from
-        # LLM_API_KEY on purpose: whoever holds this reads and writes every note
-        # through the target below, which is not what an /v1 key is for.
+        # Distinct from LLM_API_KEY on purpose: whoever holds this reads and
+        # writes every note through the target below.
         - key: ${MCP_API_KEY}
           metadata:
             user: mcp-clients
   # failOpen, not the failClosed default: `trilium` is an optional profile, and
-  # with it disabled the target below cannot initialize. Closed, that one dead
-  # target would take the whole /mcp surface down with it rather than just
-  # itself - including any target added through the UI later.
+  # disabled its target cannot initialize - closed, that would take the whole
+  # /mcp surface down with it.
   failureMode: failOpen
   targets:
-    # Trilium's own MCP server, which it serves at /mcp once the `mcpEnabled`
-    # option is on - set by scripts/trilium-bootstrap.sh, not by an env var.
+    # Trilium serves this once its `mcpEnabled` option is on - a database
+    # option, set by scripts/trilium-bootstrap.sh, not an env var.
     - name: trilium
       mcp:
         host: trilium
         port: 8080
         path: /mcp
       policies:
-        # Trilium takes an ETAPI token in Authorization and accepts nothing
-        # else - not a session cookie, and not the loopback address. The token
-        # is minted post-start by scripts/trilium-bootstrap.sh, so on a fresh
-        # install this expands to an empty string and Trilium answers 401 until
-        # that hook has run once.
+        # Trilium accepts an ETAPI token in Authorization and nothing else -
+        # not a session cookie, not the loopback address.
         requestHeaderModifier:
           # A map, not a list of {name, value}: HeaderModifier.set is
-          # `additionalProperties: string` in agentgateway's own schema, and a
-          # sequence makes it refuse the whole mcp: section at startup.
+          # `additionalProperties: string`, and a sequence makes agentgateway
+          # refuse the whole mcp: section at startup.
           set:
-            # Never empty, and quoting does not save it: an env reference that
-            # expands to nothing leaves agentgateway with a null here and it
-            # refuses to start the whole mcp: section ("invalid type: null,
-            # expected a string") - measured, not assumed. So
-            # agentgateway-pre-start.sh substitutes a placeholder until
-            # trilium-bootstrap.sh has minted the real token, and Trilium
-            # answers 401 to it in the meantime.
+            # Never empty, and quoting does not save it: a reference that
+            # expands to nothing leaves a null here and agentgateway refuses
+            # the mcp: section ("invalid type: null, expected a string"). So
+            # agentgateway-pre-start.sh writes a placeholder until
+            # trilium-bootstrap.sh mints the real token; Trilium 401s it.
             Authorization: "${TRILIUM_ETAPI_TOKEN}"
 # Written by the UI alongside the LLM section above; the LLM path buffers whole
 # request bodies, and this is the default it would have set (32 MiB).

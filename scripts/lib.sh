@@ -460,12 +460,11 @@ ensure_authelia_oidc_materials() {
     pre_start_script="$PROJECT_DIR/scripts/authelia-pre-start.sh"
 
     # A container that started before this secret existed leaves a *directory*
-    # here: compose materialises a missing bind source as one. Every guard below
-    # then reads as success - `-r` is true for a directory, and
-    # generate_oidc_secret's `[ ! -s ]` is false because a directory has a size -
-    # so the client is quietly never given a secret, and the service comes up
-    # healthy with an empty one. rmdir, not rm -rf: it only clears the empty
-    # directory compose made, and a non-empty one is somebody else's data.
+    # here, and every guard below then reads as success: `-r` is true for a
+    # directory, and generate_oidc_secret's `[ ! -s ]` is false because a
+    # directory has a size. The client is silently never given a secret and the
+    # service comes up healthy with an empty one. rmdir, not rm -rf: only the
+    # empty directory compose made; a non-empty one is somebody else's data.
     if [ -d "$secret_file" ]; then
         if rmdir "$secret_file" 2>/dev/null; then
             log "Removed the empty directory compose left at $secret_file (it started before the secret existed)"
@@ -517,18 +516,17 @@ ensure_authelia_oidc_materials() {
 
 # --- Trilium ---
 
-# Where scripts/trilium-bootstrap.sh leaves the ETAPI token it mints, and where
-# scripts/agentgateway-pre-start.sh reads it to authenticate the MCP target.
-# One definition, because the two hooks run in different phases and a drifting
-# path would fail silently: agentgateway would simply send no credential.
+# Where scripts/trilium-bootstrap.sh leaves the ETAPI token and where
+# scripts/agentgateway-pre-start.sh reads it. One definition: the two run in
+# different phases, and a drifting path fails silently - agentgateway would
+# just send no credential.
 # Usage: trilium_etapi_token_file
 trilium_etapi_token_file() {
     printf '%s/trilium/secrets/etapi_token' "$(resolve_data_location_path)"
 }
 
-# Echo the stored ETAPI token, or nothing when it has not been minted yet -
-# which is the expected state on a fresh install, before the post-start hook has
-# run. Never fails: callers treat an empty token as "not ready yet".
+# Echo the stored ETAPI token, or nothing before it has been minted. Never
+# fails: callers treat empty as "not ready yet".
 # Usage: read_trilium_etapi_token
 read_trilium_etapi_token() {
     local token_file=""

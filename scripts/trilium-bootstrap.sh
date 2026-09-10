@@ -1,25 +1,16 @@
 #!/bin/sh
 # Post-start: claim the Trilium instance, point its AI assistant at
-# agentgateway, turn its MCP server on, and hand agentgateway the ETAPI token
-# it needs to reach that server.
+# agentgateway, turn its MCP server on, and mint the ETAPI token agentgateway
+# needs to reach it.
 #
-# None of this is configurable by environment variable: config.ts has no AI
-# section at all, so `aiEnabled`, `mcpEnabled` and `llmProviders` are database
-# options and `PUT /api/options` is the only way in. That endpoint is
-# `[checkApiAuth, csrfMiddleware]` - a session cookie and a CSRF token, with no
-# ETAPI equivalent - and `POST /login` hands the browser to Authelia the moment
-# SSO is enrolled (open_id.ts / login.ts). So the whole window in which any of
-# this can be automated is *before* the owner enrols SSO, which is exactly
-# where a post-start hook on a fresh install sits.
+# `aiEnabled`, `mcpEnabled` and `llmProviders` are database options with no
+# environment equivalent, and `PUT /api/options` wants a session cookie plus a
+# CSRF token. `POST /login` redirects to Authelia once SSO is enrolled, so the
+# only window in which this can be automated is before that - hence claiming
+# the instance with ${PASSWORD} rather than waiting for the owner, which also
+# closes the first-run land-grab. See docs/AI.md and docs/SECURITY.md.
 #
-# That is also why this claims the instance itself rather than waiting for the
-# owner: a session needs a password, and the only password known here is
-# ${PASSWORD}. It closes the first-run window as a side effect - the instance
-# is claimed by the stack that created it rather than by whoever reaches it
-# first. See docs/SECURITY.md.
-#
-# A post-start hook (scripts/run-hooks.sh), tolerant. Idempotent: every step
-# checks the state it would create and does nothing when it is already there.
+# A post-start hook (scripts/run-hooks.sh). Idempotent.
 
 set -eu
 
@@ -40,15 +31,11 @@ setup_status() {
     docker_curl "$TRILIUM_URL/api/setup/status" 2>/dev/null
 }
 
-# Claim the instance: create the document if there is none, then set the owner
-# password if none is set.
-#
-# Neither step is gated on `hasExistingData`. That flag does not mean "has
-# notes" - it is the wizard's "a database was already here when I booted", and
-# it reads false on a perfectly populated instance (measured: false against 391
-# notes). Gating on it would have been a guard that fires on the wrong thing.
-# What actually protects each step is the condition upstream enforces:
-# checkAppNotInitialized for the document, checkPasswordNotSet for the password.
+# Create the document if there is none, then set the owner password if none is
+# set. Deliberately not gated on `hasExistingData`: that flag means "a database
+# was already here at boot", not "has notes", and reads false against a
+# populated instance. The real guards are upstream - checkAppNotInitialized and
+# checkPasswordNotSet.
 claim_instance() {
     local status="" password=""
 
@@ -57,17 +44,12 @@ claim_instance() {
         return 1
     }
 
-    # The only destructive call in this script: new-document runs
-    # discardExistingData() first. Reached solely when Trilium reports no schema
-    # at all, and refused upstream with a 401 in every other state.
+    # The only destructive call here - new-document runs discardExistingData()
+    # first - so it is reached only when Trilium reports no schema at all.
     #
-    # ?skipDemoDb leaves out the 177-note "Trilium Demo" document the wizard
-    # would otherwise seed - a personal knowledge base should start empty, and
-    # the built-in help subtree (which is separate) stays either way.
-    #
-    # The value is not read: upstream tests `skipDemoDb !== undefined`, so the
-    # *presence* of the parameter is the switch and `?skipDemoDb=false` would
-    # skip the demo just as thoroughly. Do not "fix" this into a boolean.
+    # ?skipDemoDb drops the 177-note "Trilium Demo" tree; the built-in help
+    # subtree is separate and stays. Its *value* is never read (upstream tests
+    # `!== undefined`), so `=false` would skip the demo too - not a boolean.
     if [ "$(printf '%s' "$status" | jq -r '.isInitialized | tostring')" != "true" ]; then
         log "Creating Trilium's initial document (without the demo notes)"
         printf '{}' \
@@ -83,12 +65,9 @@ claim_instance() {
         return 1
     }
 
-    # Attempted, never judged here. Success is `res.redirect("login")` and so is
-    # the refusal checkPasswordNotSet issues when a password already exists, so
-    # neither the status code nor curl's exit code can tell the two apart -
-    # reporting on either is how this hook came to announce it had claimed an
-    # instance it had not touched. Whether the stack owns the password is
-    # something only the sign-in below can answer, so that is where it is said.
+    # Attempted, never judged: success and checkPasswordNotSet's refusal are both
+    # `res.redirect("login")`, so no status distinguishes them. Whether the stack
+    # owns the password is answered by the sign-in below instead.
     jq -cn --arg p "$password" '{password1: $p, password2: $p}' \
         | docker_curl_stdin -X POST -o /dev/null \
             -H 'Content-Type: application/json' \
@@ -97,10 +76,9 @@ claim_instance() {
 
 # --- Authenticating as the owner ---
 
-# Echo the session cookie, or nothing. `POST /login` carries only the rate
-# limiter, no CSRF - but its handler redirects to Authelia instead of checking
-# the password once SSO is enrolled, which is what makes this a fresh-install
-# path and not a repair tool.
+# Echo the session cookie, or nothing. `POST /login` needs no CSRF, but its
+# handler redirects to Authelia rather than checking the password once SSO is
+# enrolled - which is what makes this a fresh-install path, not a repair tool.
 open_session() {
     local password="" headers="" session=""
 
@@ -116,24 +94,20 @@ open_session() {
         | sed -n 's/^[Ss]et-[Cc]ookie: *\(trilium\.sid=[^;]*\).*/\1/p' | head -1)"
     [ -n "$session" ] || return 1
 
-    # A cookie is not a login. Trilium hands a session to a *failed* attempt too
-    # (sendLoginError touches it), so the bare Set-Cookie made a wrong password
-    # look like success and the failure only surfaced two calls later as a
-    # refused options write. /bootstrap says plainly whether anyone is logged in.
+    # A cookie is not a login: a *failed* attempt gets a session too, so trusting
+    # Set-Cookie alone reads a wrong password as success.
     api_get_with_cookie "$TRILIUM_URL" "/bootstrap" "$session" 2>/dev/null \
         | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 1
 
     printf '%s' "$session"
 }
 
-# Echo "<cookie header>|<csrf token>" for the write below.
+# Echo "<cookie header>|<csrf token>".
 #
-# One request, with -i, and not two. csrf-csrf binds the token to the session
-# id, and /bootstrap re-issues `trilium.sid` alongside `trilium-csrf` - so
-# fetching the headers and the body separately paired a token from one response
-# with the session cookie of another, and every PUT came back "Invalid CSRF
-# token" (visible only in Trilium's own log, never in the response). Whatever
-# cookies this response sets are the ones that belong with this token.
+# One request, not two: csrf-csrf binds the token to the session id and
+# /bootstrap re-issues `trilium.sid` alongside `trilium-csrf`, so headers and
+# body fetched separately pair a token with the wrong session. The failure is
+# a 403 visible only in Trilium's log.
 csrf_material() {
     local session="$1" response="" headers="" body="" cookies="" token=""
 
@@ -145,8 +119,7 @@ csrf_material() {
     token="$(printf '%s' "$body" | jq -r '.csrfToken // empty' 2>/dev/null)"
     [ -n "$token" ] || return 1
 
-    # Every cookie this response set, joined - the refreshed session id included,
-    # falling back to the one we came in with when it set none.
+    # Every cookie this response set, refreshed session id included.
     cookies="$(printf '%s' "$headers" \
         | sed -n 's/^[Ss]et-[Cc]ookie: *\([^;]*\).*/\1/p' | paste -sd'; ' -)"
     [ -n "$cookies" ] || cookies="$session"
@@ -156,10 +129,9 @@ csrf_material() {
 
 # --- The options themselves ---
 
-# Echo the models agentgateway is serving, as the LlmModelInfo array Trilium
-# stores in `selectedModels`. Denormalised on purpose: Trilium's model picker
-# renders straight from the option and never re-fetches, so a provider saved
-# with an empty list shows up with no models at all.
+# The models agentgateway serves, as the LlmModelInfo array Trilium stores in
+# `selectedModels`. Denormalised because its picker renders straight from the
+# option and never re-fetches: an empty list means no models at all.
 gateway_models() {
     local key="$1"
 
@@ -184,9 +156,8 @@ apply_options() {
         log "NOTE: agentgateway listed no models; the provider is saved without a preselection"
     fi
 
-    # `openai-compatible` rather than `openai`: the openai provider talks to
-    # api.openai.com and ignores baseURL for model listing. Same reasoning as
-    # the `custom` provider agentgateway itself uses for llama-cpp.
+    # `openai-compatible`, not `openai`: the latter talks to api.openai.com and
+    # ignores baseURL when listing models.
     providers="$(jq -cn --arg id "$PROVIDER_ID" --arg key "$key" \
         --arg url "$AGENTGATEWAY_URL/v1" --argjson models "$models" \
         '[{id: $id, name: "Agentgateway", provider: "openai-compatible",
@@ -216,20 +187,16 @@ apply_options() {
 
 # --- The token agentgateway needs ---
 
-# `POST /api/login/token` verifies the password directly and is *not* gated on
-# SSO the way /login is, so this keeps working after enrolment - the same shape
-# as Kavita's API key. Written where agentgateway-pre-start.sh looks for it.
+# `POST /api/login/token` verifies the password itself and is not gated on SSO
+# the way /login is, so this still works after enrolment - the same shape as
+# Kavita's API key. Written where agentgateway-pre-start.sh looks for it.
 mint_etapi_token() {
     local token_file="" password="" token=""
 
     token_file="$(trilium_etapi_token_file)"
-    # Three outcomes, not two: 0 minted, 2 already there, 1 could not. main()
-    # has to tell "nothing to do" from "the contract moved", because only the
-    # second should fail a boot.
-    #
-    # A token pasted here by hand counts as already there: on an instance whose
-    # password this stack did not set, that file is the only way the MCP target
-    # ever gets a credential, and re-running this hook must not overwrite it.
+    # Three outcomes: 0 minted, 2 already there, 1 could not - main() must tell
+    # "nothing to do" from "the contract moved". A token pasted here by hand
+    # counts as already there and is never overwritten.
     if [ -s "$token_file" ]; then
         return 2
     fi
@@ -237,15 +204,9 @@ mint_etapi_token() {
     password="$(get_env_value PASSWORD)"
     [ -n "$password" ] || return 1
 
-    # Unlike /login, this route verifies the password itself and is not handed
-    # to Authelia when SSO is enrolled - so it is the one automated path that
-    # still works on an enrolled instance. It 401s when the owner chose their
-    # own password in the setup wizard, which is not an error worth shouting
-    # about: it is the normal state of an instance this stack did not claim.
-    # `.token`: /api/login/token answers {"token": ...}, not the {"authToken": ...}
-    # the internal OpenAPI document advertises (and that /etapi/auth/login really
-    # does return). Reading the spec rather than the response meant a mint that
-    # logged 200 server-side was reported here as a failure. Both accepted.
+    # `.token`, not the `.authToken` the internal OpenAPI document advertises -
+    # that spelling belongs to /etapi/auth/login. Both accepted. A 401 here just
+    # means the owner chose their own password, which is not an error.
     token="$(jq -cn --arg p "$password" '{password: $p, tokenName: "agentgateway-mcp"}' \
         | api_send_json_stdin POST "$TRILIUM_URL" "/api/login/token" 2>/dev/null \
         | jq -r '.token // .authToken // empty')"
@@ -255,7 +216,6 @@ mint_etapi_token() {
         log "  then re-run this hook - agentgateway's MCP target reads it from there."
         return 1
     fi
-
 
     mkdir -p "$(dirname "$token_file")"
     safe_chmod 700 "$(dirname "$token_file")"
@@ -267,17 +227,15 @@ mint_etapi_token() {
     return 0
 }
 
-# Re-render agentgateway's env_file and restart it, so the target picks the
-# token up in this run rather than at the next boot. Only ever called when the
-# token was just created: agentgateway is on an optional profile and restarting
-# it disconnects every open chat.
+# Re-render agentgateway's env_file and recreate it, so the MCP target picks the
+# token up now rather than at the next boot. Only called when the token was just
+# minted: recreating it disconnects every open chat.
 refresh_agentgateway() {
     container_is_running "pi-agentgateway" || return 0
 
     sh "$SCRIPT_DIR/agentgateway-pre-start.sh" >/dev/null 2>&1 \
         || { log "WARNING: could not re-render agentgateway's environment"; return 0; }
-    # up -d, not restart: env_file values are frozen at container creation, so a
-    # restart would keep the empty token this run just replaced.
+    # up -d, not restart: env_file values are frozen at container creation.
     compose up -d agentgateway >/dev/null 2>&1 \
         || log "WARNING: could not recreate agentgateway with the new token"
 }
@@ -289,10 +247,9 @@ main() {
 
     claim_instance || return 0
 
-    # Two independent halves, because they fail independently. The options need
-    # a session, which only exists before SSO is enrolled; the ETAPI token needs
-    # only the password, which /api/login/token still checks afterwards. An
-    # enrolled instance can therefore still get its MCP target wired.
+    # Two independent halves: the options need a session, which exists only
+    # before SSO is enrolled, while the token needs only the password. So an
+    # enrolled instance can still get its MCP target wired.
     session="$(open_session)"
     if [ -n "$session" ]; then
         owned=1
@@ -308,18 +265,14 @@ main() {
             failed=1
         fi
     else
-        # The normal state once the owner has enrolled SSO: /login stops
-        # checking passwords and hands the browser to Authelia. Nothing is
-        # broken - there is simply no longer a way in from a script, so
-        # aiEnabled/mcpEnabled/llmProviders have to be set in the UI. See
-        # docs/AI.md.
+        # Normal once SSO is enrolled: nothing is broken, there is simply no way
+        # in from a script any more. See docs/AI.md.
         log "No password session (SSO enrolled, or an owner password this stack did not set)"
         log "  Leaving Trilium's AI and MCP options alone; set them in Options -> AI."
     fi
 
-    # Not `mint && refresh || case`: that runs the handler when *refresh* fails
-    # too, and then $? is the wrong command's. The else branch still sees
-    # mint_etapi_token's status because nothing runs in between.
+    # Not `mint && refresh || case`: that also runs the handler when *refresh*
+    # fails, on the wrong $?.
     if mint_etapi_token; then
         refresh_agentgateway
     else
@@ -329,12 +282,10 @@ main() {
         esac
     fi
 
-    # Non-zero only when this instance was ours to configure and configuring it
-    # did not work - which on a fresh install means the endpoints this hook
-    # drives have moved, and CI runs post-start hooks blocking so the boot goes
-    # red instead of green-with-a-warning. An instance the stack does not own is
-    # not a failure: declining is the correct behaviour there, and returning 1
-    # for it would make every later `make update` fail on a working setup.
+    # Non-zero only when the instance was ours and configuring it still failed,
+    # which means the endpoints moved. CI runs post-start hooks blocking, so
+    # that is a red boot. An instance we do not own must stay 0 - otherwise
+    # every later `make update` fails on a working setup.
     if [ "$failed" -eq 1 ]; then
         log "ERROR: Trilium is owned by this stack but could not be configured;"
         log "  run tests/trilium-api-contract.sh - the API this hook drives may have moved."

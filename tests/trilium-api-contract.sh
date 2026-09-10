@@ -1,23 +1,20 @@
 #!/bin/sh
 # The Trilium HTTP contract scripts/trilium-bootstrap.sh is built on, asserted
-# against the image compose.yaml actually pins.
+# against the image compose.yaml pins.
 #
-# That bootstrap is unusually version-coupled: Trilium exposes none of its AI or
-# MCP settings as environment variables, so the hook drives the same private
-# endpoints the browser does - the setup wizard, a password sign-in, the CSRF
-# handshake and `PUT /api/options`. None of that is a published API, and it has
-# already moved under us once: `/api/login/token` answers `{"token": ...}` while
-# the project's own internal.openapi.yaml still documents `{"authToken": ...}`.
+# That hook drives Trilium's *private* endpoints - the setup wizard, a password
+# sign-in, the CSRF handshake, `PUT /api/options` - because none of the AI or
+# MCP settings exist as configuration. That surface has moved before:
+# `/api/login/token` answers `{"token": ...}` while the project's own
+# internal.openapi.yaml still documents `{"authToken": ...}`.
 #
-# An image bump is therefore the risk, and CI cannot see it any other way: the
-# post-start hook is deliberately tolerant, because declining is the correct
-# behaviour on an instance whose password the stack does not own. A hook that
-# quietly stopped wiring anything looks exactly like a hook that correctly
-# stepped aside. This test removes that ambiguity by asserting each behaviour
-# separately, on a throwaway instance, so a bump says which one changed.
+# CI cannot catch that on its own. The hook is deliberately tolerant, since
+# declining is correct on an instance whose password the stack does not own, so
+# a bump that broke the wiring looks exactly like a hook stepping aside. Each
+# behaviour is asserted separately here, so a bump names the one that changed.
 #
-# Touches nothing of the running stack: its own container, its own network, no
-# volumes, no published ports. Run with `make test`.
+# Touches nothing of the running stack: own container, own network, no volumes,
+# no published ports. Run with `make test`.
 set -eu
 
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,8 +33,8 @@ ok() {
 }
 
 # The status class, not the exact code: the bootstrap only needs these calls to
-# succeed, and asserting 204 where 200 would do as well turns an upstream tidy-up
-# into a red build that costs an investigation and changes nothing.
+# succeed, and pinning 204 where 200 would do turns an upstream tidy-up into a
+# red build that changes nothing.
 succeeds() {
     case "$2" in
         2*) pass=$((pass + 1)) ;;
@@ -99,23 +96,23 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 docker network create "$NET" >/dev/null
-# No volume: the data directory lives and dies with the container, so this can
-# never touch ${DATA_LOCATION}/trilium.
+# No volume: the data directory dies with the container, so this can never
+# touch ${DATA_LOCATION}/trilium.
 docker run -d --name "$BOX" --network "$NET" \
     -e TRILIUM_DATA_DIR=/home/node/trilium-data \
     "$IMAGE" >/dev/null
 
 BASE="http://$BOX:8080"
 
-# `-i` for the responses whose cookies matter, and never -f: the contract here
-# includes which status codes come back, so curl must not swallow them.
+# Never -f: the status codes are part of the contract, so curl must not
+# swallow them. `-i` where the cookies matter.
 probe() {
     docker run --rm -i --network "$NET" "$CURL_IMAGE" \
         -sS --connect-timeout 5 --max-time 30 "$@" 2>/dev/null || true
 }
 
-# Wait for the server rather than the healthcheck: this container has none of
-# the stack's compose wiring.
+# Wait on the server, not a healthcheck: this container has none of the
+# stack's compose wiring.
 ready=0
 i=0
 while [ "$i" -lt 60 ]; do
@@ -143,14 +140,11 @@ ok "/api/setup/status exposes isInitialized" \
 ok "a virgin instance reports isInitialized false" \
    "$(printf '%s' "$status" | jq -r '.isInitialized | tostring')" false
 
-# An empty body on purpose: the handler reads only `locale` and the
-# `skipDemoDb` query parameter. internal.openapi.yaml claims a password is
-# required here; it is not, and set-password below is what actually sets one.
-#
-# ?skipDemoDb exactly as the bootstrap sends it. Upstream tests
-# `skipDemoDb !== undefined`, so the switch is the parameter's *presence* - the
-# assertion further down is what would notice if that ever became a boolean,
-# because `=true` would then still read as true but a future `=false` would not.
+# Empty body on purpose: the handler reads only `locale` and the `skipDemoDb`
+# query parameter. internal.openapi.yaml claims a password is required; it is
+# not. ?skipDemoDb exactly as the bootstrap sends it - upstream tests
+# `!== undefined`, so presence is the switch, and the assertion further down is
+# what would notice that becoming a boolean.
 code="$(printf '{}' | probe -o /dev/null -w '%{http_code}' -X POST --data @- \
     -H 'Content-Type: application/json' "$BASE/api/setup/new-document?skipDemoDb=true")"
 succeeds "POST /api/setup/new-document accepts an empty body" "$code"
@@ -163,11 +157,10 @@ ok "and the instance is initialized afterwards" \
 code="$(printf '{"password1":"%s","password2":"%s"}' "$PASSWORD" "$PASSWORD" \
     | probe -o /dev/null -w '%{http_code}' -X POST --data @- \
         -H 'Content-Type: application/json' "$BASE/set-password")"
-# Deliberately not asserted as success or failure: it answers 302 either way -
-# `res.redirect("login")` on success, and the same from checkPasswordNotSet's
-# refusal - which is precisely why the bootstrap judges this by signing in
-# afterwards rather than by reading a status. What matters here is only that it
-# is reachable unauthenticated and without a CSRF token.
+# Not asserted as success or failure: it answers 302 either way - success and
+# checkPasswordNotSet's refusal are both `res.redirect("login")`, which is why
+# the bootstrap judges it by signing in afterwards. All that matters here is
+# that it is reachable without auth or CSRF.
 case "$code" in
     2* | 3*) pass=$((pass + 1)) ;;
     *)
@@ -194,8 +187,8 @@ ok "GET /bootstrap carries the CSRF token" \
 contains "GET /bootstrap sets the CSRF cookie" "$boot" "trilium-csrf="
 
 csrf_token="$(printf '%s' "$boot_body" | jq -r '.csrfToken')"
-# Every cookie that response set, the refreshed session id included: the token
-# is bound to a session id, so pairing it with an older cookie is a 403.
+# Every cookie that response set: the token is bound to a session id, so an
+# older cookie is a 403.
 cookies="$(printf '%s' "$boot" | tr -d '\r' \
     | sed -n 's/^[Ss]et-[Cc]ookie: *\([^;]*\).*/\1/p' | paste -sd'; ' -)"
 [ -n "$cookies" ] || cookies="$session"
@@ -209,7 +202,7 @@ code="$(printf '%s' "$body" | probe -o /dev/null -w '%{http_code}' -X PUT --data
 ok "PUT /api/options accepts the session and the x-csrf-token header" "$code" 204
 
 # Read back rather than trust the status: an option missing from the server's
-# ALLOWED_OPTIONS is rejected per name, and the call as a whole still succeeds.
+# ALLOWED_OPTIONS is rejected by name while the call still succeeds.
 opts="$(probe "$BASE/api/options" -H "Cookie: $cookies")"
 ok "aiEnabled survived the write" "$(printf '%s' "$opts" | jq -r '.aiEnabled')" true
 ok "mcpEnabled survived the write" "$(printf '%s' "$opts" | jq -r '.mcpEnabled')" true
@@ -225,10 +218,10 @@ ok "POST /api/login/token returns the token under .token" \
 
 # --- 6. The demo document ?skipDemoDb was supposed to leave out ---
 
-# Root's children, not a note count: the built-in help subtree lands under
-# _hidden either way, so counting rows cannot tell a skipped demo from a
-# seeded one. With the demo, root also carries "Trilium Demo", "Journal" and
-# "Miscellaneous"; without it, _hidden is the only child there is.
+# Root's children, not a note count: the help subtree lands under _hidden
+# either way, so counting rows cannot tell a skipped demo from a seeded one.
+# With the demo, root also carries "Trilium Demo", "Journal" and
+# "Miscellaneous".
 root_children="$(probe -H "Authorization: $etapi" "$BASE/etapi/notes/root" \
     | jq -c '.childNoteIds' 2>/dev/null)"
 ok "?skipDemoDb leaves root with only the hidden subtree" "$root_children" '["_hidden"]'
