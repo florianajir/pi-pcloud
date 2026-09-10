@@ -35,7 +35,7 @@ Latency comes from prompt size, not the model. Three defaults exist purely becau
 
 - **Thinking is off** (`LLAMA_ARG_CHAT_TEMPLATE_KWARGS`). Gemma 4 otherwise spends ~500 tokens reasoning before the first visible word — over a minute of empty chat window for "how are you".
 - **One server slot** (`LLAMA_ARG_N_PARALLEL=1`). llama-server defaults to several and runs them concurrently, so two requests each generated at ~5 tok/s instead of one at ~10. Queueing is faster than sharing three threads.
-- **Open WebUI's built-in tools are off for this model**, along with title, tag, follow-up and search-query generation. The built-in tools (time, memory, chats, notes, knowledge, channels) inject ~5000 tokens of schemas into every message — roughly three minutes of prompt processing before the model starts. The other four are invisible extra LLM calls per message.
+- **Open WebUI's built-in tools are off for every model**, along with title, tag, follow-up and search-query generation. The built-in tools (time, memory, chats, notes, knowledge, channels) inject ~5000 tokens of schemas into every message — roughly three minutes of prompt processing before the model starts. The other four are invisible extra LLM calls per message.
 
 All are re-enablable in **Admin Settings** and in the model's own **Capabilities**.
 
@@ -126,7 +126,13 @@ each surface has to gate itself:
 |---------|----------|--------|
 | `/ui` | `ui.policies.oidc` | Authelia, `admin_only` — the `admin` group with 2FA |
 | `/v1` | `llm.policies.apiKey`, `mode: strict` | 401 without a key |
+| `/groq/v1`, `/openrouter/v1` | each route's own `policies.apiKey` | 401 without a key |
 | `/mcp` | whatever policy is attached to the target | **nothing by default** |
+
+The third row repeats the second rather than inheriting it: `llm.policies.apiKey`
+is attached to the `llm:` section and does not cover a top-level route. Drop that
+block from either path route and the provider behind it is reachable with no
+credential by anything that clears the LAN allowlist.
 
 The gateway runs the OIDC flow itself against the `agentgateway` Authelia client — authorization code
 with PKCE, callback `https://llm.<HOST_NAME>/oauth/callback`. A forward-auth in front of it would
@@ -160,6 +166,17 @@ caller and the gateway cannot drift apart.
 Open WebUI mounts **that file alone**, not the directory it sits in: `cookie_secret` next to it signs
 the admin session cookie, and the chat has no business being able to read it.
 
+`agent_api_key` is generated the same way, for tools running on other machines, so revoking one does not
+lock the other out. The stored value carries no prefix — the `sk-` belongs to the credential:
+
+```bash
+make api-keys   # both tokens, with the base URL each one opens
+```
+
+Neither is settable from `.env`, and neither can be a key you created in the UI: a route declared in
+`config.yaml` cannot reference one held in the database. The UI's own keys still work on `/v1`, the
+surface the UI manages.
+
 There is no salt key to lose sleep over. Provider credentials added through the UI are stored by
 agentgateway in the SQLite database, which backrest snapshots whole.
 
@@ -177,12 +194,45 @@ declared `visibility: internal` is reachable only as a virtual model's target an
 list. The route is LAN-and-tailnet only like everything else, so this works from your devices, not from
 the internet.
 
+### Turning the built-in tools off, once, for everything
+
+The built-in tools cost ~5000 prompt tokens per message, and the lever that scales
+is `models.default_metadata`: `utils/models.py` merges it into every model with no
+workspace row, and lets a row override it. One `config` row therefore covers
+everything the path routes list, and keeps covering it as those catalogues change.
+Being a `config` row it also needs no admin account, so it applies from the first
+boot rather than the first SSO login.
+
+That is as dynamic as this gets. Open WebUI reads **none** of the capability
+metadata providers publish — no `input_modalities`, no `supported_features` — so
+`vision` cannot switch itself on for the models that have it, and a transcription
+model is still offered as a chat model. The alternative is a script writing one
+workspace row per model from `/v1/models`, re-synchronised whenever a catalogue
+moves.
+
 ### Adding a provider
 
 Anything OpenAI-compatible is a `custom` provider. z.ai's free GLM tier, for example, is a `baseUrl` of
 `https://api.z.ai/api/paas/v4` and a `model` of `glm-4.7-flash` — add it under **Models** in the UI and
 it lands in SQLite, no file edit and no restart. Pair it with a token rate limit: the free tiers are
 quota'd per day, and a runaway agent loop is exactly what exhausts one.
+
+### …and why Groq and OpenRouter are not
+
+They sit on their own paths, `/groq/v1` and `/openrouter/v1`, as top-level `routes:` in `config.yaml`.
+The reason is `GET /v1/models`. A provider added through the UI is reached by *model name*, so a
+wildcard entry like `groq/*` is all `/v1/models` lists — the wildcard itself, not the models behind it.
+A tool that builds its picker from that endpoint sees nothing usable.
+
+A top-level route serves the real catalogue, because `policies.ai.routes` maps a URL suffix to a
+handler: `/chat/completions` stays `completions`, so tokenisation and budgets still apply, while
+`/models` is `passthrough` and answers with the provider's own list. A `models` handler that would
+synthesise the list locally exists in the schema; v1.5.0 answers it `501 Route 'Models' not implemented`.
+
+The cost: these routes are invisible to the UI, which lists only `llm.provider` and `llm.model`
+resources. A third provider this way is a file edit and a `docker compose up -d agentgateway`, not a
+form. Use the UI when you are willing to name the models by hand, a path route when the client needs to
+discover them.
 
 ### Two things that will bite you
 
@@ -199,9 +249,11 @@ quota'd per day, and a runaway agent loop is exactly what exhausts one.
 
 `OPENAI_API_BASE_URL` and friends are Open WebUI *PersistentConfig* variables: they seed the database on first start and are ignored afterwards, so on an instance that already has connections the model simply never shows up in the picker. `scripts/open-webui-bootstrap.sh` (a post-start hook in `scripts/stack-up.sh`) closes that gap.
 
-It appends `http://agentgateway:4000/v1` to the stored connection list when missing, with the gateway's API key, leaves any other connection you configured in the UI alone, and restarts open-webui only when it changed something. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
+It appends `http://agentgateway:4000/v1` to the stored connection list when missing, with the gateway's API key, leaves any other connection you configured in the UI alone, and restarts open-webui only when it changed something.
 
-Everything that writes the model's *workspace row* — turning the built-in tools off (marker `pi-pcloud.local_ai_model_defaults`), attaching the tool server, seeding the suggestions — needs an admin account to own that row, and there is none until the first SSO login. Those steps are therefore skipped, unmarked, on a fresh install, and applied by the next run of the hook. The settings that live in the `config` table alone (connection, low-latency defaults, audio) apply from the first boot. Run it by hand after the first login, or after a database restore:
+The two path routes are separate connections, because they are separate base URLs — which is also why nothing on them shows up under `/v1`. The hook adds them the same way, with a `prefix_id` so the picker says which provider a model came from — and with the gateway key rather than `AGENT_API_KEY`, since Open WebUI runs inside the stack and both routes accept either. Storing the external-client key here would make revoking it 401 the chat as well. **No `model_ids` filter**, deliberately: naming models there would be the hardcoded list these routes exist to avoid, so Groq's catalogue arrives whole, transcription and speech models included. Filter in **Admin Settings → Connections**; the hook leaves what is set there alone. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
+
+Everything that writes the model's *workspace row* — attaching the tool server, seeding the suggestions — needs an admin account to own that row, and there is none until the first SSO login. Those steps are therefore skipped, unmarked, on a fresh install, and applied by the next run of the hook. The settings that live in the `config` table alone (connections, low-latency defaults, audio, the global model metadata) apply from the first boot. Run it by hand after the first login, or after a database restore:
 
 ```bash
 sh scripts/open-webui-bootstrap.sh
@@ -213,7 +265,7 @@ Authelia already decides who reaches `ai.<HOST_NAME>`, so Open WebUI's own `pend
 
 That alone is not enough, because two separate things default to admin-only:
 
-- A model with a workspace row is kept by `get_filtered_models` only for its owner or for someone named in an access grant. The row exists here to turn the built-in tools off and it belongs to the admin, so every other account got an **empty model picker**.
+- A model with a workspace row is kept by `get_filtered_models` only for its owner or for someone named in an access grant. The row belongs to the admin, so every other account got an **empty model picker**.
 - A tool server whose `config` carries no `access_grants` is private to admins (`has_connection_access`), so a normal user clicking a suggestion would get an invented answer with no tool call.
 
 Both are granted wildcard public read — `('user', '*', 'read')`, the shape the code itself documents as public — by the same marker. They stay visible and revocable in **Admin Settings** and **Workspace → Models**; narrowing either one by hand is never undone. Admin rights still have to be granted deliberately.

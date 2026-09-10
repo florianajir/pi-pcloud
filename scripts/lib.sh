@@ -102,6 +102,17 @@ resolve_data_location_path() {
     data_location="$(get_env_value DATA_LOCATION)"
     [ -n "$data_location" ] || data_location="./data"
 
+    # Every caller appends "/something", so a trailing slash here doubled it -
+    # harmless to open(2), but it reaches anything printing or comparing these
+    # paths. Guarded so a bare "/" does not become the empty string.
+    while :; do
+        case "$data_location" in
+            /) break ;;
+            */) data_location="${data_location%/}" ;;
+            *) break ;;
+        esac
+    done
+
     case "$data_location" in
         /*) printf '%s' "$data_location" ;;
         *) printf '%s/%s' "$PROJECT_DIR" "$data_location" ;;

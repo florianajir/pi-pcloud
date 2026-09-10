@@ -1,4 +1,4 @@
-.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env print-required-vars test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit
+.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env print-required-vars test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit api-keys
 
 REQUIRED_ENV_VARS := HOST_NAME TIMEZONE EMAIL ADMIN_USER PASSWORD HOST_LAN_IP CLOUDFLARE_DNS_API_TOKEN CLOUDFLARE_ZONE_ID
 
@@ -84,6 +84,7 @@ help:
 	@echo "  rotate-password       Rotate PASSWORD after a leak (LLDAP admin + Authelia only, no Postgres)"
 	@echo "  rotate-password-full  Same, plus every Postgres role and every other service using PASSWORD"
 	@echo "  recovery-kit          Print the five values that open the off-site backup, to store on paper"
+	@echo "  api-keys              Print the gateway base URLs and tokens, to paste into a client elsewhere"
 	@echo "  help             This help"
 
 # Both the reader and the safety rule come from scripts/lib.sh, which install.sh
@@ -496,3 +497,9 @@ check-secrets:
 # it is most wanted precisely when the rest of the install is in a bad way.
 recovery-kit:
 	sh scripts/recovery-kit.sh
+
+# Deliberately not "print every secret": .env holds the rest and Backrest
+# carries it off-site, while these are generated on first start and shown in no
+# UI, so a machine that is not this one has no other way to get them.
+api-keys:
+	sh scripts/api-keys.sh
