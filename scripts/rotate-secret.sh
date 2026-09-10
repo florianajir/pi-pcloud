@@ -421,8 +421,8 @@ INNEREOF
     # Beszel keeps its own copy for its nightly database backup, and reads it
     # from nowhere else - this is the consumer that failed silently.
     if container_is_running pi-beszel; then
-        sh "${SCRIPT_DIR}/beszel-agent-bootstrap.sh" >/dev/null 2>&1 ||
-            log "WARNING: beszel-agent-bootstrap.sh failed; Beszel may still hold the old keys"
+        run_script beszel-agent-bootstrap.py >/dev/null 2>&1 ||
+            log "WARNING: beszel-agent-bootstrap.py failed; Beszel may still hold the old keys"
     fi
 
     check_s3_keys || fail "verification failed after propagating the keys"
@@ -588,13 +588,13 @@ rotate_vaultwarden() {
 
 rotate_beszel_token() {
     # Beszel's hub hands back whatever universal token is currently active, and
-    # beszel-agent-bootstrap.sh reuses it. Clearing the local copy is therefore
+    # beszel-agent-bootstrap.py reuses it. Clearing the local copy is therefore
     # not enough: the hub has to issue a new one first, which only its UI does.
     die "beszel-token cannot be rotated from here.
      The hub returns the active universal token and the bootstrap reuses it, so
      clearing agent.env just fetches the same value back.
      Disable and re-enable the universal token in the Beszel UI (Settings ->
-     Universal token), then run: sh scripts/beszel-agent-bootstrap.sh
+     Universal token), then run: python3 scripts/beszel-agent-bootstrap.py
      Verify with: docker logs pi-beszel-agent | grep 'WebSocket connected'"
 }
 
@@ -621,10 +621,10 @@ rotate_ntfy() {
     [ -s "${PROJECT_DIR}/config/ntfy/ntfy.env" ] || fail "ntfy.env was not recreated"
     recreate_enabled ntfy backrest uptime-kuma ||
         fail "could not recreate the services that read ntfy.env"
-    for _b in beszel-agent-bootstrap.sh dockhand-oidc-bootstrap.sh prowlarr-bootstrap.sh \
+    for _b in beszel-agent-bootstrap.py dockhand-oidc-bootstrap.sh prowlarr-bootstrap.sh \
               qbittorrent-bootstrap.sh shelfmark-settings-bootstrap.sh uptime-kuma-bootstrap.sh; do
         [ -f "${SCRIPT_DIR}/${_b}" ] || continue
-        sh "${SCRIPT_DIR}/${_b}" >/dev/null 2>&1 ||
+        run_script "${_b}" >/dev/null 2>&1 ||
             log "WARNING: ${_b} failed; that publisher may still hold an old ntfy credential"
     done
     if container_is_running pi-authelia; then

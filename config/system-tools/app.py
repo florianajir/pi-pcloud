@@ -67,7 +67,7 @@ LOG_LINES = 3
 LOG_WIDTH = 120
 
 # Thresholds for the `anomalies` topic. The first three are Beszel's own alert
-# values (scripts/beszel-agent-bootstrap.sh), so anything this topic calls
+# values (scripts/beszel-agent-bootstrap.py), so anything this topic calls
 # abnormal is something Beszel has already pushed to ntfy: two voices, one
 # number, rather than a second opinion nobody asked for.
 DISK_PCT = 85

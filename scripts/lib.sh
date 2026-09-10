@@ -211,6 +211,29 @@ print(f'\$pbkdf2-sha512\$310000\${s}\${d}')
 "
 }
 
+# --- Running a sibling script ---
+
+# Run another script from scripts/ by file name, picking the interpreter from
+# its extension. The bootstraps are a mix of sh and python3 (AGENTS.md has the
+# rule for which is which), and every caller used to hardcode `sh`: pointed at a
+# .py, that is a syntax error on line 1, reported as the bootstrap "failing"
+# with no hint that the interpreter was the problem.
+#
+# Usage: script_interpreter <file-name>
+script_interpreter() {
+    case "$1" in
+        *.py) printf 'python3' ;;
+        *) printf '/bin/sh' ;;
+    esac
+}
+
+# Usage: run_script <file-name> [args...]
+run_script() {
+    local _script="$SCRIPT_DIR/$1"
+    shift
+    "$(script_interpreter "$_script")" "$_script" "$@"
+}
+
 # --- Container helpers ---
 
 compose() {

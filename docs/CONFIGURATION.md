@@ -143,7 +143,7 @@ Prune needs `DeleteObject`, so with this in place the Sunday prune fails until i
 | `BESZEL_TEMP_ALERT_MIN` | `5` | Minutes over the threshold before alerting |
 | `BESZEL_TEMP_ALERT_OVERWRITE` | `false` | Set to `true` to let the bootstrap overwrite alerts you edited in the Beszel UI |
 
-`BESZEL_BACKUP_CRON` is the switch: leave it empty and PocketBase's built-in backups stay off entirely. The CPU (90%), memory (90%) and disk (85%) alerts are constants in `scripts/beszel-agent-bootstrap.sh`, not variables — see [Monitoring](MONITORING.md#beszel--the-hardware).
+`BESZEL_BACKUP_CRON` is the switch: leave it empty and PocketBase's built-in backups stay off entirely. The CPU (90%), memory (90%) and disk (85%) alerts are constants in `scripts/beszel-agent-bootstrap.py`, not variables — see [Monitoring](MONITORING.md#beszel--the-hardware).
 
 ### Email
 

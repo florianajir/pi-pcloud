@@ -32,7 +32,7 @@ To change the split, edit the topic constants at the top of `scripts/ntfy-pre-st
 
 `https://beszel.<HOST_NAME>`, Authelia SSO only (password login is disabled), LAN-restricted by the Traefik `lan` middleware. The agent runs on the host network and hands metrics to the hub over a shared Unix socket; the hub stores them in PocketBase and pushes alerts to ntfy and SMTP.
 
-`scripts/beszel-agent-bootstrap.sh` runs on every start and configures the hub from `.env`: SMTP, S3 file storage and backups, the trusted proxy header, the Authelia OIDC client, the ntfy webhook, and the four resource alerts below. Nothing to click.
+`scripts/beszel-agent-bootstrap.py` runs on every start and configures the hub from `.env`: SMTP, S3 file storage and backups, the trusted proxy header, the Authelia OIDC client, the ntfy webhook, and the four resource alerts below. Nothing to click.
 
 **Alert thresholds** — these are the numbers the `anomalies` chat topic and `make doctor` reuse, deliberately, so the terminal and your phone cannot disagree:
 
@@ -43,7 +43,7 @@ To change the split, edit the topic constants at the top of `scripts/ntfy-pre-st
 | Memory | 90% | 5 min |
 | Disk | 85% | 5 min |
 
-Only the temperature thresholds are settable from `.env`; the other three are constants at the top of `scripts/beszel-agent-bootstrap.sh`. The script does not overwrite an alert you have edited in the UI unless `BESZEL_TEMP_ALERT_OVERWRITE=true`. Change values in `.env` and `make restart`, or re-run the bootstrap by hand with `sh scripts/beszel-agent-bootstrap.sh`.
+Only the temperature thresholds are settable from `.env`; the other three are constants at the top of `scripts/beszel-agent-bootstrap.py`. The script does not overwrite an alert you have edited in the UI unless `BESZEL_TEMP_ALERT_OVERWRITE=true`. Change values in `.env` and `make restart`, or re-run the bootstrap by hand with `python3 scripts/beszel-agent-bootstrap.py`.
 
 A system that stops reporting entirely is covered by Uptime Kuma's `beszel-agent` monitor rather than by a Beszel status alert.
 
