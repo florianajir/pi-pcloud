@@ -520,9 +520,15 @@ ensure_authelia_oidc_materials() {
 # scripts/agentgateway-pre-start.sh reads it. One definition: the two run in
 # different phases, and a drifting path fails silently - agentgateway would
 # just send no credential.
+#
+# Under agentgateway's secrets directory, not Trilium's data directory, even
+# though Trilium mints it: that data directory is `chown -R`'d to uid 1000 by
+# the container on every start, so a hook running as anyone else cannot manage
+# a file inside it. agentgateway-pre-start.sh already owns this directory, and
+# agentgateway is the only consumer.
 # Usage: trilium_etapi_token_file
 trilium_etapi_token_file() {
-    printf '%s/trilium/secrets/etapi_token' "$(resolve_data_location_path)"
+    printf '%s/agentgateway/secrets/%s' "$(resolve_data_location_path)" "trilium_etapi_token"
 }
 
 # Echo the stored ETAPI token, or nothing before it has been minted. Never

@@ -187,8 +187,10 @@ deferring to Authelia. The rest is a fresh-install path and says so when it decl
 **On an instance whose password this stack did not set, all of it declines.** The hook is not a repair
 tool: it writes nothing it cannot verify, and an owner who chose their own password in the setup wizard
 keeps it. Then the manual equivalents are Trilium's *Options → AI* for the provider and the MCP toggle,
-and *Options → ETAPI* for the token, which goes in `${DATA_LOCATION}/trilium/secrets/etapi_token` —
-`agentgateway-pre-start.sh` reads it from there on the next run.
+and *Options → ETAPI* for the token, which goes beside agentgateway's own keys under
+`${DATA_LOCATION}/agentgateway/secrets/` — `agentgateway-pre-start.sh` reads it from there on the
+next run. Not under Trilium's data directory, which that container `chown -R`'s to uid 1000 on
+every start, leaving a hook that runs as anyone else unable to manage a file inside it.
 
 That file expands into the MCP target's `Authorization` header, and it must never be empty: agentgateway
 substitutes the reference before parsing, so an unset token leaves a null where it wants a string and it

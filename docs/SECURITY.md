@@ -297,7 +297,7 @@ Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/se
 | `freshrss_oidc_crypto_key` | `OIDCCryptoPassphrase` for FreshRSS's `mod_auth_openidc` — it encrypts that module's session cookie and cache, so it is independent of `PASSWORD` and regenerating it only signs everyone out. Written by `scripts/freshrss-pre-start.sh` |
 | `trilium_llm_key` | The virtual key Trilium presents to agentgateway's `/v1`. Separate from `llm_api_key` so revoking the notes' access to the models does not log Open WebUI out. Written by `scripts/agentgateway-pre-start.sh` under `${DATA_LOCATION}/agentgateway/secrets/` |
 | `mcp_api_key` | The inbound key for agentgateway's `/mcp`. Everything behind it reads and writes every note, so it is not shared with `/v1`. Same writer |
-| `etapi_token` | Trilium's own API token, which agentgateway's MCP target presents back to it. Minted by `scripts/trilium-bootstrap.sh` into `${DATA_LOCATION}/trilium/secrets/`, or pasted there by hand from *Options → ETAPI* when the owner password is not `${PASSWORD}` |
+| `trilium_etapi_token` | Trilium's own API token, which agentgateway's MCP target presents back to it. Minted by `scripts/trilium-bootstrap.sh` beside the two keys above — not under Trilium's data directory, which its container `chown -R`'s to uid 1000 on every start. Paste one there by hand from *Options → ETAPI* when the owner password is not `${PASSWORD}` |
 | `homepage_auth_secret` | `HOMEPAGE_AUTH_SECRET` — the key NextAuth signs and encrypts Homepage's session cookie with. Independent of `PASSWORD`; regenerating it only signs everyone out. Written by `scripts/homepage-pre-start.sh` |
 
 Two more are generated per-service under `${DATA_LOCATION}`, mode `600`, for the same reason as the
