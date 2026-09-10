@@ -97,6 +97,7 @@ kavita:kavita-library-bootstrap.sh
 shelfmark:shelfmark-settings-bootstrap.sh
 audiobookshelf:audiobookshelf-bootstrap.sh
 open-webui:open-webui-bootstrap.sh
+trilium:trilium-bootstrap.sh
 homepage-widgets-bootstrap.sh
 '
 

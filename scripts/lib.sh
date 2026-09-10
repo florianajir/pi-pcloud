@@ -515,6 +515,29 @@ ensure_authelia_oidc_materials() {
     return 0
 }
 
+# --- Trilium ---
+
+# Where scripts/trilium-bootstrap.sh leaves the ETAPI token it mints, and where
+# scripts/agentgateway-pre-start.sh reads it to authenticate the MCP target.
+# One definition, because the two hooks run in different phases and a drifting
+# path would fail silently: agentgateway would simply send no credential.
+# Usage: trilium_etapi_token_file
+trilium_etapi_token_file() {
+    printf '%s/trilium/secrets/etapi_token' "$(resolve_data_location_path)"
+}
+
+# Echo the stored ETAPI token, or nothing when it has not been minted yet -
+# which is the expected state on a fresh install, before the post-start hook has
+# run. Never fails: callers treat an empty token as "not ready yet".
+# Usage: read_trilium_etapi_token
+read_trilium_etapi_token() {
+    local token_file=""
+
+    token_file="$(trilium_etapi_token_file)"
+    [ -r "$token_file" ] || return 0
+    cat "$token_file" 2>/dev/null || return 0
+}
+
 # --- OIDC secret retrieval ---
 
 # Falls back from the env var to the secret file on disk to a docker exec, so it

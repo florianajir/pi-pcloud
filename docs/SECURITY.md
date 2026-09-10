@@ -143,10 +143,11 @@ make the option available — the last step is yours.
 
 On a fresh install:
 
-1. Open `https://notes.<HOST_NAME>` and complete the setup wizard, which sets a local
-   password. Do this promptly — until it runs, the instance is unclaimed, and anyone who
-   reaches it from the LAN first becomes its owner. This is the same first-run window
-   Kavita has.
+1. Nothing, normally: `scripts/trilium-bootstrap.sh` has already set the owner password to
+   `${PASSWORD}` on the first start, which is what closes the window in which anyone who
+   reached the instance from the LAN first would have become its owner. Kavita still has
+   that window; Trilium no longer does. Change the password afterwards if you want — the
+   stack only needs it until step 3, and never types it again.
 2. Sign in with that password, then go to *Options → MFA* and choose OpenID as the
    method. That writes `mfaMethod=oauth`, which is what actually arms the flow: the
    environment variables alone leave `isOpenIDConfigured()` false.
@@ -157,6 +158,12 @@ The order matters and is enforced upstream. Enrolling from an anonymous session 
 refused (`not_enrolled`) so a stranger cannot claim the instance by being the first to
 authenticate, and before enrollment the login page keeps offering the password form so a
 misconfigured provider cannot lock the owner out.
+
+Step 2 is also the point of no return for automation: once `mfaMethod` is `oauth` and a
+subject is bound, `POST /login` stops checking passwords and redirects to Authelia, so
+nothing can script a session again. That is why the AI and MCP options are written by the
+bootstrap *before* this step and have to be set by hand afterwards — see
+[Local AI](AI.md#trilium-on-both-sides-of-the-gateway).
 
 That binding is also what makes `one_factor` an adequate policy here. TriliumNext#8606
 described OIDC as authenticating without authorizing — every account Authelia knew could
@@ -288,6 +295,9 @@ Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/se
 | `vaultwarden_admin_token` | Vaultwarden `/admin` token, plaintext — the one you type. Written by `scripts/vaultwarden-pre-start.sh`, never mounted into any container |
 | `vaultwarden_admin_token_hash` | Argon2id digest of the above, the only form Vaultwarden receives |
 | `freshrss_oidc_crypto_key` | `OIDCCryptoPassphrase` for FreshRSS's `mod_auth_openidc` — it encrypts that module's session cookie and cache, so it is independent of `PASSWORD` and regenerating it only signs everyone out. Written by `scripts/freshrss-pre-start.sh` |
+| `trilium_llm_key` | The virtual key Trilium presents to agentgateway's `/v1`. Separate from `llm_api_key` so revoking the notes' access to the models does not log Open WebUI out. Written by `scripts/agentgateway-pre-start.sh` under `${DATA_LOCATION}/agentgateway/secrets/` |
+| `mcp_api_key` | The inbound key for agentgateway's `/mcp`. Everything behind it reads and writes every note, so it is not shared with `/v1`. Same writer |
+| `etapi_token` | Trilium's own API token, which agentgateway's MCP target presents back to it. Minted by `scripts/trilium-bootstrap.sh` into `${DATA_LOCATION}/trilium/secrets/`, or pasted there by hand from *Options → ETAPI* when the owner password is not `${PASSWORD}` |
 | `homepage_auth_secret` | `HOMEPAGE_AUTH_SECRET` — the key NextAuth signs and encrypts Homepage's session cookie with. Independent of `PASSWORD`; regenerating it only signs everyone out. Written by `scripts/homepage-pre-start.sh` |
 
 Two more are generated per-service under `${DATA_LOCATION}`, mode `600`, for the same reason as the
