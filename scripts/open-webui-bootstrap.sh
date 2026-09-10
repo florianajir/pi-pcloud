@@ -33,9 +33,18 @@ case "$DEFAULT_LANGUAGE" in
 esac
 
 GATEWAY_URL="http://agentgateway:4000/v1"
+# The per-provider path routes. Separate connections because they are separate
+# base URLs - that is the whole point of the split, and it is also why they do
+# not show up under the /v1 connection above. See docs/AI.md.
+GROQ_URL="http://agentgateway:4000/groq/v1"
+OPENROUTER_URL="http://agentgateway:4000/openrouter/v1"
 # The same file compose exports the gateway's own key from, so this cannot
 # disagree with it. Hex, which is what makes it safe to splice into SQL.
 GATEWAY_KEY_FILE="$(resolve_data_location_path)/agentgateway/secrets/llm_api_key"
+# What the path routes take. They accept the key above too, but using the one
+# meant for external clients keeps a revocation of either from touching the
+# other - the reason there are two.
+AGENT_KEY_FILE="$(resolve_data_location_path)/agentgateway/secrets/agent_api_key"
 # Must match the model `name` in config/agentgateway/config.yaml, which is in
 # turn LLAMA_ARG_ALIAS in compose.yaml.
 LLAMA_MODEL="gemma-4-e2b-it"
@@ -156,7 +165,7 @@ psql_owui() {
 # indistinguishable from, so a wrong or rotated key could never be repaired and
 # the only remedy was editing the database by hand.
 connection_state() {
-    local key="$1"
+    local url="$1" key="$2"
 
     # Scalar subqueries inside a one-row derived table, not a join: both config
     # rows are absent on a fresh install, and any join of two empty sides
@@ -164,11 +173,11 @@ connection_state() {
     psql_owui -tAc \
         "SELECT CASE
              WHEN s.urls IS NULL THEN 'absent'
-             WHEN NOT (s.urls ? '$GATEWAY_URL') THEN 'missing'
+             WHEN NOT (s.urls ? '$url') THEN 'missing'
              WHEN coalesce(s.keys ->> (
                  SELECT (ord - 1)::int
                  FROM jsonb_array_elements_text(s.urls) WITH ORDINALITY AS t(val, ord)
-                 WHERE t.val = '$GATEWAY_URL'
+                 WHERE t.val = '$url'
                  LIMIT 1
              ), '') = '$key' THEN 'current'
              ELSE 'stale'
@@ -184,12 +193,12 @@ connection_state() {
 # arrays are parallel, so the index is looked up from the URL list rather than
 # assumed.
 update_connection_key() {
-    local key="$1"
+    local url="$1" key="$2"
 
     psql_owui -q <<SQL
 DO \$\$
 DECLARE
-    target text := '$GATEWAY_URL';
+    target text := '$url';
     urls   jsonb;
     keys   jsonb;
     idx    int;
@@ -219,13 +228,13 @@ END
 SQL
 }
 
-# The credential every /v1 caller presents, so it never reaches argv - and it is
-# checked to be hex before being spliced into a SQL literal.
-gateway_key() {
-    local key=""
+# Read via the file, so a credential never reaches argv - and checked to be hex
+# before being spliced into a SQL literal.
+read_api_key() {
+    local file="$1" key=""
 
-    [ -r "$GATEWAY_KEY_FILE" ] || return 1
-    key="$(tr -d '\r\n' < "$GATEWAY_KEY_FILE")"
+    [ -r "$file" ] || return 1
+    key="$(tr -d '\r\n' < "$file")"
     case "$key" in
         "" | *[!0-9a-fA-F]*) return 1 ;;
     esac
@@ -233,7 +242,7 @@ gateway_key() {
 }
 
 add_connection() {
-    local key="$1"
+    local url="$1" key="$2" prefix="$3"
 
     # api_base_urls, api_keys and api_configs are parallel: the config for a URL
     # is looked up by its index in the URL list, so all three have to grow
@@ -243,7 +252,7 @@ add_connection() {
     psql_owui -q <<SQL
 DO \$\$
 DECLARE
-    target text := '$GATEWAY_URL';
+    target text := '$url';
     urls   jsonb;
     keys   jsonb;
     idx    int;
@@ -269,7 +278,11 @@ BEGIN
     UPDATE config SET value = jsonb_set(
             coalesce(value::jsonb, '{}'::jsonb),
             ARRAY[idx::text],
-            '{"enable": true, "connection_type": "local", "tags": [], "prefix_id": "", "model_ids": []}'::jsonb,
+            jsonb_build_object(
+                'enable', true, 'connection_type', 'local',
+                'tags', '[]'::jsonb, 'model_ids', '[]'::jsonb,
+                'prefix_id', '$prefix'
+            ),
             true
         )::json, updated_at = stamp
         WHERE key = 'openai.api_configs';
@@ -278,6 +291,37 @@ BEGIN
 END
 \$\$;
 SQL
+}
+
+# 0 changed, 1 nothing to do, 2 the config table could not be read at all.
+# Idempotent by URL, so a connection removed on purpose in Admin Settings comes
+# back on the next run - the same bargain the /v1 one has always made.
+ensure_connection() {
+    local url="$1" key="$2" prefix="$3"
+
+    case "$(connection_state "$url" "$key")" in
+        absent | current) return 1 ;;
+        missing)
+            log "Registering $url as an Open WebUI connection"
+            if add_connection "$url" "$key" "$prefix"; then
+                return 0
+            fi
+            log "WARNING: failed to register $url"
+            return 1
+            ;;
+        stale)
+            log "Stored key for $url does not match the gateway's; correcting it"
+            if update_connection_key "$url" "$key"; then
+                return 0
+            fi
+            log "WARNING: failed to correct the key for $url"
+            return 1
+            ;;
+        *)
+            log "WARNING: could not read Open WebUI config table; skipping"
+            return 2
+            ;;
+    esac
 }
 
 # 170 prompt tokens for the whole schema, against the ~5000 of the built-in tools
@@ -609,33 +653,40 @@ main() {
 
     wait_for_health_warning "pi-open-webui" 60 2 || true
 
-    _key="$(gateway_key)" || _key=""
+    _key="$(read_api_key "$GATEWAY_KEY_FILE")" || _key=""
+    _agent_key="$(read_api_key "$AGENT_KEY_FILE")" || _agent_key=""
     if [ -z "$_key" ]; then
-        log "WARNING: no readable agentgateway LLM API key; leaving the connection alone"
+        log "WARNING: no readable agentgateway LLM API key; leaving the connections alone"
     else
-        case "$(connection_state "$_key")" in
-            absent | current) ;;
-            missing)
-                log "Registering $GATEWAY_URL as an Open WebUI connection"
-                if add_connection "$_key"; then
+        ensure_connection "$GATEWAY_URL" "$_key" "" || _rc=$?
+        _rc="${_rc:-0}"
+        if [ "$_rc" -eq 2 ]; then
+            return 0
+        fi
+        if [ "$_rc" -eq 0 ]; then
+            changed=1
+        fi
+        unset _rc
+
+        # The path routes carry each provider's own catalogue, so they are worth
+        # having in the picker - but only once their key exists, which is the
+        # first run after this was added.
+        #
+        # No model_ids filter, deliberately: naming models here would be the
+        # hardcoded list these routes exist to avoid. Groq's catalogue therefore
+        # arrives whole, speech and transcription models included, which the
+        # picker shows as if they were chat models. Filter in Admin Settings if
+        # that bothers you - this leaves what is set there alone.
+        if [ -n "$_agent_key" ]; then
+            for _route in "groq:$GROQ_URL" "openrouter:$OPENROUTER_URL"; do
+                ensure_connection "${_route#*:}" "$_agent_key" "${_route%%:*}" || _rc=$?
+                _rc="${_rc:-0}"
+                if [ "$_rc" -eq 0 ]; then
                     changed=1
-                else
-                    log "WARNING: failed to register the agentgateway connection"
                 fi
-                ;;
-            stale)
-                log "Stored agentgateway key does not match the gateway's; correcting it"
-                if update_connection_key "$_key"; then
-                    changed=1
-                else
-                    log "WARNING: failed to correct the agentgateway connection key"
-                fi
-                ;;
-            *)
-                log "WARNING: could not read Open WebUI config table; skipping"
-                return 0
-                ;;
-        esac
+                unset _rc
+            done
+        fi
     fi
 
     if [ "$(marker_present "$DEFAULTS_MARKER" "$DEFAULTS_VERSION")" = "f" ]; then
