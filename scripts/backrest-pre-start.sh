@@ -299,10 +299,21 @@ fi
 
 mkdir -p "${CONFIG_DIR}"
 
+# Whether the off-site repository can be described at all. Without a URI the
+# template renders `"uri": ""`, and backrest refuses the whole file for it -
+# `validation after migration: repo s3: uri is required`, FATAL, on every
+# start. The warning here used to promise the opposite ("Backrest will start
+# but S3 repo may not be available"), and nothing rebuilt or restarted the
+# container often enough to notice; CI starting it from an empty DATA_LOCATION
+# is what did.
+S3_CONFIGURED=1
 if [ -z "${BACKREST_S3_URI}" ] || [ -z "${BACKREST_S3_REPO_PASSWORD}" ] || \
    [ -z "${S3_ACCESS_KEY_ID}" ] || [ -z "${S3_SECRET_ACCESS_KEY}" ]; then
-  log "WARNING: S3 credentials incomplete; Backrest will start but S3 repo may not be available"
+  S3_CONFIGURED=0
+  log "WARNING: S3 credentials incomplete; the off-site repo and its plan are being left out"
   log "Set: BACKREST_S3_URI, BACKREST_S3_REPO_PASSWORD, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY"
+  log "Backups then run to ${LOCAL_REPO_URI} only. To add the off-site repo afterwards, set"
+  log "those four, delete ${CONFIG_FILE} and re-run: this script leaves an existing config alone."
 fi
 
 tmp_file="$(mktemp)"
@@ -327,6 +338,20 @@ jq \
     | gsub("__BACKREST_S3_REGION__"; $region)
     else . end)' \
   "${TEMPLATE_FILE}" > "${tmp_file}" || die "failed to render config from template"
+
+# Dropped rather than rendered empty, for the reason above. Both together:
+# a plan whose repo is gone fails the same validation the repo would have.
+if [ "${S3_CONFIGURED}" -eq 0 ]; then
+  tmp_patch="$(mktemp)"
+  if jq '.repos = ((.repos // []) | map(select(.id != "s3")))
+       | .plans = ((.plans // []) | map(select(.repo != "s3")))' \
+      "${tmp_file}" > "${tmp_patch}" && [ -s "${tmp_patch}" ]; then
+    mv "${tmp_patch}" "${tmp_file}"
+  else
+    rm -f "${tmp_patch}"
+    die "failed to drop the unconfigured S3 repo from the rendered config"
+  fi
+fi
 
 mv "${tmp_file}" "${CONFIG_FILE}"
 ensure_local_env_repo
