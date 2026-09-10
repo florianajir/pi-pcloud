@@ -102,10 +102,9 @@ resolve_data_location_path() {
     data_location="$(get_env_value DATA_LOCATION)"
     [ -n "$data_location" ] || data_location="./data"
 
-    # Every caller appends "/something", so a DATA_LOCATION written with a
-    # trailing slash produced a doubled one. Harmless to open(2), but it reaches
-    # anything that prints or compares these paths. Stripped here rather than at
-    # each call site, and guarded so a bare "/" does not become the empty string.
+    # Every caller appends "/something", so a trailing slash here doubled it -
+    # harmless to open(2), but it reaches anything printing or comparing these
+    # paths. Guarded so a bare "/" does not become the empty string.
     while :; do
         case "$data_location" in
             /) break ;;

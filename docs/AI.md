@@ -196,20 +196,18 @@ the internet.
 
 ### Turning the built-in tools off, once, for everything
 
-The built-in tools cost ~5000 prompt tokens per message, and the only lever that
-scales is `models.default_metadata`: `utils/models.py` merges it into every model
-that has no workspace row, and lets a row override it. So one `config` row covers
-the local model and everything the path routes list — and keeps covering them as
-those catalogues change, without naming a model. It also needs no admin account,
-so unlike a workspace row it applies from the first boot rather than the first
-SSO login.
+The built-in tools cost ~5000 prompt tokens per message, and the lever that scales
+is `models.default_metadata`: `utils/models.py` merges it into every model with no
+workspace row, and lets a row override it. One `config` row therefore covers
+everything the path routes list, and keeps covering it as those catalogues change.
+Being a `config` row it also needs no admin account, so it applies from the first
+boot rather than the first SSO login.
 
 That is as dynamic as this gets. Open WebUI reads **none** of the capability
-metadata the providers publish — no `input_modalities`, no `supported_features`,
-nothing from `architecture` — so `vision` cannot switch itself on for the models
-that have it, and a transcription model is still offered as a chat model. The
-only alternative would be a script writing one workspace row per model from what
-`/v1/models` reports, which then has to be re-synchronised whenever a catalogue
+metadata providers publish — no `input_modalities`, no `supported_features` — so
+`vision` cannot switch itself on for the models that have it, and a transcription
+model is still offered as a chat model. The alternative is a script writing one
+workspace row per model from `/v1/models`, re-synchronised whenever a catalogue
 moves.
 
 ### Adding a provider
@@ -253,7 +251,7 @@ discover them.
 
 It appends `http://agentgateway:4000/v1` to the stored connection list when missing, with the gateway's API key, leaves any other connection you configured in the UI alone, and restarts open-webui only when it changed something.
 
-The two path routes are separate connections, because they are separate base URLs — that is what the split buys, and it is also why nothing on them shows up under `/v1`. The hook adds `groq/v1` and `openrouter/v1` the same way, with the agent key and a `prefix_id` so the picker says which provider a model came from. **No `model_ids` filter**, deliberately: naming models there would be exactly the hardcoded list these routes exist to avoid. So Groq's catalogue arrives whole, speech and transcription models included, and the picker offers them as if they were chat models. Filter in **Admin Settings → Connections** if that bothers you; the hook leaves what is set there alone. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
+The two path routes are separate connections, because they are separate base URLs — which is also why nothing on them shows up under `/v1`. The hook adds them the same way, with the agent key and a `prefix_id` so the picker says which provider a model came from. **No `model_ids` filter**, deliberately: naming models there would be the hardcoded list these routes exist to avoid, so Groq's catalogue arrives whole, transcription and speech models included. Filter in **Admin Settings → Connections**; the hook leaves what is set there alone. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
 
 Everything that writes the model's *workspace row* — attaching the tool server, seeding the suggestions — needs an admin account to own that row, and there is none until the first SSO login. Those steps are therefore skipped, unmarked, on a fresh install, and applied by the next run of the hook. The settings that live in the `config` table alone (connection, low-latency defaults, audio) apply from the first boot. Run it by hand after the first login, or after a database restore:
 

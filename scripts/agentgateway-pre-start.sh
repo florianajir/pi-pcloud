@@ -59,11 +59,10 @@ main() {
         safe_chmod 600 "$key_file"
         log "Generated the agentgateway LLM API key"
     fi
-    # What tools on other machines present to the /groq/v1 and /openrouter/v1
-    # routes. Separate from the key above so revoking one does not lock the
-    # other out. Generated rather than taken from .env, because neither value
-    # Compose could substitute for a missing one is safe: empty exits at startup
-    # and a placeholder would be a password readable off a tracked file.
+    # What tools on other machines present to the path routes. Separate from the
+    # key above so revoking one does not lock the other out. Generated, not taken
+    # from .env: empty exits at startup and a placeholder would be a password
+    # readable off a tracked file, so Compose can supply no safe default.
     if [ ! -s "$agent_key_file" ]; then
         write_file_atomic "$agent_key_file" generate_secret \
             || die "Failed to generate the agentgateway agent API key"

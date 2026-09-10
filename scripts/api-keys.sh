@@ -1,15 +1,9 @@
 #!/bin/sh
-# Print the gateway credentials a client presents, with the base URL each one
-# opens, ready to paste into a tool on another machine.
+# Print the gateway credentials a client presents, with the base URL each opens.
 #
-# Scoped to the gateway on purpose. This is not a general secret dumper: .env
-# already holds the rest, Backrest already carries it off-site, and a command
-# that prints everything gets run casually. These are the values with no other
-# home - generated on first start, shown nowhere in any UI, and needed on a
-# machine that is not this one.
-#
-# The stored files carry no prefix; the `sk-` belongs to the credential, which
-# is why it is added here and in agentgateway-pre-start.sh both.
+# Scoped to the gateway on purpose, not a general secret dumper: .env holds the
+# rest and Backrest carries it off-site, while these are generated on first
+# start, shown in no UI, and needed on a machine that is not this one.
 set -eu
 
 . "$(dirname "$0")/lib.sh"

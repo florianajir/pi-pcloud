@@ -33,17 +33,15 @@ case "$DEFAULT_LANGUAGE" in
 esac
 
 GATEWAY_URL="http://agentgateway:4000/v1"
-# The per-provider path routes. Separate connections because they are separate
-# base URLs - that is the whole point of the split, and it is also why they do
-# not show up under the /v1 connection above. See docs/AI.md.
+# Separate connections because they are separate base URLs, which is also why
+# nothing on them shows up under /v1. See docs/AI.md.
 GROQ_URL="http://agentgateway:4000/groq/v1"
 OPENROUTER_URL="http://agentgateway:4000/openrouter/v1"
 # The same file compose exports the gateway's own key from, so this cannot
 # disagree with it. Hex, which is what makes it safe to splice into SQL.
 GATEWAY_KEY_FILE="$(resolve_data_location_path)/agentgateway/secrets/llm_api_key"
-# What the path routes take. They accept the key above too, but using the one
-# meant for external clients keeps a revocation of either from touching the
-# other - the reason there are two.
+# The path routes accept the key above too; using the external-client one keeps
+# revoking either from touching the other.
 AGENT_KEY_FILE="$(resolve_data_location_path)/agentgateway/secrets/agent_api_key"
 # Must match the model `name` in config/agentgateway/config.yaml, which is in
 # turn LLAMA_ARG_ALIAS in compose.yaml.
@@ -53,11 +51,8 @@ LLAMA_MODEL="gemma-4-e2b-it"
 # a version to seed that group's new values once.
 DEFAULTS_MARKER="pi-pcloud.local_ai_defaults"
 DEFAULTS_VERSION='"2"'
-# models.default_metadata, which Open WebUI merges into every model that has no
-# workspace row of its own - so this covers the path routes' catalogues too,
-# without naming a single model. A config row, so unlike a workspace row it
-# needs no admin account and applies from the first boot rather than from the
-# first SSO login.
+# models.default_metadata. A config row, not a workspace one, so it needs no
+# admin account and applies from the first boot rather than the first SSO login.
 GLOBAL_META_MARKER="pi-pcloud.global_model_metadata"
 GLOBAL_META_VERSION='"1"'
 # The workspace row the Ollama-era naming left behind. Inert - get_all_models
@@ -229,8 +224,8 @@ END
 SQL
 }
 
-# Read via the file, so a credential never reaches argv - and checked to be hex
-# before being spliced into a SQL literal.
+# Via the file so a credential never reaches argv, and hex-checked before being
+# spliced into a SQL literal.
 read_api_key() {
     local file="$1" key=""
 
@@ -294,9 +289,8 @@ END
 SQL
 }
 
-# 0 changed, 1 nothing to do, 2 the config table could not be read at all.
-# Idempotent by URL, so a connection removed on purpose in Admin Settings comes
-# back on the next run - the same bargain the /v1 one has always made.
+# 0 changed, 1 nothing to do, 2 the config table could not be read. Idempotent
+# by URL, so a connection deleted on purpose comes back - as /v1 always has.
 ensure_connection() {
     local url="$1" key="$2" prefix="$3"
 
@@ -619,12 +613,10 @@ SQL
 # this CPU before the model starts writing. Attaching tools to a chat explicitly
 # still works.
 #
-# Global, not per model: utils/models.py merges models.default_metadata into
-# every model and lets a workspace row override it, so one row covers the local
-# model and every model the path routes list, and keeps covering them as those
-# catalogues change. Open WebUI reads none of the capability metadata the
-# providers publish (no input_modalities, no supported_features), so a default
-# that applies to all of them is the only dynamic lever there is.
+# Global, not per model: utils/models.py merges this into every model and lets a
+# workspace row override it, so it covers the path routes' catalogues as they
+# change. Open WebUI reads none of the capability metadata providers publish, so
+# a default for all of them is the only lever there is.
 apply_global_model_metadata() {
     psql_owui -q <<SQL
 INSERT INTO config (key, value, updated_at)
@@ -672,15 +664,10 @@ main() {
         fi
         unset _rc
 
-        # The path routes carry each provider's own catalogue, so they are worth
-        # having in the picker - but only once their key exists, which is the
-        # first run after this was added.
-        #
         # No model_ids filter, deliberately: naming models here would be the
         # hardcoded list these routes exist to avoid. Groq's catalogue therefore
-        # arrives whole, speech and transcription models included, which the
-        # picker shows as if they were chat models. Filter in Admin Settings if
-        # that bothers you - this leaves what is set there alone.
+        # arrives whole, transcription and speech models included. Filter in
+        # Admin Settings; this leaves what is set there alone.
         if [ -n "$_agent_key" ]; then
             for _route in "groq:$GROQ_URL" "openrouter:$OPENROUTER_URL"; do
                 ensure_connection "${_route#*:}" "$_agent_key" "${_route%%:*}" || _rc=$?
