@@ -53,12 +53,13 @@ LLAMA_MODEL="gemma-4-e2b-it"
 # a version to seed that group's new values once.
 DEFAULTS_MARKER="pi-pcloud.local_ai_defaults"
 DEFAULTS_VERSION='"2"'
-# Separate from the config markers: writing the workspace row needs an admin
-# account to own it, which a fresh install does not have until the first SSO
-# login. One marker across both would record the half that could not run yet
-# as done.
-MODEL_MARKER="pi-pcloud.local_ai_model_defaults"
-MODEL_VERSION='"1"'
+# models.default_metadata, which Open WebUI merges into every model that has no
+# workspace row of its own - so this covers the path routes' catalogues too,
+# without naming a single model. A config row, so unlike a workspace row it
+# needs no admin account and applies from the first boot rather than from the
+# first SSO login.
+GLOBAL_META_MARKER="pi-pcloud.global_model_metadata"
+GLOBAL_META_VERSION='"1"'
 # The workspace row the Ollama-era naming left behind. Inert - get_all_models
 # drops a base-model override whose base no backend serves - but it shows up in
 # the model table and in every backup after it. Marked rather than deleted once,
@@ -615,31 +616,34 @@ SQL
 # Built-in tools (time, memory, chats, notes, knowledge, channels) are on by
 # default for every model, and their schemas go into the prompt of every message
 # sent from the browser - about 5000 tokens, ~3 minutes of prompt processing on
-# this CPU before the model starts writing. A workspace entry for the model is
-# the only place that default can be turned off. Attaching tools to a chat
-# explicitly still works.
-apply_model_defaults() {
+# this CPU before the model starts writing. Attaching tools to a chat explicitly
+# still works.
+#
+# Global, not per model: utils/models.py merges models.default_metadata into
+# every model and lets a workspace row override it, so one row covers the local
+# model and every model the path routes list, and keeps covering them as those
+# catalogues change. Open WebUI reads none of the capability metadata the
+# providers publish (no input_modalities, no supported_features), so a default
+# that applies to all of them is the only dynamic lever there is.
+apply_global_model_metadata() {
     psql_owui -q <<SQL
-INSERT INTO model (id, user_id, base_model_id, name, meta, params, created_at, updated_at, is_active)
-SELECT
-    '$LLAMA_MODEL',
-    (SELECT id FROM "user" WHERE role = 'admin' ORDER BY created_at LIMIT 1),
-    NULL,
-    '$LLAMA_MODEL',
-    '{"capabilities": {"builtin_tools": false}}',
-    '{}',
-    extract(epoch from now())::bigint,
-    extract(epoch from now())::bigint,
-    true
-WHERE EXISTS (SELECT 1 FROM "user" WHERE role = 'admin')
-ON CONFLICT (id) DO UPDATE SET
-    meta = jsonb_set(
-        coalesce(model.meta::jsonb, '{}'::jsonb),
-        '{capabilities,builtin_tools}',
-        'false'::jsonb,
-        true
-    )::text,
-    updated_at = extract(epoch from now())::bigint;
+INSERT INTO config (key, value, updated_at)
+VALUES ('models.default_metadata',
+        '{"capabilities": {"builtin_tools": false}}'::json,
+        extract(epoch from now())::bigint)
+-- Concatenation at both levels, not jsonb_set: create_missing only creates the
+-- *last* element of the path, so on a stored '{}' - which is what Open WebUI
+-- ships - a jsonb_set of '{capabilities,builtin_tools}' returns the input
+-- untouched and reports success. Merging preserves any other capability set
+-- here by hand.
+ON CONFLICT (key) DO UPDATE
+    SET value = (
+            coalesce(config.value::jsonb, '{}'::jsonb)
+            || jsonb_build_object('capabilities',
+                   coalesce(config.value::jsonb -> 'capabilities', '{}'::jsonb)
+                   || jsonb_build_object('builtin_tools', false))
+        )::json,
+        updated_at = EXCLUDED.updated_at;
 SQL
 }
 
@@ -747,12 +751,12 @@ main() {
         return 0
     fi
 
-    if [ "$(marker_present "$MODEL_MARKER" "$MODEL_VERSION")" = "f" ]; then
-        log "Turning the built-in tools off on $LLAMA_MODEL (~5000 prompt tokens)"
-        if apply_model_defaults && mark_seeded "$MODEL_MARKER" "$MODEL_VERSION"; then
+    if [ "$(marker_present "$GLOBAL_META_MARKER" "$GLOBAL_META_VERSION")" = "f" ]; then
+        log "Turning the built-in tools off on every model (~5000 prompt tokens each)"
+        if apply_global_model_metadata && mark_seeded "$GLOBAL_META_MARKER" "$GLOBAL_META_VERSION"; then
             changed=1
         else
-            log "WARNING: failed to seed the $LLAMA_MODEL workspace row"
+            log "WARNING: failed to seed the global model metadata"
         fi
     fi
 

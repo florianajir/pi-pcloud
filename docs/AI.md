@@ -35,7 +35,7 @@ Latency comes from prompt size, not the model. Three defaults exist purely becau
 
 - **Thinking is off** (`LLAMA_ARG_CHAT_TEMPLATE_KWARGS`). Gemma 4 otherwise spends ~500 tokens reasoning before the first visible word — over a minute of empty chat window for "how are you".
 - **One server slot** (`LLAMA_ARG_N_PARALLEL=1`). llama-server defaults to several and runs them concurrently, so two requests each generated at ~5 tok/s instead of one at ~10. Queueing is faster than sharing three threads.
-- **Open WebUI's built-in tools are off for this model**, along with title, tag, follow-up and search-query generation. The built-in tools (time, memory, chats, notes, knowledge, channels) inject ~5000 tokens of schemas into every message — roughly three minutes of prompt processing before the model starts. The other four are invisible extra LLM calls per message.
+- **Open WebUI's built-in tools are off for every model**, along with title, tag, follow-up and search-query generation. The built-in tools (time, memory, chats, notes, knowledge, channels) inject ~5000 tokens of schemas into every message — roughly three minutes of prompt processing before the model starts. The other four are invisible extra LLM calls per message.
 
 All are re-enablable in **Admin Settings** and in the model's own **Capabilities**.
 
@@ -194,6 +194,24 @@ declared `visibility: internal` is reachable only as a virtual model's target an
 list. The route is LAN-and-tailnet only like everything else, so this works from your devices, not from
 the internet.
 
+### Turning the built-in tools off, once, for everything
+
+The built-in tools cost ~5000 prompt tokens per message, and the only lever that
+scales is `models.default_metadata`: `utils/models.py` merges it into every model
+that has no workspace row, and lets a row override it. So one `config` row covers
+the local model and everything the path routes list — and keeps covering them as
+those catalogues change, without naming a model. It also needs no admin account,
+so unlike a workspace row it applies from the first boot rather than the first
+SSO login.
+
+That is as dynamic as this gets. Open WebUI reads **none** of the capability
+metadata the providers publish — no `input_modalities`, no `supported_features`,
+nothing from `architecture` — so `vision` cannot switch itself on for the models
+that have it, and a transcription model is still offered as a chat model. The
+only alternative would be a script writing one workspace row per model from what
+`/v1/models` reports, which then has to be re-synchronised whenever a catalogue
+moves.
+
 ### Adding a provider
 
 Anything OpenAI-compatible is a `custom` provider. z.ai's free GLM tier, for example, is a `baseUrl` of
@@ -237,7 +255,7 @@ It appends `http://agentgateway:4000/v1` to the stored connection list when miss
 
 The two path routes are separate connections, because they are separate base URLs — that is what the split buys, and it is also why nothing on them shows up under `/v1`. The hook adds `groq/v1` and `openrouter/v1` the same way, with the agent key and a `prefix_id` so the picker says which provider a model came from. **No `model_ids` filter**, deliberately: naming models there would be exactly the hardcoded list these routes exist to avoid. So Groq's catalogue arrives whole, speech and transcription models included, and the picker offers them as if they were chat models. Filter in **Admin Settings → Connections** if that bothers you; the hook leaves what is set there alone. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
 
-Everything that writes the model's *workspace row* — turning the built-in tools off (marker `pi-pcloud.local_ai_model_defaults`), attaching the tool server, seeding the suggestions — needs an admin account to own that row, and there is none until the first SSO login. Those steps are therefore skipped, unmarked, on a fresh install, and applied by the next run of the hook. The settings that live in the `config` table alone (connection, low-latency defaults, audio) apply from the first boot. Run it by hand after the first login, or after a database restore:
+Everything that writes the model's *workspace row* — attaching the tool server, seeding the suggestions — needs an admin account to own that row, and there is none until the first SSO login. Those steps are therefore skipped, unmarked, on a fresh install, and applied by the next run of the hook. The settings that live in the `config` table alone (connection, low-latency defaults, audio) apply from the first boot. Run it by hand after the first login, or after a database restore:
 
 ```bash
 sh scripts/open-webui-bootstrap.sh
@@ -249,7 +267,7 @@ Authelia already decides who reaches `ai.<HOST_NAME>`, so Open WebUI's own `pend
 
 That alone is not enough, because two separate things default to admin-only:
 
-- A model with a workspace row is kept by `get_filtered_models` only for its owner or for someone named in an access grant. The row exists here to turn the built-in tools off and it belongs to the admin, so every other account got an **empty model picker**.
+- A model with a workspace row is kept by `get_filtered_models` only for its owner or for someone named in an access grant. The row belongs to the admin, so every other account got an **empty model picker**.
 - A tool server whose `config` carries no `access_grants` is private to admins (`has_connection_access`), so a normal user clicking a suggestion would get an invented answer with no tool call.
 
 Both are granted wildcard public read — `('user', '*', 'read')`, the shape the code itself documents as public — by the same marker. They stay visible and revocable in **Admin Settings** and **Workspace → Models**; narrowing either one by hand is never undone. Admin rights still have to be granted deliberately.
