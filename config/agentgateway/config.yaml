@@ -124,6 +124,47 @@ routes:
             custom:
               formats:
                 - type: completions
+  # Same shape as the Groq route above, and the comments there explain why each
+  # piece is the way it is. Only the three provider-specific values differ:
+  # OpenRouter's OpenAI-compatible base is openrouter.ai/api/v1, so the host and
+  # the upstream prefix change, and the key comes from its own variable.
+  #
+  # One behavioural difference worth knowing: OpenRouter serves /models without
+  # a credential, so this catalogue answers even on a host that never set
+  # OPENROUTER_API_KEY - there it is /chat/completions that 401s.
+  - name: openrouter
+    gateways: default
+    matches:
+      - path:
+          pathPrefix: /openrouter/v1
+    policies:
+      urlRewrite:
+        path:
+          prefix: /
+      apiKey:
+        mode: strict
+        keys:
+          - key: ${LLM_API_KEY}
+            metadata:
+              user: goose
+      backendTLS:
+        hostname: openrouter.ai
+      backendAuth:
+        key: ${OPENROUTER_API_KEY}
+      ai:
+        routes:
+          /chat/completions: completions
+          /models: passthrough
+          "*": passthrough
+    backends:
+      - ai:
+          name: openrouter
+          hostOverride: openrouter.ai:443
+          pathPrefix: /api/v1
+          provider:
+            custom:
+              formats:
+                - type: completions
 mcp:
   gateways: default
   targets: []

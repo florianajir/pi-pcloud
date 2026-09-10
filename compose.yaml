@@ -2877,6 +2877,8 @@ services:
       # down with it. With a placeholder the gateway starts and only
       # /groq/v1 answers 401, from Groq.
       - GROQ_API_KEY=${GROQ_API_KEY:-unset}
+      # Same contract for the /openrouter/v1 route, placeholder included.
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-unset}
     env_file:
       # OIDC_COOKIE_SECRET, UI_CLIENT_SECRET and LLM_API_KEY, written by
       # scripts/agentgateway-pre-start.sh. Frozen at container creation, so a
