@@ -143,9 +143,14 @@ hc="$(DATA_LOCATION=/nonexistent/trilium-contract COMPOSE_PROFILES=trilium \
     docker compose --env-file /dev/null -f "$REPO_DIR/compose.yaml" \
     config --format json 2>/dev/null \
     | jq -r '.services.trilium.healthcheck.test | .[1:] | join(" ")')"
+# The status captured through `if`, and the architecture resolved *before* the
+# call: run bare under `set -e` a failing probe aborts the whole file before any
+# FAIL is recorded, and a `$(...)` in an earlier argument of `ok` overwrites the
+# `$?` the later one was meant to read - which made this pass unconditionally.
+arch="$(docker version -f '{{.Server.Arch}}')"
 # shellcheck disable=SC2086  # the command and its argument, split on purpose
-docker exec "$BOX" $hc >/dev/null 2>&1
-ok "compose.yaml's healthcheck command runs on $(docker version -f '{{.Server.Arch}}')" "$?" 0
+if docker exec "$BOX" $hc >/dev/null 2>&1; then hc_rc=0; else hc_rc=1; fi
+ok "compose.yaml's healthcheck command runs on $arch" "$hc_rc" 0
 
 # --- 1. The setup wizard, which is how a fresh install is claimed ---
 

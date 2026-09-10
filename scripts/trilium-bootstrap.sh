@@ -74,59 +74,6 @@ claim_instance() {
             "$TRILIUM_URL/set-password" >/dev/null 2>&1 || true
 }
 
-# --- Authenticating as the owner ---
-
-# Echo the session cookie, or nothing. `POST /login` needs no CSRF, but its
-# handler redirects to Authelia rather than checking the password once SSO is
-# enrolled - which is what makes this a fresh-install path, not a repair tool.
-open_session() {
-    local password="" headers="" session=""
-
-    password="$(get_env_value PASSWORD)"
-    [ -n "$password" ] || return 1
-
-    headers="$(jq -cn --arg p "$password" '{password: $p}' \
-        | docker_curl_stdin -X POST -D - -o /dev/null \
-            -H 'Content-Type: application/json' \
-            "$TRILIUM_URL/login" 2>/dev/null)" || return 1
-
-    session="$(printf '%s' "$headers" | tr -d '\r' \
-        | sed -n 's/^[Ss]et-[Cc]ookie: *\(trilium\.sid=[^;]*\).*/\1/p' | head -1)"
-    [ -n "$session" ] || return 1
-
-    # A cookie is not a login: a *failed* attempt gets a session too, so trusting
-    # Set-Cookie alone reads a wrong password as success.
-    api_get_with_cookie "$TRILIUM_URL" "/bootstrap" "$session" 2>/dev/null \
-        | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 1
-
-    printf '%s' "$session"
-}
-
-# Echo "<cookie header>|<csrf token>".
-#
-# One request, not two: csrf-csrf binds the token to the session id and
-# /bootstrap re-issues `trilium.sid` alongside `trilium-csrf`, so headers and
-# body fetched separately pair a token with the wrong session. The failure is
-# a 403 visible only in Trilium's log.
-csrf_material() {
-    local session="$1" response="" headers="" body="" cookies="" token=""
-
-    response="$(docker_curl -i -H "Cookie: $session" "$TRILIUM_URL/bootstrap" 2>/dev/null)" || return 1
-
-    headers="$(printf '%s' "$response" | tr -d '\r' | sed -n '1,/^$/p')"
-    body="$(printf '%s' "$response" | tr -d '\r' | sed -n '/^$/,$p' | tail -n +2)"
-
-    token="$(printf '%s' "$body" | jq -r '.csrfToken // empty' 2>/dev/null)"
-    [ -n "$token" ] || return 1
-
-    # Every cookie this response set, refreshed session id included.
-    cookies="$(printf '%s' "$headers" \
-        | sed -n 's/^[Ss]et-[Cc]ookie: *\([^;]*\).*/\1/p' | paste -sd'; ' -)"
-    [ -n "$cookies" ] || cookies="$session"
-
-    printf '%s|%s' "$cookies" "$token"
-}
-
 # --- The options themselves ---
 
 # The models agentgateway serves, as the LlmModelInfo array Trilium stores in
@@ -143,28 +90,40 @@ apply_options() {
     local cookies="$1" csrf_token="$2"
     local key_file="" key="" models="" providers="" current="" desired=""
 
+    # MCP needs nothing from agentgateway, so it is set whatever happens to the
+    # LLM half below.
+    desired='{"mcpEnabled": "true"}'
+
+    # `trilium` is a profile of its own and agentgateway is not implied by it,
+    # so a stack with notes and no gateway is a valid selection - not an error,
+    # and not something to fail a boot over.
     key_file="$(resolve_data_location_path)/agentgateway/secrets/trilium_llm_key"
-    [ -r "$key_file" ] || {
-        log "WARNING: no Trilium LLM key yet (agentgateway-pre-start.sh has not run); skipping the AI wiring"
-        return 1
-    }
-    key="sk-$(cat "$key_file")"
+    if [ -r "$key_file" ] && container_is_running "pi-agentgateway"; then
+        key="sk-$(cat "$key_file")"
+        models="$(gateway_models "$key")"
 
-    models="$(gateway_models "$key")"
-    [ -n "$models" ] || models='[]'
-    if [ "$models" = '[]' ]; then
-        log "NOTE: agentgateway listed no models; the provider is saved without a preselection"
+        # Empty means the fetch failed; `[]` means the gateway really lists
+        # nothing. Only the second is worth writing: Trilium's picker renders
+        # straight from the option and never re-fetches, so saving a failed
+        # fetch would blank a working provider until someone noticed.
+        if [ -z "$models" ]; then
+            log "NOTE: agentgateway did not answer /v1/models; leaving the AI provider alone this run"
+        else
+            [ "$models" != '[]' ] \
+                || log "NOTE: agentgateway listed no models; the provider is saved without a preselection"
+
+            # `openai-compatible`, not `openai`: the latter talks to
+            # api.openai.com and ignores baseURL when listing models.
+            providers="$(jq -cn --arg id "$PROVIDER_ID" --arg key "$key" \
+                --arg url "$AGENTGATEWAY_URL/v1" --argjson models "$models" \
+                '[{id: $id, name: "Agentgateway", provider: "openai-compatible",
+                   apiKey: $key, baseURL: $url, selectedModels: $models}]')"
+            desired="$(jq -cn --argjson p "$providers" \
+                '{aiEnabled: "true", mcpEnabled: "true", llmProviders: ($p | tostring)}')"
+        fi
+    else
+        log "NOTE: agentgateway is not part of this stack; enabling MCP only"
     fi
-
-    # `openai-compatible`, not `openai`: the latter talks to api.openai.com and
-    # ignores baseURL when listing models.
-    providers="$(jq -cn --arg id "$PROVIDER_ID" --arg key "$key" \
-        --arg url "$AGENTGATEWAY_URL/v1" --argjson models "$models" \
-        '[{id: $id, name: "Agentgateway", provider: "openai-compatible",
-           apiKey: $key, baseURL: $url, selectedModels: $models}]')"
-
-    desired="$(jq -cn --argjson p "$providers" \
-        '{aiEnabled: "true", mcpEnabled: "true", llmProviders: ($p | tostring)}')"
 
     # Only write when something actually differs: every PUT is an entity change
     # Trilium syncs and shows in its options history.
@@ -182,7 +141,14 @@ apply_options() {
         "$TRILIUM_URL/api/options" >/dev/null 2>&1 \
         || { log "WARNING: Trilium refused the options update"; return 1; }
 
-    log "Enabled Trilium's AI assistant against agentgateway, and its MCP server"
+    # Says what was written, not what the function is for: the AI half is
+    # skipped whenever agentgateway is absent or silent, and a fixed message
+    # would report a provider that is not there.
+    if printf '%s' "$desired" | jq -e 'has("llmProviders")' >/dev/null 2>&1; then
+        log "Enabled Trilium's AI assistant against agentgateway, and its MCP server"
+    else
+        log "Enabled Trilium's MCP server (no AI provider written this run)"
+    fi
 }
 
 # --- The token agentgateway needs ---
@@ -250,11 +216,14 @@ main() {
     # Two independent halves: the options need a session, which exists only
     # before SSO is enrolled, while the token needs only the password. So an
     # enrolled instance can still get its MCP target wired.
-    session="$(open_session)"
+    # `|| session=""`, not a bare assignment: under `set -e` a command
+    # substitution that returns non-zero takes the whole script down, so the
+    # declined path below - and the token half after it - were unreachable.
+    session="$(trilium_open_session "$TRILIUM_URL" "$(get_env_value PASSWORD)")" || session=""
     if [ -n "$session" ]; then
         owned=1
         log "Signed in to Trilium as the owner (its password is PASSWORD)"
-        material="$(csrf_material "$session")" || material=""
+        material="$(trilium_csrf_material "$TRILIUM_URL" "$session")" || material=""
         if [ -n "$material" ]; then
             csrf_cookie="${material%%|*}"
             csrf_token="${material#*|}"

@@ -542,6 +542,62 @@ read_trilium_etapi_token() {
     cat "$token_file" 2>/dev/null || return 0
 }
 
+# Echo a logged-in Trilium session cookie, or nothing.
+#
+# Shared by trilium-bootstrap.sh and rotate-password.sh, which both need one and
+# would otherwise keep two copies of the same handshake. `POST /login` needs no
+# CSRF, but its handler redirects to Authelia rather than checking the password
+# once SSO is enrolled - so an empty answer here means "no scriptable way in",
+# not "wrong password".
+#
+# A cookie alone is not a login: a *failed* attempt gets a session too, so the
+# result is confirmed against /bootstrap before it is handed back.
+# Usage: trilium_open_session <base_url> <password>
+trilium_open_session() {
+    local base_url="$1" password="$2" headers="" session=""
+
+    [ -n "$password" ] || return 1
+
+    headers="$(jq -cn --arg p "$password" '{password: $p}' \
+        | docker_curl_stdin -X POST -D - -o /dev/null \
+            -H 'Content-Type: application/json' \
+            "$base_url/login" 2>/dev/null)" || return 1
+
+    session="$(printf '%s' "$headers" | tr -d '\r' \
+        | sed -n 's/^[Ss]et-[Cc]ookie: *\(trilium\.sid=[^;]*\).*/\1/p' | head -1)"
+    [ -n "$session" ] || return 1
+
+    api_get_with_cookie "$base_url" "/bootstrap" "$session" 2>/dev/null \
+        | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 1
+
+    printf '%s' "$session"
+}
+
+# Echo "<cookie header>|<csrf token>" for a write against Trilium's /api.
+#
+# One request, not two: csrf-csrf binds the token to the session id and
+# /bootstrap re-issues `trilium.sid` alongside `trilium-csrf`, so headers and
+# body fetched separately pair a token with the wrong session - a 403 visible
+# only in Trilium's own log.
+# Usage: trilium_csrf_material <base_url> <session>
+trilium_csrf_material() {
+    local base_url="$1" session="$2" response="" headers="" body="" cookies="" token=""
+
+    response="$(docker_curl -i -H "Cookie: $session" "$base_url/bootstrap" 2>/dev/null)" || return 1
+
+    headers="$(printf '%s' "$response" | tr -d '\r' | sed -n '1,/^$/p')"
+    body="$(printf '%s' "$response" | tr -d '\r' | sed -n '/^$/,$p' | tail -n +2)"
+
+    token="$(printf '%s' "$body" | jq -r '.csrfToken // empty' 2>/dev/null)"
+    [ -n "$token" ] || return 1
+
+    cookies="$(printf '%s' "$headers" \
+        | sed -n 's/^[Ss]et-[Cc]ookie: *\([^;]*\).*/\1/p' | paste -sd'; ' -)"
+    [ -n "$cookies" ] || cookies="$session"
+
+    printf '%s|%s' "$cookies" "$token"
+}
+
 # --- OIDC secret retrieval ---
 
 # Falls back from the env var to the secret file on disk to a docker exec, so it

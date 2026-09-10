@@ -91,7 +91,8 @@ confirm() {
         echo "   Postgres roles (postgres, immich, nextcloud, authelia, lldap, open-webui,"
         echo "   vaultwarden, freshrss), the LLDAP admin account (LDAP password-modify, not env),"
         echo "   Authelia's ldap_password + db_password secrets, Nextcloud (DB + admin"
-        echo "   login), Pi-hole, Beszel, ntfy, qBittorrent, Prowlarr, Kapowarr, Dockhand,"
+        echo "   login), Pi-hole, Beszel, ntfy, qBittorrent, Prowlarr, Kapowarr, Trilium,"
+        echo "   Dockhand,"
         echo "   and recreates the containers that bake it into their environment."
     fi
     echo "   Active sessions on Authelia/Nextcloud/etc. may be interrupted."
@@ -573,6 +574,52 @@ rotate_audiobookshelf() {
     fi
 }
 
+# --- Trilium: the owner password scripts/trilium-bootstrap.sh set ---
+
+# Only reachable while a password still signs in. Once SSO is enrolled Trilium
+# hands `POST /login` to Authelia, so there is no scriptable session and the
+# password cannot be changed from here - but it is still live: it is not just a
+# fallback login, it also mints full-access ETAPI tokens through
+# `POST /api/login/token`, which SSO does not gate. So a rotation that silently
+# skipped this would leave the old credential minting tokens forever, the same
+# shape as the Vaultwarden role rotation used to miss.
+rotate_trilium() {
+    local url session material cookies token
+
+    if ! container_is_running "pi-trilium"; then
+        note "✘ SKIPPED Trilium (pi-trilium not running)"
+        return 0
+    fi
+    url="http://trilium:8080"
+
+    session="$(trilium_open_session "$url" "$OLD_PASSWORD")" || session=""
+    if [ -z "$session" ]; then
+        note "✘ FAILED to rotate Trilium: no password session (SSO enrolled, or the owner password is not the old PASSWORD)"
+        note "   The old password still mints ETAPI tokens - change it in Trilium: Options -> Password"
+        return 0
+    fi
+
+    material="$(trilium_csrf_material "$url" "$session")" || material=""
+    if [ -z "$material" ]; then
+        note "✘ FAILED to rotate Trilium (no CSRF token)"
+        return 0
+    fi
+    cookies="${material%%|*}"
+    token="${material#*|}"
+
+    # snake_case, unlike everything else Trilium takes: passwordApiRoute reads
+    # `current_password` and `new_password`.
+    if RP_OLD_PASSWORD="$OLD_PASSWORD" RP_NEW_PASSWORD="$NEW_PASSWORD" \
+        jq -nc '{current_password:$ENV.RP_OLD_PASSWORD, new_password:$ENV.RP_NEW_PASSWORD}' \
+        | docker_curl_stdin -X POST -H "Cookie: $cookies" -H "x-csrf-token: $token" \
+            -H 'Content-Type: application/json' \
+            "$url/api/password/change" >/dev/null 2>&1; then
+        note "✔ Rotated the Trilium owner password"
+    else
+        note "✘ FAILED to rotate Trilium (POST /api/password/change rejected)"
+    fi
+}
+
 # --- Prowlarr: update the stored qBittorrent download-client password ---
 
 rotate_prowlarr() {
@@ -849,6 +896,7 @@ main() {
         rotate_prowlarr
         rotate_kapowarr
         rotate_audiobookshelf
+        rotate_trilium
         rotate_dockhand
         rotate_beszel_superuser
     fi
