@@ -40,9 +40,6 @@ OPENROUTER_URL="http://agentgateway:4000/openrouter/v1"
 # The same file compose exports the gateway's own key from, so this cannot
 # disagree with it. Hex, which is what makes it safe to splice into SQL.
 GATEWAY_KEY_FILE="$(resolve_data_location_path)/agentgateway/secrets/llm_api_key"
-# The path routes accept the key above too; using the external-client one keeps
-# revoking either from touching the other.
-AGENT_KEY_FILE="$(resolve_data_location_path)/agentgateway/secrets/agent_api_key"
 # Must match the model `name` in config/agentgateway/config.yaml, which is in
 # turn LLAMA_ARG_ALIAS in compose.yaml.
 LLAMA_MODEL="gemma-4-e2b-it"
@@ -650,7 +647,6 @@ main() {
     wait_for_health_warning "pi-open-webui" 60 2 || true
 
     _key="$(read_api_key "$GATEWAY_KEY_FILE")" || _key=""
-    _agent_key="$(read_api_key "$AGENT_KEY_FILE")" || _agent_key=""
     if [ -z "$_key" ]; then
         log "WARNING: no readable agentgateway LLM API key; leaving the connections alone"
     else
@@ -664,20 +660,23 @@ main() {
         fi
         unset _rc
 
+        # The gateway key, not AGENT_API_KEY: Open WebUI runs inside the stack,
+        # and both routes accept either. Storing the external-client key here
+        # would make revoking it 401 the chat as well - the opposite of why
+        # there are two - and put it on display in Admin Settings.
+        #
         # No model_ids filter, deliberately: naming models here would be the
         # hardcoded list these routes exist to avoid. Groq's catalogue therefore
         # arrives whole, transcription and speech models included. Filter in
         # Admin Settings; this leaves what is set there alone.
-        if [ -n "$_agent_key" ]; then
-            for _route in "groq:$GROQ_URL" "openrouter:$OPENROUTER_URL"; do
-                ensure_connection "${_route#*:}" "$_agent_key" "${_route%%:*}" || _rc=$?
-                _rc="${_rc:-0}"
-                if [ "$_rc" -eq 0 ]; then
-                    changed=1
-                fi
-                unset _rc
-            done
-        fi
+        for _route in "groq:$GROQ_URL" "openrouter:$OPENROUTER_URL"; do
+            ensure_connection "${_route#*:}" "$_key" "${_route%%:*}" || _rc=$?
+            _rc="${_rc:-0}"
+            if [ "$_rc" -eq 0 ]; then
+                changed=1
+            fi
+            unset _rc
+        done
     fi
 
     if [ "$(marker_present "$DEFAULTS_MARKER" "$DEFAULTS_VERSION")" = "f" ]; then
@@ -725,6 +724,15 @@ main() {
         fi
     fi
 
+    if [ "$(marker_present "$GLOBAL_META_MARKER" "$GLOBAL_META_VERSION")" = "f" ]; then
+        log "Turning the built-in tools off on every model (~5000 prompt tokens each)"
+        if apply_global_model_metadata && mark_seeded "$GLOBAL_META_MARKER" "$GLOBAL_META_VERSION"; then
+            changed=1
+        else
+            log "WARNING: failed to seed the global model metadata"
+        fi
+    fi
+
     # Everything below writes the model's workspace row or grants access to it,
     # and every one of those statements is guarded by `WHERE EXISTS (... role =
     # 'admin')` - so before the first SSO login they would write nothing, exit 0,
@@ -736,15 +744,6 @@ main() {
         compose restart open-webui >/dev/null 2>&1 || log "WARNING: could not restart open-webui"
         wait_for_health_warning "pi-open-webui" 90 2 || true
         return 0
-    fi
-
-    if [ "$(marker_present "$GLOBAL_META_MARKER" "$GLOBAL_META_VERSION")" = "f" ]; then
-        log "Turning the built-in tools off on every model (~5000 prompt tokens each)"
-        if apply_global_model_metadata && mark_seeded "$GLOBAL_META_MARKER" "$GLOBAL_META_VERSION"; then
-            changed=1
-        else
-            log "WARNING: failed to seed the global model metadata"
-        fi
     fi
 
     if [ "$(marker_present "$TOOLS_MARKER" "$TOOLS_VERSION")" = "f" ]; then
