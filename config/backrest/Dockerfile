@@ -6,8 +6,11 @@ FROM ghcr.io/garethgeorge/backrest:v1.14.1
 # then aborts on its very first line under ON_ERROR_STOP. Verified in a restore
 # drill against a real dump. Bump this together with the server image.
 # Exact pins fail the build when the 3.24 branch bumps a package — bump them here.
+# Since this image is built in CI, that failure now lands on a pull request
+# rather than mid-`make update` on the Pi, which is where it used to: jq had
+# already moved 1.8.1-r0 -> 1.8.2-r0 under a pin nothing was rebuilding.
 # postgresql18-client lives in main, unlike the 16 client which was in community.
-RUN apk add --no-cache postgresql18-client=18.6-r0 jq=1.8.1-r0
+RUN apk add --no-cache postgresql18-client=18.6-r0 jq=1.8.2-r0
 # apache2-utils provides htpasswd, the only bcrypt tool available here; the
 # auth entrypoint needs it to turn BACKREST_AUTH_PASSWORD into config.json's
 # user. The host has no bcrypt tool, so this cannot happen in pre-start.
