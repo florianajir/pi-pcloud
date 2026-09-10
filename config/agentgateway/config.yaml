@@ -152,6 +152,17 @@ routes:
       backendAuth:
         key: ${OPENROUTER_API_KEY}
       ai:
+        # OpenRouter checks affordability against max_tokens *reserved*, not
+        # consumed, and falls back to the model's full context window when the
+        # client sends none - 131072 tokens for a request that will answer in
+        # twenty, which a credit-limited account refuses with a 402. Goose does
+        # not send max_tokens, so without this every call fails.
+        #
+        # `defaults`, not `overrides`: this applies only when the client said
+        # nothing, so a caller that does ask for more still gets it. Groq needs
+        # no equivalent - it bills what is consumed.
+        defaults:
+          max_tokens: 8192
         routes:
           /chat/completions: completions
           /models: passthrough
