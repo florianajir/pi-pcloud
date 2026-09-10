@@ -48,6 +48,7 @@ kapowarr:/userdata/kapowarr-db/Kapowarr.db
 shelfmark:/userdata/shelfmark/users.db
 audiobookshelf:/userdata/audiobookshelf/absdatabase.sqlite
 agentgateway:/userdata/agentgateway/agentgateway.db
+trilium:/userdata/trilium/document.db
 '
 
 mkdir -p "$DEST"

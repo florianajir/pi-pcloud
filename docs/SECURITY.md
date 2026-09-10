@@ -93,6 +93,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | **Shelfmark** | openid profile email groups | client_secret_basic | one_factor | PKCE (S256) required; admin comes from the `admin` group; local login disabled |
 | **Audiobookshelf** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required; **no `groups` scope** — it reads the claim as a role and denies anyone outside admin/user/guest |
 | **FreshRSS** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required — the flow runs in Apache (`mod_auth_openidc`), not in FreshRSS, and the module sends a code challenge by default even though the image's `FreshRSS.Apache.conf` never sets `OIDCPKCEMethod`. **No `groups` scope** — FreshRSS derives no roles from the token, so `one_factor` is the whole access decision |
+| **Trilium** | openid profile email | client_secret_basic | one_factor | **PKCE must stay off** — it delegates to `express-openid-connect`, which sends no code challenge, so `require_pkce: true` would reject every authorization request. **No `groups` scope** — it has no roles. `one_factor` is not the last gate: Trilium binds the first `sub` that enrolls and rejects every other one, so it is single-owner regardless of who else passes the policy |
 | **Homepage** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required. **No `groups` scope** — homepage has no roles, so `one_factor` is the whole access decision. Its NextAuth provider is declared `idToken: true`, so it never calls UserInfo and sees no `email` or `name` — it needs neither, the only thing it reads off the session is that there is one. One of the two clients that keep forward-auth *as well* (with Headplane): see the matrix below |
 
 `admin_only` is a named policy in the template: deny by default, `two_factor` for members of the `admin` group.
@@ -115,6 +116,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Shelfmark | ✓ | — | ✓ | LAN-only + OIDC only; password login disabled (`DISABLE_LOCAL_AUTH`), so requests and download history stay per-user |
 | Audiobookshelf | ✓ | — | ✓ | LAN-only + OIDC only; local login disabled once the bootstrap holds an API key, so the shared `PASSWORD` is not a second way into everyone's listening history. No forward-auth: the mobile apps can't pass an interactive portal, and they have their own OIDC redirect URI |
 | FreshRSS | ✓ | — | ✓ | LAN-only + OIDC. Apache's `mod_auth_openidc` guards `/i/` (the whole web UI) and maps `preferred_username` onto a per-user FreshRSS account, auto-created on first sign-in — so Authelia's `one_factor` policy is what decides who has a reading list at all. `/api/greader.php` is deliberately outside that: feed-reader apps can't pass an interactive portal, and it checks the account's own API password. No forward-auth for the same reason (as with Kavita's OPDS clients) |
+| Trilium | ✓ | — | ✓ | LAN-only + its own account / OIDC. No forward-auth: `/etapi` (scripting) and `/api/clipper` (the Web Clipper extension) can't pass an interactive portal, as with Kavita's OPDS clients. SSO is **not** live until the owner enrolls it — see below |
 | n8n | ✓ | — | — | LAN-only + its own auth |
 | ntfy | ✓ | — | — | LAN-only + its own accounts and ACLs (`deny-all` default) |
 | Homepage | ✓ | ✓ | ✓ | LAN-only + SSO + its own OIDC — all three, as Headplane already does, and here it costs nothing to: `HOMEPAGE_OIDC_AUTO_LOGIN=true` (v2.3.0) sends an unauthenticated visitor straight to Authelia rather than to a page whose only control is a sign-in button, and the forward-auth hop in front has already established that same session — so the dashboard still opens in one hop. Stacking is not redundant: forward-auth only guards the Traefik path, and `/api/*` — which proxies every widget's credentials — is reachable from anything on `frontend` that dials `:3000` with a forged `Host: homepage.<HOST_NAME>`, which is all `HOMEPAGE_ALLOWED_HOSTS` checks. `/api/healthcheck` and `/api/config/custom.css` stay public by design |
@@ -130,7 +132,42 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Stremio | ✓ | — | — | LAN-only; streaming clients and cast receivers can't do the portal |
 | Comet | partial | — | — | Split in two routers. `/s/<PUBLIC_API_TOKEN>/` is public so an addon installed on a Stremio account resolves off-tailnet; `/configure` is excluded from it, and `/`, `/health` and `/admin*` stay LAN-only. No forward-auth on either — Stremio fetches manifests programmatically. The public half carries `rate-limit-auth`, because each request fans out to Torrentio/MediaFusion/Zilean from the Pi's WAN IP. Its two passwords are generated per-service (`config/comet/comet.env`), never `${PASSWORD}` |
 
-Services with their own account system (Immich, Kavita, Shelfmark, Audiobookshelf, FreshRSS) deliberately do **not** stack forward-auth on top of OIDC — their apps and clients cannot complete an interactive portal. Homepage and Headplane are not on that list: neither has such clients — both are only ever opened in a browser, which completes both hops.
+Services with their own account system (Immich, Kavita, Shelfmark, Audiobookshelf, FreshRSS, Trilium) deliberately do **not** stack forward-auth on top of OIDC — their apps and clients cannot complete an interactive portal. Homepage and Headplane are not on that list: neither has such clients — both are only ever opened in a browser, which completes both hops.
+
+### Trilium's SSO has to be enrolled by hand, once
+
+Trilium is the one OIDC client in the stack that nothing bootstraps, because nothing
+can: binding an identity requires a browser session that is *already* signed in as the
+owner. Setting the environment variables only makes the option available.
+
+On a fresh install:
+
+1. Open `https://notes.<HOST_NAME>` and complete the setup wizard, which sets a local
+   password. Do this promptly — until it runs, the instance is unclaimed, and anyone who
+   reaches it from the LAN first becomes its owner. This is the same first-run window
+   Kavita has.
+2. Sign in with that password, then go to *Options → MFA* and choose OpenID as the
+   method. That writes `mfaMethod=oauth`, which is what actually arms the flow: the
+   environment variables alone leave `isOpenIDConfigured()` false.
+3. Click through to Authelia and back. That round-trip is the enrollment: Trilium stores
+   the `sub` it receives and, from then on, refuses every other one with `wrong_account`.
+
+The order matters and is enforced upstream. Enrolling from an anonymous session is
+refused (`not_enrolled`) so a stranger cannot claim the instance by being the first to
+authenticate, and before enrollment the login page keeps offering the password form so a
+misconfigured provider cannot lock the owner out.
+
+That binding is also what makes `one_factor` an adequate policy here. TriliumNext#8606
+described OIDC as authenticating without authorizing — every account Authelia knew could
+get in — and the enrollment model is the fix. Trilium is single-owner: there is no second
+account to authorize.
+
+One consequence worth knowing: logout is local only. Authelia advertises no
+`end_session_endpoint`, so Trilium sets `idpLogout: false` and signing out clears its own
+session while the Authelia one stays valid — the next sign-in is one silent redirect. This
+is the stack-wide limitation described under [OIDC](#oidc--for-services-that-can-authenticate-themselves);
+unlike Nextcloud and the others, Trilium cannot be pointed at Authelia's portal logout
+instead, because `postLogoutRedirect` is hardcoded to `/login`.
 
 ## The middleware chain
 

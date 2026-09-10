@@ -96,7 +96,7 @@ The group decides the check interval, the retry budget and the ntfy priority:
 | **Core** | traefik, authelia, lldap, postgres, redis, unbound, pihole, ddns-updater, ntfy, DNS resolution | 60 s | 5 (critical) | each monitor |
 | **Remote Access** | headscale, headplane, tailscale, gluetun, VPN public IP | 60 s | 4 (high) | each monitor |
 | **External Chain** | route checks, TLS certificate | 120 s | 4 (high) | each monitor |
-| **Personal Data** | immich, immich-ml, nextcloud, vaultwarden, kavita, audiobookshelf, freshrss, backrest, backup freshness | 120 s | 3 | each monitor |
+| **Personal Data** | immich, immich-ml, nextcloud, vaultwarden, kavita, audiobookshelf, freshrss, trilium, backrest, backup freshness | 120 s | 3 | each monitor |
 | **Media & Downloads** | qbittorrent, stremio, stremio-lan, comet, prowlarr, kapowarr, flaresolverr, shelfmark, route qbittorrent | 300 s | 2 (low) | the group only |
 | **Tools & Observability** | homepage, beszel, beszel-agent, dockhand | 300 s | 2 (low) | the group only |
 | **Automation & AI** | n8n, n8n-runners, open-webui, llama-cpp, piper, agentgateway | 300 s | 2 (low) | the group only |
@@ -193,8 +193,8 @@ Two plans. `s3-backup` carries everything off-site; `usb-env` is a small local o
 | | |
 |---|---|
 | **Runs** | Nightly at 04:00 |
-| **Backs up** | `/userdata/` — Immich, Nextcloud (data, config, themes), LLDAP, Vaultwarden, Uptime Kuma, Authelia config and secrets, Beszel, Open WebUI, and the small unrecoverable state: Headscale (node keys, ACLs), Headplane, n8n, ntfy ACLs, Kavita, Pi-hole, Traefik's ACME certificates, qBittorrent, Prowlarr, Kapowarr, Shelfmark, Audiobookshelf, FreshRSS |
-| **Excludes** | Immich thumbnails, encoded video and model cache; Nextcloud previews and thumbnails; Open WebUI's model cache; Kavita's cache and its own backups; Pi-hole's query log, list cache and `gravity.db`; Prowlarr's log database; Shelfmark's cover cache; Audiobookshelf's `/metadata` (covers and cached art, which are not mounted at all); FreshRSS's article cache, favicons and per-user log; every SQLite `-wal`/`-shm`; the stale pre-PostgreSQL `.db` stubs; `*.log` and rotations — all regenerable or replaced by a consistent copy |
+| **Backs up** | `/userdata/` — Immich, Nextcloud (data, config, themes), LLDAP, Vaultwarden, Uptime Kuma, Authelia config and secrets, Beszel, Open WebUI, and the small unrecoverable state: Headscale (node keys, ACLs), Headplane, n8n, ntfy ACLs, Kavita, Pi-hole, Traefik's ACME certificates, qBittorrent, Prowlarr, Kapowarr, Shelfmark, Audiobookshelf, FreshRSS, Trilium |
+| **Excludes** | Immich thumbnails, encoded video and model cache; Nextcloud previews and thumbnails; Open WebUI's model cache; Kavita's cache and its own backups; Pi-hole's query log, list cache and `gravity.db`; Prowlarr's log database; Shelfmark's cover cache; Audiobookshelf's `/metadata` (covers and cached art, which are not mounted at all); FreshRSS's article cache, favicons and per-user log; Trilium's own rotating database copies (`backup/`), its `tmp/` and any anonymized debug copy — `sqlite-backup.sh` already takes a consistent one; every SQLite `-wal`/`-shm`; the stale pre-PostgreSQL `.db` stubs; `*.log` and rotations — all regenerable or replaced by a consistent copy |
 | **Databases** | Dumped by pre-snapshot hooks: `nextcloud` and `vaultwarden` (fatal on error), `authelia`, `lldap`, `open-webui`, `immich`, `freshrss`. SQLite services get consistent copies from `scripts/sqlite-backup.sh` |
 | **Retention** | 7 daily, 4 weekly, 4 monthly |
 | **Maintenance** | Prune Sundays at 03:00 (25% unused); monthly integrity check that also re-reads 5% of the pack data; stale locks released before every run |
