@@ -2529,7 +2529,7 @@ services:
 
   authelia:
     <<: *service-defaults
-    image: authelia/authelia:4.39.24
+    image: authelia/authelia:4.39.25
     container_name: pi-authelia
     networks:
       - frontend
