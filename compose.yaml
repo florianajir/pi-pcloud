@@ -735,9 +735,20 @@ services:
       # Authelia grants no offline_access to this client, so asking for a
       # refresh token would only add a failing background call per session.
       - GF_AUTH_GENERIC_OAUTH_USE_REFRESH_TOKEN=false
+      # With the login form disabled, /login is a page whose only control is a
+      # "Sign in with Authelia" button - and the forward-auth in front has
+      # already established that very session, so the click proves nothing. Same
+      # reasoning as HOMEPAGE_OIDC_AUTO_LOGIN; /login becomes a 307 straight to
+      # /login/generic_oauth. Escape hatch below and in docs/MONITORING.md.
+      - GF_AUTH_GENERIC_OAUTH_AUTO_LOGIN=true
       # Authelia implements no RP-initiated logout; its portal logout route is
       # what every other client here redirects to. See docs/SECURITY.md.
-      - GF_AUTH_SIGNOUT_REDIRECT_URL=https://auth.${HOST_NAME:-pi.lan}/logout?rd=https%3A%2F%2Fgrafana.${HOST_NAME:-pi.lan}%2Flogin
+      #
+      # `%3FdisableAutoLogin` is load-bearing, not decoration: landing on a bare
+      # /login with the flag above set re-runs the OIDC flow immediately, so
+      # signing out would return the user to where they started. Homepage pins
+      # its own redirect to `?autologin=0` for exactly this reason.
+      - GF_AUTH_SIGNOUT_REDIRECT_URL=https://auth.${HOST_NAME:-pi.lan}/logout?rd=https%3A%2F%2Fgrafana.${HOST_NAME:-pi.lan}%2Flogin%3FdisableAutoLogin
     volumes:
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_grafana_secret.txt:/run/secrets/oidc_grafana_secret:ro
       # Provisioned by file, both of them, so the SQLite database below stays

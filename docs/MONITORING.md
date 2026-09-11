@@ -178,13 +178,22 @@ docker exec pi-prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=up
 
 `https://grafana.<HOST_NAME>`, LAN-only + Authelia forward-auth + Authelia OIDC, `admin` group and 2FA on both gates. Local login is off — and so is HTTP basic auth, which is the one that matters: Grafana's API accepts basic auth from the built-in admin *regardless* of `disable_login_form`, so turning off the form alone would have left `admin` usable by anything on `frontend` that dialled `:3000`. With `GF_AUTH_BASIC_ENABLED=false` the account is inert, which is why no `PASSWORD` is injected into the container.
 
-If OIDC ever breaks and locks you out, the escape hatch is two commands and a restart:
+**There is no sign-in page to click through.** `GF_AUTH_GENERIC_OAUTH_AUTO_LOGIN=true` turns `/login` into a 307 straight at the OIDC flow, because with the form disabled that page's only control is a "Sign in with Authelia" button — and the forward-auth hop in front has already established that same session, so the click proves nothing. Homepage carries `HOMEPAGE_OIDC_AUTO_LOGIN=true` for the identical reason; see [Security](SECURITY.md#per-service-protection).
+
+That flag has one consequence worth stating, because it is silent when wrong: **it makes signing out a no-op unless the return URL opts back out of it.** Grafana's signout sends the browser to Authelia's portal logout, which returns it to `rd` — and a bare `/login` would be auto-redirected straight back into a fresh session. `GF_AUTH_SIGNOUT_REDIRECT_URL` therefore ends in `%2Flogin%3FdisableAutoLogin`, the same trick Homepage pins with `?autologin=0`.
+
+If OIDC ever breaks and locks you out, the escape hatch is a query parameter, two commands and a restart:
 
 ```bash
-# add `- GF_AUTH_BASIC_ENABLED=true` to grafana's environment in compose.yaml, then
+# 1. Reach the login page without being bounced into the broken OIDC flow:
+#    https://grafana.<HOST_NAME>/login?disableAutoLogin
+# 2. Give yourself something to log in *with* — add `- GF_AUTH_BASIC_ENABLED=true`
+#    to grafana's environment in compose.yaml, then:
 docker compose up -d grafana
 docker exec pi-grafana grafana cli admin reset-admin-password '<new password>'
 ```
+
+Step 1 is not optional once auto-login is on: without it every visit to `/login` is a 307 into the flow that is broken, including the one you make to use the password you just reset.
 
 **The datasource and the dashboard are provisioned from files** — `config/grafana/provisioning/` and `config/grafana/dashboards/pi-pcloud.json` — mounted read-only, with `allowUiUpdates: false`. So Grafana's SQLite database holds nothing but sessions and per-user preferences, which is exactly why **it is absent from Backrest**: losing it costs a re-login, and the dashboard comes back from Git. `allowUiUpdates: false` means Grafana refuses the save outright ("Cannot save provisioned dashboard") rather than letting an edit sit there until a restart quietly drops it. Change `pi-pcloud.json` instead — panel-by-panel edits are still possible in the browser for *trying* something, they just cannot be persisted.
 
