@@ -1013,7 +1013,7 @@ services:
     labels:
       - "homepage.description=Face and object recognition for Immich"
       - "pi-pcloud.companion-of=immich-server"
-    image: ghcr.io/immich-app/immich-machine-learning:v3.1.0
+    image: ghcr.io/immich-app/immich-machine-learning:v3.2.0
     networks:
       - egress_immich
       - immich
