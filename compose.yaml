@@ -1040,7 +1040,7 @@ services:
     <<: *service-defaults
     container_name: pi-immich
     profiles: ["immich-server", "all"]
-    image: ghcr.io/immich-app/immich-server:v3.1.0
+    image: ghcr.io/immich-app/immich-server:v3.2.0
     volumes:
       - ${DATA_LOCATION:-./data}/immich:/data
       - ${DATA_LOCATION:-./data}/authelia-config/immich-oauth-config.yaml:/immich-oauth-config.yaml:ro
