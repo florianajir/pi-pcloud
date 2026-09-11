@@ -119,6 +119,31 @@ resolve_data_location_path() {
     esac
 }
 
+# Root the shared Postgres cluster lives under, made absolute the same way.
+# Mirrors compose.yaml's ${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}:
+# unset and empty must both fall back, because .env.dist ships the key empty and
+# an operator clearing the value means "put it back with the rest of the data",
+# not "use the project directory".
+resolve_postgres_data_location_path() {
+    local postgres_data_location
+
+    postgres_data_location="$(get_env_value POSTGRES_DATA_LOCATION)"
+    [ -n "$postgres_data_location" ] || { resolve_data_location_path; return; }
+
+    while :; do
+        case "$postgres_data_location" in
+            /) break ;;
+            */) postgres_data_location="${postgres_data_location%/}" ;;
+            *) break ;;
+        esac
+    done
+
+    case "$postgres_data_location" in
+        /*) printf '%s' "$postgres_data_location" ;;
+        *) printf '%s/%s' "$PROJECT_DIR" "$postgres_data_location" ;;
+    esac
+}
+
 # --- Permissions ---
 
 safe_chmod() {

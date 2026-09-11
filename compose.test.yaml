@@ -131,8 +131,9 @@ services:
       start_period: 120s
 
   # --- postgres: replace host bind mount with a named volume for CI ---
-  # ./data/postgres18 may hold production data initialised with a different
-  # PASSWORD; a named volume guarantees a fresh database on the CI one.
+  # The host path (POSTGRES_DATA_LOCATION, or DATA_LOCATION when unset) may hold
+  # production data initialised with a different PASSWORD; a named volume
+  # guarantees a fresh database on the CI one, whichever disk that path is on.
   # Mount point is /var/lib/postgresql, not .../data — see compose.yaml.
   postgres:
     volumes: !override
