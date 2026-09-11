@@ -167,6 +167,35 @@ write_file_atomic() {
     return 1
 }
 
+# Docker materialises a *missing* bind-mount source as an empty directory, so a
+# path that must be a file can come back as one - and then every `-r`/`-s` guard
+# on it reads as success while the file is never written. Restore the file path:
+# rmdir when it is only the empty directory compose made, move aside when it is
+# not, because a non-empty one is somebody else's data.
+# Usage: ensure_config_target_is_file <path>
+ensure_config_target_is_file() {
+    local target="$1"
+    local backup_dir=""
+
+    [ -d "$target" ] || return 0
+
+    if [ -z "$(ls -A "$target" 2>/dev/null)" ]; then
+        rmdir "$target" || {
+            log "ERROR: could not remove the empty directory at $target"
+            return 1
+        }
+        log "Removed empty directory at $target to restore file path"
+        return 0
+    fi
+
+    backup_dir="${target}.dir.bak.$(date +%Y%m%d-%H%M%S)"
+    mv "$target" "$backup_dir" || {
+        log "ERROR: could not move the directory at $target aside"
+        return 1
+    }
+    log "Moved directory $target to $backup_dir to restore file path"
+}
+
 # Same idea for a *rendered* file that carries a secret. `cmd > "$file"` creates
 # it under the caller's umask, world-readable until a chmod that may never come;
 # mktemp is 0600 from creation and mv preserves that.
@@ -459,6 +488,13 @@ ensure_authelia_oidc_materials() {
     secret_file="$data_root/authelia-config/secrets/oidc_${client_id}_secret.txt"
     pre_start_script="$PROJECT_DIR/scripts/authelia-pre-start.sh"
 
+    # A container that started before this secret existed leaves a *directory*
+    # here, and every guard below then reads as success: `-r` is true for a
+    # directory, and generate_oidc_secret's `[ ! -s ]` is false because a
+    # directory has a size. The client is silently never given a secret and the
+    # service comes up healthy with an empty one.
+    ensure_config_target_is_file "$secret_file" || return 1
+
     if [ -r "$secret_file" ] && [ -f "$config_file" ] && grep -q "client_id: ${client_id}" "$config_file" 2>/dev/null; then
         return 0
     fi
@@ -497,6 +533,93 @@ ensure_authelia_oidc_materials() {
     fi
 
     return 0
+}
+
+# --- Trilium ---
+
+# Where scripts/trilium-bootstrap.sh leaves the ETAPI token and where
+# scripts/agentgateway-pre-start.sh reads it. One definition: the two run in
+# different phases, and a drifting path fails silently - agentgateway would
+# just send no credential.
+#
+# Under agentgateway's secrets directory, not Trilium's data directory, even
+# though Trilium mints it: that data directory is `chown -R`'d to uid 1000 by
+# the container on every start, so a hook running as anyone else cannot manage
+# a file inside it. agentgateway-pre-start.sh already owns this directory, and
+# agentgateway is the only consumer.
+# Usage: trilium_etapi_token_file
+trilium_etapi_token_file() {
+    printf '%s/agentgateway/secrets/trilium_etapi_token' "$(resolve_data_location_path)"
+}
+
+# Echo the stored ETAPI token, or nothing before it has been minted. Never
+# fails: callers treat empty as "not ready yet".
+# Usage: read_trilium_etapi_token
+read_trilium_etapi_token() {
+    local token_file=""
+
+    token_file="$(trilium_etapi_token_file)"
+    [ -r "$token_file" ] || return 0
+    cat "$token_file" 2>/dev/null || return 0
+}
+
+# Echo a logged-in Trilium session cookie, or nothing.
+#
+# Shared by trilium-bootstrap.sh and rotate-password.sh, which both need one and
+# would otherwise keep two copies of the same handshake. `POST /login` needs no
+# CSRF, but its handler redirects to Authelia rather than checking the password
+# once SSO is enrolled - so an empty answer here means "no scriptable way in",
+# not "wrong password".
+#
+# A cookie alone is not a login: a *failed* attempt gets a session too, so the
+# result is confirmed against /bootstrap before it is handed back.
+# Usage: trilium_open_session <base_url> <password>
+trilium_open_session() {
+    local base_url="$1" password="$2" headers="" session=""
+
+    [ -n "$password" ] || return 1
+
+    headers="$(jq -cn --arg p "$password" '{password: $p}' \
+        | docker_curl_stdin -X POST -D - -o /dev/null \
+            -H 'Content-Type: application/json' \
+            "$base_url/login" 2>/dev/null)" || return 1
+
+    session="$(printf '%s' "$headers" | tr -d '\r' \
+        | sed -n 's/^[Ss]et-[Cc]ookie: *\(trilium\.sid=[^;]*\).*/\1/p' | head -1)"
+    [ -n "$session" ] || return 1
+
+    api_get_with_cookie "$base_url" "/bootstrap" "$session" 2>/dev/null \
+        | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 1
+
+    printf '%s' "$session"
+}
+
+# Echo "<cookie header>|<csrf token>" for a write against Trilium's /api.
+#
+# One request, not two: csrf-csrf binds the token to the session id and
+# /bootstrap re-issues `trilium.sid` alongside `trilium-csrf`, so headers and
+# body fetched separately pair a token with the wrong session - a 403 visible
+# only in Trilium's own log.
+# Usage: trilium_csrf_material <base_url> <session>
+trilium_csrf_material() {
+    local base_url="$1" session="$2" response="" headers="" body="" cookies="" token=""
+
+    response="$(docker_curl -i -H "Cookie: $session" "$base_url/bootstrap" 2>/dev/null)" || return 1
+
+    headers="$(printf '%s' "$response" | tr -d '\r' | sed -n '1,/^$/p')"
+    body="$(printf '%s' "$response" | tr -d '\r' | sed -n '/^$/,$p' | tail -n +2)"
+
+    token="$(printf '%s' "$body" | jq -r '.csrfToken // empty' 2>/dev/null)"
+    [ -n "$token" ] || return 1
+
+    # `-d';'`, one character: paste treats -d as a *list* it cycles through, so
+    # `-d'; '` joins the third cookie with a space instead of a semicolon and
+    # mangles it. Two cookies hid that; /bootstrap sets exactly two today.
+    cookies="$(printf '%s' "$headers" \
+        | sed -n 's/^[Ss]et-[Cc]ookie: *\([^;]*\).*/\1/p' | paste -sd';' -)"
+    [ -n "$cookies" ] || cookies="$session"
+
+    printf '%s|%s' "$cookies" "$token"
 }
 
 # --- OIDC secret retrieval ---

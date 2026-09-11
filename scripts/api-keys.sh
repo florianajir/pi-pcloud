@@ -12,7 +12,7 @@ set -eu
 umask 077
 
 main() {
-    local secrets_dir="" host_name="" llm_key="" agent_key=""
+    local secrets_dir="" host_name="" llm_key="" agent_key="" mcp_key=""
 
     secrets_dir="$(resolve_data_location_path)/agentgateway/secrets"
     [ -d "$secrets_dir" ] || die "no $secrets_dir - has the stack ever started?"
@@ -27,6 +27,12 @@ main() {
 
     llm_key="sk-$(cat "$secrets_dir/llm_api_key")"
     agent_key="sk-$(cat "$secrets_dir/agent_api_key")"
+    # Not in the loop above: a stack whose agentgateway-pre-start.sh has not
+    # run since /mcp got its own gate has no such file yet, and that must not
+    # take the two keys it does have down with it.
+    if [ -r "$secrets_dir/mcp_api_key" ]; then
+        mcp_key="sk-$(cat "$secrets_dir/mcp_api_key")"
+    fi
 
     cat <<EOF
 
@@ -46,8 +52,13 @@ main() {
     Token     $llm_key
     opens     https://llm.$host_name/v1              the local model
 
-  Two tokens rather than one so that revoking a tool on a laptop does not log
-  Open WebUI out of the models.
+  For MCP clients — a different surface, so a different token
+    Token     ${mcp_key:-<not generated yet - run \`make update\`>}
+    opens     https://llm.$host_name/mcp             every wired MCP target
+
+  Separate tokens rather than one so that revoking a tool on a laptop does not
+  log Open WebUI out of the models, and so that reading and writing every note
+  through the Trilium MCP target is not something an /v1 key can do.
 
   Reachable from the LAN and the tailnet only. Rotate one by deleting its file
   in $secrets_dir, then \`make config\` and

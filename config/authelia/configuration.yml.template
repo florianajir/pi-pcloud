@@ -476,6 +476,50 @@ __OIDC_PRIVATE_KEY__
         token_endpoint_auth_method: client_secret_basic
         userinfo_signed_response_alg: none
 
+      - client_id: trilium
+        client_name: Trilium Notes
+        client_secret: '{{ secret "/config/secrets/oidc_trilium_secret_hash" }}'
+        public: false
+        # one_factor, not admin_only, because Authelia is not the last gate here:
+        # Trilium binds the first `sub` that enrolls and refuses every other one
+        # afterwards (`wrong_account`), so a second account passing this policy
+        # still cannot sign in. See docs/SECURITY.md for the enrollment step.
+        authorization_policy: one_factor
+        consent_mode: implicit
+        # Fixed by OIDC_ROUTES in apps/server/src/services/open_id.ts and not
+        # exposed as a setting - only the host part moves, via oauthBaseUrl.
+        redirect_uris:
+          - 'https://notes.__HOST_NAME__/callback'
+        # Authelia's own Trilium guide says `require_pkce: false`, and reading
+        # Trilium's source agrees - it fills authorizationParams with
+        # response_type and scope only. Both are misleading: the challenge is
+        # added a layer down, by the bundled express-openid-connect, which does
+        # `if (response_type.includes("code"))` and then always sets
+        # code_challenge_method=S256. Verified in the v0.105.0 main.cjs bundle,
+        # which also carries the library's own "the authorization request will
+        # use PKCE" debug string. `false` would merely stop requiring what is
+        # sent anyway; requiring it matches every other client here.
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        # No `groups`: Trilium has no roles at all. The identity it enrolls is
+        # the owner of the whole instance, and there is exactly one.
+        scopes:
+          - openid
+          - profile
+          - email
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+        # Trilium leaves oauthClientAuthMethod empty and auto-detects: its
+        # resolveClientAuthMethod() returns client_secret_basic for any issuer
+        # not on its incompatibility list, which Authelia is not.
+        token_endpoint_auth_method: client_secret_basic
+        # Must stay `none`: enrollment calls fetchUserInfo() to get the name and
+        # email that the ID token does not carry under the code flow, and
+        # express-openid-connect parses that response as plain JSON.
+        userinfo_signed_response_alg: none
+
       - client_id: homepage
         client_name: Homepage
         client_secret: '{{ secret "/config/secrets/oidc_homepage_secret_hash" }}'

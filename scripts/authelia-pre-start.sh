@@ -79,20 +79,6 @@ generate_rsa_key() {
     log "Generated RSA private key at $keyfile"
 }
 
-ensure_config_target_is_file() {
-    local target="$1"
-    if [ -d "$target" ]; then
-        if [ -z "$(ls -A "$target" 2>/dev/null)" ]; then
-            rmdir "$target"
-            log "Removed empty directory at $target to restore file path"
-        else
-            backup_dir="${target}.dir.bak.$(date +%Y%m%d-%H%M%S)"
-            mv "$target" "$backup_dir"
-            log "Moved directory $target to $backup_dir to restore file path"
-        fi
-    fi
-}
-
 main() {
     HOST_NAME="${HOST_NAME:-$(get_env_value HOST_NAME)}"
     DATA_LOCATION="${DATA_LOCATION:-$(get_env_value DATA_LOCATION)}"
@@ -138,7 +124,7 @@ main() {
     fi
 
     # Add a client here when declaring one in configuration.yml.template.
-    for client in nextcloud immich beszel dockhand headplane headscale open-webui kavita vaultwarden shelfmark audiobookshelf agentgateway freshrss homepage; do
+    for client in nextcloud immich beszel dockhand headplane headscale open-webui kavita vaultwarden shelfmark audiobookshelf agentgateway freshrss homepage trilium; do
         generate_oidc_secret "oidc_${client}_secret"
     done
 

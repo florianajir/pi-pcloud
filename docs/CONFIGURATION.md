@@ -229,7 +229,7 @@ COMPOSE_PROFILES=                                             # core services on
 
 **Core services always run** (they carry no profile): `traefik`, `authelia`, `lldap`, `postgres`, `redis`, `pihole`, `unbound`, `headscale`, `tailscale`, `ntfy`, `backrest`, `ddns-updater`, `homepage`. Pi-hole and Unbound stay core because subdomain resolution depends on the Pi-hole wildcard record; Headscale and Tailscale stay core because they provide remote access to everything else.
 
-**Optional services:** `beszel`, `beszel-agent`, `uptime-kuma`, `dockhand`, `n8n`, `n8n-runners`, `headplane`, `immich-server`, `immich-machine-learning`, `nextcloud`, `gluetun`, `qbittorrent`, `stremio`, `stremio-lan`, `comet`, `prowlarr`, `kapowarr`, `flaresolverr`, `kavita`, `shelfmark`, `audiobookshelf`, `freshrss`, `vaultwarden`, `llama-cpp`, `piper`, `parakeet`, `system-tools`, `open-webui`, `agentgateway`.
+**Optional services:** `beszel`, `beszel-agent`, `uptime-kuma`, `dockhand`, `n8n`, `n8n-runners`, `headplane`, `immich-server`, `immich-machine-learning`, `nextcloud`, `gluetun`, `qbittorrent`, `stremio`, `stremio-lan`, `comet`, `prowlarr`, `kapowarr`, `flaresolverr`, `kavita`, `shelfmark`, `audiobookshelf`, `freshrss`, `trilium`, `vaultwarden`, `llama-cpp`, `piper`, `parakeet`, `system-tools`, `open-webui`, `agentgateway`.
 
 `stremio` and `stremio-lan` are the same server in two networking modes and are **mutually exclusive** — they share one data volume and the same Traefik host rules. `stremio` is the default (VPN); pick `stremio-lan` only to cast to a DLNA/UPnP renderer, and read the trade-off in [Networking → Casting](NETWORKING.md#casting-to-a-dlna-renderer) first. `stremio-lan` is not part of `all`.
 

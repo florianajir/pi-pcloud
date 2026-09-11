@@ -55,6 +55,7 @@ Prefer doing it by hand? See the [Installation guide](docs/INSTALLATION.md).
 | **Network & access** | Traefik, Authelia, LLDAP, Headscale + Headplane, Tailscale |
 | **DNS & filtering** | Pi-hole, Unbound |
 | **Download & media** | qBittorrent, Prowlarr, Kapowarr, Shelfmark, Kavita, Audiobookshelf, FreshRSS, Stremio + Comet, FlareSolverr, Gluetun |
+| **Notes & knowledge** | Trilium |
 | **AI** | Open WebUI, Agentgateway, llama.cpp, Piper (TTS), Parakeet (STT), system-tools |
 | **Monitoring & backup** | Beszel, Uptime Kuma, Homepage, Backrest, Dockhand |
 | **Infrastructure** | PostgreSQL, Redis (Valkey), ddns-updater |
