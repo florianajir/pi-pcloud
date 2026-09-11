@@ -175,8 +175,16 @@ def get_hub_public_key(hub: Hub) -> str:
 
 
 def lookup_user_id_by_email(hub: Hub, email: str) -> str:
+    """Empty when the account cannot be resolved, including when the call itself
+    fails: the token is then created without a user binding, which is what the
+    shell version's `|| true` at every call site produced."""
     target = email.strip().lower()
-    for item in hub.records("users", fields="id,email"):
+    try:
+        records = hub.records("users", fields="id,email")
+    except CurlError as exc:
+        log(f"WARNING: Could not look up users.id for {email}: {exc}")
+        return ""
+    for item in records:
         if (item.get("email") or "").strip().lower() == target:
             return item.get("id") or ""
     return ""
@@ -243,7 +251,11 @@ def get_or_create_db_universal_token_for_user(hub: Hub, user_id: str) -> str:
 
 
 def has_active_system(hub: Hub) -> bool:
-    return bool(hub.records("systems", perPage=1, filter="(status='up')"))
+    try:
+        return bool(hub.records("systems", perPage=1, filter="(status='up')"))
+    except CurlError as exc:
+        log(f"WARNING: Could not check for an active system: {exc}")
+        return False
 
 
 # --- OIDC ---
@@ -596,7 +608,7 @@ def restart_agent_if_needed(agent_env: AgentEnv) -> None:
 # --- Main ---
 
 
-def reconcile_hub(email: str, password: str, hub: Hub) -> None:
+def reconcile_hub(email: str, password: str, hub: Hub, tolerate_notifications: bool = False) -> None:
     """Everything that is not the agent's credentials, in the order the hub
     wants it.
 
@@ -604,6 +616,11 @@ def reconcile_hub(email: str, password: str, hub: Hub) -> None:
     install takes on every start: without it the S3 credentials and SMTP
     settings in .env are only ever applied at first bootstrap, and a rotated S3
     key leaves Beszel's own nightly backups failing silently.
+
+    The two settings steps are best-effort. The notification step is not, except
+    on the path that returns early with credentials it already had: a bootstrap
+    that cannot reach the hub's notification API is the thing under test when CI
+    runs the post-start phase in blocking mode.
     """
     try:
         configure_pocketbase_settings(email, password)
@@ -613,6 +630,10 @@ def reconcile_hub(email: str, password: str, hub: Hub) -> None:
         sync_system_user_access(hub)
     except CurlError as exc:
         log(f"WARNING: Could not sync system access: {exc}")
+
+    if not tolerate_notifications:
+        configure_ntfy_webhook_and_alerts(hub)
+        return
     try:
         configure_ntfy_webhook_and_alerts(hub)
     except CurlError as exc:
@@ -672,7 +693,7 @@ def main_passwordless(agent_env: AgentEnv, email: str, password: str) -> int:
             log(f"Seeded KEY in {agent_env.path} from environment")
 
     if agent_env.get("TOKEN") and agent_env.get("KEY"):
-        reconcile_hub(email, password, hub)
+        reconcile_hub(email, password, hub, tolerate_notifications=True)
         restart_agent_if_needed(agent_env)
         log(f"Using existing agent TOKEN/KEY from {agent_env.path}")
         log("Bootstrap completed successfully")
