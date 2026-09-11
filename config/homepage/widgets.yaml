@@ -6,8 +6,27 @@
         text_size: xl
         text: PI Pcloud
 
+# The stack's own SearXNG rather than a hosted engine, so what is typed here
+# leaves the house as a query from the Pi and not from the browser. Mirrored by
+# `quicklaunch` in settings.yaml, which has to name the same provider or typing
+# on the dashboard and typing in this box would reach different engines.
+#
+# `custom` is the only provider that takes a URL; the named ones are a fixed
+# list upstream. The two URLs are deliberately not the same shape:
+#   url            the browser navigates to it, so it has to be the public name
+#                  - and this box stops working if the searxng profile is off.
+#   suggestionUrl  homepage's *server* fetches this one: the box calls
+#                  /api/search/searchSuggestion, and that route reads the
+#                  widget's suggestionUrl and fetches it itself. The public name
+#                  from inside the container resolves out to the WAN address and
+#                  hairpins back through the router, so Traefik sees the WAN IP
+#                  and lan@docker admits it only while WAN_HAIRPIN_IP is current
+#                  - measured. The container name skips DNS, TLS and the gate.
 - search:
-        provider: duckduckgo
+        provider: custom
+        url: https://search.{{HOMEPAGE_VAR_HOST_NAME}}/search?q=
+        suggestionUrl: http://searxng:8080/autocompleter?q=
+        showSearchSuggestions: true
         target: _blank
 
 - resources:

@@ -171,6 +171,9 @@ GROUPS = [
             "pi-open-webui",
             "pi-llama-cpp",
             "pi-piper",
+            # Here rather than with FreshRSS in Personal Data: it stores nothing,
+            # and what actually breaks when it is down is the chat's web search.
+            "pi-searxng",
             # agentgateway's only check: distroless, so it has no healthcheck.
             "pi-agentgateway",
         ],

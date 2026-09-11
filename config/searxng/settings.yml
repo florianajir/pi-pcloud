@@ -1,0 +1,65 @@
+# SearXNG's own configuration. Mounted read-only at /etc/searxng/settings.yml,
+# *inside* a named volume covering /etc/searxng - see compose.yaml for why the
+# directory cannot simply be a bind mount.
+#
+# Static, not rendered: everything host-specific is an environment override the
+# image already supports (SEARXNG_SECRET, SEARXNG_BASE_URL), so there is no
+# template and no sed pass to get wrong.
+#
+# `use_default_settings` merges this over the ~270-engine default rather than
+# replacing it, so only the differences belong here. The `engines.remove` form
+# is the only one that actually drops an engine: `disabled: true` still lets
+# SearXNG try to import it, and ahmia and torch need a Tor proxy, so every start
+# logged "can't register engine (loading engine failed)" for both. Measured.
+use_default_settings:
+  engines:
+    remove:
+      - ahmia
+      - torch
+
+general:
+  instance_name: "pi-pcloud"
+  # /stats and /metrics, per engine and per response time. Nothing consumes them
+  # here - Beszel and Uptime Kuma watch the container - and they are the only
+  # thing SearXNG keeps a per-query history for.
+  enable_metrics: false
+
+server:
+  # No bind_address and no port here on purpose. SearXNG's own values are read
+  # by searx.webapp.run() alone - the Flask development server, which this image
+  # never starts. What listens is granian, and it takes its socket from
+  # GRANIAN_HOST=:: / GRANIAN_PORT=8080 baked into the image, so a bind_address
+  # in this file would read as load-bearing and change nothing.
+  #
+  # Already the upstream default; spelled out because it is the one decision
+  # docs/AI.md points back at. The limiter is the only thing in SearXNG that
+  # would need Valkey, and it exists to stop a *public* instance being scraped.
+  # Everything here is behind lan@docker, so all it could rate-limit is Open
+  # WebUI's own searches.
+  #
+  # Leaving it off costs one WARNING line per start ("missing config file:
+  # /etc/searxng/limiter.toml") - webapp.py loads that config unconditionally,
+  # whatever this says. Shipping an inert limiter.toml purely to silence it
+  # would be configuration for a feature deliberately turned off.
+  limiter: false
+  # Image thumbnails are fetched by SearXNG and re-served from here, so the
+  # image hosts see the Pi rather than each browser. That is most of the point
+  # of self-hosting the search; the cost is only paid on the Images tab.
+  image_proxy: true
+
+search:
+  # json is what Open WebUI's search client asks for. Without it SearXNG answers
+  # 403 with an HTML error page and web search in the chat silently returns
+  # nothing - measured. html alone is the upstream default.
+  formats:
+    - html
+    - json
+  # Already the upstream default, pinned because Homepage's `suggestionUrl`
+  # calls /autocompleter and an upstream change to "" would empty it silently.
+  autocomplete: "duckduckgo"
+
+# No `ui.default_locale` and no `search.default_lang`: left empty, SearXNG takes
+# the interface language from the browser's Accept-Language and sends no
+# language filter upstream, which is what a household with mixed browsers wants.
+# Pinning either to DEFAULT_LANGUAGE would need a BCP-47 -> SearXNG locale map
+# that this file has no way to validate.

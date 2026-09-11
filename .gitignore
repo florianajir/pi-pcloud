@@ -22,6 +22,7 @@
 /config/n8n/n8n.env
 /config/backrest/backrest.env
 /config/agentgateway/agentgateway.env
+/config/searxng/searxng.env
 /config/gluetun/openvpn.ovpn
 /config/homepage/secrets/*
 !/config/homepage/secrets/.gitkeep

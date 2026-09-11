@@ -116,6 +116,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Shelfmark | ✓ | — | ✓ | LAN-only + OIDC only; password login disabled (`DISABLE_LOCAL_AUTH`), so requests and download history stay per-user |
 | Audiobookshelf | ✓ | — | ✓ | LAN-only + OIDC only; local login disabled once the bootstrap holds an API key, so the shared `PASSWORD` is not a second way into everyone's listening history. No forward-auth: the mobile apps can't pass an interactive portal, and they have their own OIDC redirect URI |
 | FreshRSS | ✓ | — | ✓ | LAN-only + OIDC. Apache's `mod_auth_openidc` guards `/i/` (the whole web UI) and maps `preferred_username` onto a per-user FreshRSS account, auto-created on first sign-in — so Authelia's `one_factor` policy is what decides who has a reading list at all. `/api/greader.php` is deliberately outside that: feed-reader apps can't pass an interactive portal, and it checks the account's own API password. No forward-auth for the same reason (as with Kavita's OPDS clients) |
+| SearXNG | ✓ | — | — | LAN-only and nothing else, as with Stremio, but for a different reason: SearXNG has no accounts to authenticate against and nothing per-user to protect — no query history (`enable_metrics: false`) and no stored credential. `authelia@docker` is deliberately absent: forward-auth would also cover `/search`, which Open WebUI calls over the internal `ai` network with no session to present, and a second router cannot split the two — the browser and the JSON API are the same path |
 | Trilium | ✓ | — | ✓ | LAN-only + its own account / OIDC. No forward-auth: `/etapi` (scripting) and `/api/clipper` (the Web Clipper extension) can't pass an interactive portal, as with Kavita's OPDS clients. SSO is **not** live until the owner enrolls it — see below |
 | n8n | ✓ | — | — | LAN-only + its own auth |
 | ntfy | ✓ | — | — | LAN-only + its own accounts and ACLs (`deny-all` default) |
@@ -296,6 +297,15 @@ Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/se
 | `vaultwarden_admin_token_hash` | Argon2id digest of the above, the only form Vaultwarden receives |
 | `freshrss_oidc_crypto_key` | `OIDCCryptoPassphrase` for FreshRSS's `mod_auth_openidc` — it encrypts that module's session cookie and cache, so it is independent of `PASSWORD` and regenerating it only signs everyone out. Written by `scripts/freshrss-pre-start.sh` |
 | `homepage_auth_secret` | `HOMEPAGE_AUTH_SECRET` — the key NextAuth signs and encrypts Homepage's session cookie with. Independent of `PASSWORD`; regenerating it only signs everyone out. Written by `scripts/homepage-pre-start.sh` |
+
+SearXNG keeps its own the way the other per-service env files do: `SEARXNG_SECRET` in
+`config/searxng/searxng.env` (mode `600`, gitignored), written by `scripts/searxng-pre-start.sh`.
+It is an environment override rather than a line in the mounted `settings.yml`, and that split is
+the point: an `env_file` is read by the Docker daemon, so `600` is fine, while `settings.yml` is
+read by the container process as uid 977 — a `600` secret in there would be one SearXNG could not
+open, and a readable one would be a secret at `644`. SearXNG signs its `/preferences` cookie and
+its image-proxy links with it, so regenerating it invalidates saved preferences and nothing else;
+`rotate-password.sh` leaves it alone.
 
 The gateway keeps its own under `${DATA_LOCATION}/agentgateway/secrets/`, mode `600`, for the same
 reason as the Vaultwarden token — `llm.<HOST_NAME>` carries no forward-auth, so a `PASSWORD` leak must

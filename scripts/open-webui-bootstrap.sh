@@ -80,6 +80,10 @@ STT_BASE_URL="http://parakeet:8000/v1"
 # Sent as the `model` field and otherwise ignored - the container serves the one
 # model it was built with - so the admin page names something recognisable.
 STT_MODEL="parakeet-tdt-0.6b-v3"
+WEB_SEARCH_MARKER="pi-pcloud.web_search"
+WEB_SEARCH_VERSION='"1"'
+# Must match SEARXNG_QUERY_URL on the open-webui service in compose.yaml.
+WEB_SEARCH_URL="http://searxng:8080/search"
 LOCALE_MARKER="pi-pcloud.default_locale"
 LOCALE_VERSION="\"1-$DEFAULT_LANGUAGE\""
 # Open access to anyone Authelia lets in, rather than Open WebUI's approval queue.
@@ -504,6 +508,29 @@ ON CONFLICT (key) DO UPDATE
 SQL
 }
 
+# Mirrors the ENABLE_WEB_SEARCH / WEB_SEARCH_* / SEARXNG_* variables on the
+# open-webui service, which are PersistentConfig and so only reach an install
+# that has never started. Seeded, not enforced, like the audio blocks above: the
+# toggle stays a per-chat choice and Admin Settings > Web Search stays editable.
+#
+# No web.loader.engine: the built-in safe_web loader (requests + BeautifulSoup)
+# is what fetches each result, and naming an engine here would only pick one
+# this stack does not run.
+apply_web_search_defaults() {
+    psql_owui -q <<SQL
+INSERT INTO config (key, value, updated_at) VALUES
+    ('web.search.enable',              'true'::json,                  extract(epoch from now())::bigint),
+    ('web.search.engine',              '"searxng"'::json,             extract(epoch from now())::bigint),
+    ('web.search.searxng_query_url',   '"$WEB_SEARCH_URL"'::json,     extract(epoch from now())::bigint),
+    ('web.search.searxng_language',    '"all"'::json,                 extract(epoch from now())::bigint),
+    ('web.search.result_count',        '5'::json,                     extract(epoch from now())::bigint),
+    ('web.search.concurrent_requests', '2'::json,                     extract(epoch from now())::bigint),
+    ('$WEB_SEARCH_MARKER',             '$WEB_SEARCH_VERSION'::json,   extract(epoch from now())::bigint)
+ON CONFLICT (key) DO UPDATE
+    SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at;
+SQL
+}
+
 # base_model_id IS NULL restricts this to a base-model override, the shape the
 # Ollama-era row has, so a model someone built on top of a base is left alone
 # even if the id ever collided. Chats keep their own copy of the model id and
@@ -721,6 +748,15 @@ main() {
             changed=1
         else
             log "WARNING: failed to seed Open WebUI speech-to-text settings"
+        fi
+    fi
+
+    if [ "$(marker_present "$WEB_SEARCH_MARKER" "$WEB_SEARCH_VERSION")" = "f" ]; then
+        log "Pointing web search at SearXNG ($WEB_SEARCH_URL)"
+        if apply_web_search_defaults; then
+            changed=1
+        else
+            log "WARNING: failed to seed Open WebUI web search settings"
         fi
     fi
 

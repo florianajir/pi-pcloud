@@ -70,6 +70,7 @@ backrest-pre-start.sh
 ntfy-pre-start.sh
 vaultwarden:vaultwarden-pre-start.sh
 freshrss:freshrss-pre-start.sh
+searxng,open-webui:searxng-pre-start.sh
 trilium:trilium-pre-start.sh
 qbittorrent:qbittorrent-pre-start.sh
 prowlarr:prowlarr-pre-start.sh
