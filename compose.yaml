@@ -1289,6 +1289,12 @@ services:
       # /auth/signin?autologin=0 still reaches it if the redirect ever loops.
       - HOMEPAGE_OIDC_AUTO_LOGIN=true
       # Read by widget labels as {{HOMEPAGE_VAR_x}}.
+      # HOST_NAME is also read from widgets.yaml and settings.yaml, which is the
+      # only reason it is passed at all: those two files are substituted the same
+      # way labels are (widgetsFromConfig and getSettings both call
+      # substituteEnvironmentVars), and the SearXNG search URL in them has to
+      # name the real domain because the browser is what opens it.
+      - HOMEPAGE_VAR_HOST_NAME=${HOST_NAME:-pi.lan}
       - HOMEPAGE_VAR_ADMIN_USER=${ADMIN_USER:-admin}
       - HOMEPAGE_VAR_ADMIN_PASSWORD=${PASSWORD}
       # NEXTCLOUD_ADMIN_USER only applies at first install, where it resolved to
@@ -2211,6 +2217,94 @@ services:
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
 
+  # A metasearch engine: it keeps no index and has no accounts, it forwards a
+  # query to ~270 upstream engines and merges what comes back. Three consumers
+  # here - Open WebUI's web search, and Homepage's search box and quick-launch -
+  # and every one of them would otherwise hand the household's queries to a
+  # hosted engine.
+  searxng:
+    <<: *service-defaults
+    # Upstream tags a build per day as <date>-<sha>; there is no semver release
+    # and no floating tag worth pinning to. Newest at the time of writing.
+    image: searxng/searxng:2026.9.11-ffe96f8a6
+    container_name: pi-searxng
+    # open-webui, because that chat's web search has nothing to call without
+    # this. Same shape as agentgateway under open-webui, or flaresolverr under
+    # prowlarr.
+    profiles: ["searxng", "open-webui", "all"]
+    networks:
+      # frontend for Traefik, and for the searches themselves: this container's
+      # whole job is outbound HTTP to arbitrary engines, so an internal-only
+      # segment would break it. Same reasoning as freshrss.
+      - frontend
+      # `ai` is internal and is how open-webui reaches everything that is not
+      # the gateway.
+      - ai
+    expose:
+      - 8080
+    environment:
+      - SEARXNG_BASE_URL=https://search.${HOST_NAME:-pi.lan}/
+    env_file:
+      # SEARXNG_SECRET, written by scripts/searxng-pre-start.sh. Frozen at
+      # container creation, so a regenerated secret needs `up -d`, not
+      # `restart`.
+      - path: ./config/searxng/searxng.env
+        required: false
+    volumes:
+      # A named volume over /etc/searxng, with the config bind-mounted read-only
+      # *inside* it, rather than binding the directory itself. The entrypoint
+      # chowns that directory to searxng:searxng (uid 977) unless it already
+      # owns it, and a host directory owned by 977 is one the next non-root
+      # `make update` cannot write. FORCE_OWNERSHIP=false avoids the chown but
+      # then prints an eight-line "not owned by searxng:searxng" warning on
+      # every start. A named volume is created from the image directory, so it
+      # arrives already owned by 977 and neither happens - measured all three
+      # ways. Nothing but the entrypoint's own unused fallback settings.yml ever
+      # lands in it.
+      - searxng_config:/etc/searxng
+      - ./config/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      # Favicon and engine-description caches. Also created from the image, so
+      # it too arrives owned by 977.
+      - searxng_cache:/var/cache/searxng
+    healthcheck:
+      <<: *healthcheck-default
+      # The image ships no HEALTHCHECK and carries no curl; wget and python3 are
+      # what it does have. /healthz is SearXNG's own liveness route.
+      #
+      # The header keeps the probe out of searx.botdetection's complaint about a
+      # request carrying neither X-Forwarded-For nor X-Real-IP. It is not worth
+      # more than that: the complaint goes through log_error_only_once(), so it
+      # is one ERROR line per container start rather than one per probe, and
+      # Open WebUI's internal /search calls carry no header either - so the line
+      # still appears the first time the chat searches. Browser traffic arrives
+      # through Traefik and always has it.
+      test: ["CMD", "wget", "--header=X-Forwarded-For: 127.0.0.1", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
+    labels:
+      # Beside FreshRSS: both are ways into the open web rather than into
+      # something this stack stores.
+      - "homepage.group=News"
+      - "homepage.name=SearXNG"
+      - "homepage.icon=searxng.png"
+      - "homepage.href=https://search.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Private metasearch engine"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.searxng.rule=Host(`search.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.searxng.entrypoints=websecure"
+      # No authelia@docker, and this is the one place in the stack where that is
+      # not because the service has its own accounts - it has none. A forward-
+      # auth here would also cover /search, and Open WebUI calls that endpoint
+      # from inside the stack with no session to present. lan@docker is the gate;
+      # SearXNG stores nothing per user, so there is nothing behind it to take.
+      - "traefik.http.routers.searxng.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.searxng.tls=true"
+      - "traefik.http.services.searxng.loadbalancer.server.port=8080"
+    cpu_shares: *cpu-prio-batch
+    # 92 MiB idle, 135 MiB after a query on this host. The headroom is for
+    # granian's four blocking threads each holding an engine's response.
+    mem_limit: 384m
+    oom_score_adj: *oom-score-deprioritize
+
   trilium:
     <<: *service-defaults
     # ghcr, not docker.io/triliumnext/notes: that repository stopped at v0.95.0
@@ -2889,6 +2983,28 @@ services:
       # image edit, STT) inherit the base URL with it, so they stay pointed at
       # agentgateway; TTS is the one that does not.
       - AUDIO_TTS_OPENAI_API_KEY=piper
+      # Web search against the stack's own SearXNG, which the open-webui profile
+      # starts alongside this. PersistentConfig again, so these only take on an
+      # instance that has never started; scripts/open-webui-bootstrap.sh carries
+      # the same values to one whose database already exists.
+      - ENABLE_WEB_SEARCH=true
+      - WEB_SEARCH_ENGINE=searxng
+      # No `?q=<query>`: the client strips a query string off this URL before
+      # building its own parameters, so the documented placeholder form is only
+      # tolerated, not used. It sends format=json itself, which is why
+      # config/searxng/settings.yml has to list that format.
+      - SEARXNG_QUERY_URL=http://searxng:8080/search
+      # `all` sends no language filter, letting each engine localise on the
+      # Pi's address. DEFAULT_LANGUAGE is a BCP-47 tag and SearXNG wants its own
+      # locale names, so mapping one to the other would be a table to maintain
+      # for no gain here.
+      - SEARXNG_LANGUAGE=all
+      # 3 upstream, and each result is a page this Pi then fetches and embeds.
+      # Five is the most that still returns inside a chat's patience here.
+      - WEB_SEARCH_RESULT_COUNT=5
+      # 0 means unlimited, which fetches all five pages at once on four cores
+      # that are also running the model.
+      - WEB_SEARCH_CONCURRENT_REQUESTS=2
     volumes:
       - open_webui_data:/app/backend/data
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_open-webui_secret.txt:/run/secrets/oidc_open-webui_secret:ro
@@ -3150,6 +3266,10 @@ volumes:
   headplane_data:
   tailscale_state:
   redis_data:
+  # Both exist only so the directories arrive owned by uid 977 - see the
+  # searxng service. searxng_config holds nothing this repo reads.
+  searxng_config:
+  searxng_cache:
 
 networks:
   dns_internal:

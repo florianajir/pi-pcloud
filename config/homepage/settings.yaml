@@ -21,7 +21,10 @@ description: Personal self-hosted services dashboard
 # Opens by just typing on the dashboard (when the search widget is not focused).
 # provider/target mirror the search widget in widgets.yaml so both behave alike.
 quicklaunch:
-  provider: duckduckgo
+  provider: custom
+  url: https://search.{{HOMEPAGE_VAR_HOST_NAME}}/search?q=
+  # Fetched by homepage's own server, not the browser - see widgets.yaml.
+  suggestionUrl: http://searxng:8080/autocompleter?q=
   target: _blank
   searchDescriptions: true
   showSearchSuggestions: true

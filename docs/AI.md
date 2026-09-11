@@ -17,6 +17,7 @@ claim it.
 | `piper` | Text-to-speech | `ai` |
 | `parakeet` | Speech-to-text | `ai` |
 | `system-tools` | OpenAPI tool server answering questions about the host | `ai`, `frontend` |
+| `searxng` | Metasearch engine behind the chat's web search | `ai`, `frontend` |
 
 Everything without `frontend` sits on the internal `ai` network with no route to the internet.
 
@@ -297,7 +298,7 @@ discover them.
 
 It appends `http://agentgateway:4000/v1` to the stored connection list when missing, with the gateway's API key, leaves any other connection you configured in the UI alone, and restarts open-webui only when it changed something.
 
-The two path routes are separate connections, because they are separate base URLs — which is also why nothing on them shows up under `/v1`. The hook adds them the same way, with a `prefix_id` so the picker says which provider a model came from — and with the gateway key rather than `AGENT_API_KEY`, since Open WebUI runs inside the stack and both routes accept either. Storing the external-client key here would make revoking it 401 the chat as well. **No `model_ids` filter**, deliberately: naming models there would be the hardcoded list these routes exist to avoid, so Groq's catalogue arrives whole, transcription and speech models included. Filter in **Admin Settings → Connections**; the hook leaves what is set there alone. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
+The two path routes are separate connections, because they are separate base URLs — which is also why nothing on them shows up under `/v1`. The hook adds them the same way, with a `prefix_id` so the picker says which provider a model came from — and with the gateway key rather than `AGENT_API_KEY`, since Open WebUI runs inside the stack and both routes accept either. Storing the external-client key here would make revoking it 401 the chat as well. **No `model_ids` filter**, deliberately: naming models there would be the hardcoded list these routes exist to avoid, so Groq's catalogue arrives whole, transcription and speech models included. Filter in **Admin Settings → Connections**; the hook leaves what is set there alone. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`), the web search settings (marker `pi-pcloud.web_search`, see below) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
 
 Everything that writes the model's *workspace row* — attaching the tool server, seeding the suggestions — needs an admin account to own that row, and there is none until the first SSO login. Those steps are therefore skipped, unmarked, on a fresh install, and applied by the next run of the hook. The settings that live in the `config` table alone (connections, low-latency defaults, audio, the global model metadata) apply from the first boot. Run it by hand after the first login, or after a database restore:
 
@@ -315,6 +316,43 @@ That alone is not enough, because two separate things default to admin-only:
 - A tool server whose `config` carries no `access_grants` is private to admins (`has_connection_access`), so a normal user clicking a suggestion would get an invented answer with no tool call.
 
 Both are granted wildcard public read — `('user', '*', 'read')`, the shape the code itself documents as public — by the same marker. They stay visible and revocable in **Admin Settings** and **Workspace → Models**; narrowing either one by hand is never undone. Admin rights still have to be granted deliberately.
+
+## Web search (SearXNG)
+
+The **Web Search** toggle in the chat composer queries `searxng`, the stack's own metasearch
+engine, rather than a hosted API. Nothing about a query leaves the house except the query
+itself, and it leaves from the Pi rather than from the browser. There is no API key to hold
+and nothing to rotate.
+
+`searxng` is not an AI service and is also the Homepage search box — see
+[Architecture](ARCHITECTURE.md) — but it ships in the `open-webui` profile as well, because
+turning the toggle on with nothing behind it is a silent empty result set.
+
+Two settings on the SearXNG side are load-bearing, both in `config/searxng/settings.yml`:
+
+- `search.formats` must list `json`. Open WebUI's client sends `format=json`, and a SearXNG
+  that was not told to serve it answers **403 with an HTML error page** — which surfaces in
+  the chat as a search that returned nothing, with no error anywhere.
+- `server.limiter` stays `false`. It is bot protection for a public instance; here the only
+  caller it could ever throttle is Open WebUI itself.
+
+The Open WebUI side is `ENABLE_WEB_SEARCH`, `WEB_SEARCH_ENGINE`, `SEARXNG_QUERY_URL`,
+`SEARXNG_LANGUAGE`, `WEB_SEARCH_RESULT_COUNT` and `WEB_SEARCH_CONCURRENT_REQUESTS` on the
+`open-webui` service. All six are *PersistentConfig*, so as with the audio settings they only
+reach an install that has never started; `scripts/open-webui-bootstrap.sh` carries the same
+values into an existing database once, behind the `pi-pcloud.web_search` marker. Change any of
+them in **Admin Settings → Web Search** afterwards and the change sticks.
+
+`SEARXNG_QUERY_URL` is `http://searxng:8080/search` with no `?q=<query>`: the client strips a
+query string off that URL and builds its own parameters, so the placeholder form seen in most
+guides is tolerated rather than used.
+
+The counts are sized for this Pi, not for a workstation. Each of the five results is a page
+Open WebUI then fetches and embeds locally, on the same four cores running the model, so
+`WEB_SEARCH_CONCURRENT_REQUESTS=2` is a deliberate throttle — the upstream default of `0`
+means unlimited. The page fetcher is Open WebUI's built-in `safe_web` loader (requests +
+BeautifulSoup); no headless browser is involved, so a result that only renders in JavaScript
+contributes little.
 
 ## Asking the assistant about the server
 
