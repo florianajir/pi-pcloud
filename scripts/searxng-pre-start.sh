@@ -29,15 +29,18 @@ main() {
 
     # Docker materialises a missing bind-mount source as a directory, and a
     # directory has a non-zero size - so the -s test below would pass and
-    # compose would fail to load the env_file forever. Same removal
-    # homepage-pre-start.sh does for its own mount.
-    if [ -d "$SEARXNG_ENV_FILE" ]; then
-        log "WARNING: $SEARXNG_ENV_FILE is a directory (Docker bind-mount artifact). Removing..."
-        rm -rf "$SEARXNG_ENV_FILE"
-    fi
+    # compose would fail to load the env_file forever.
+    ensure_config_target_is_file "$SEARXNG_ENV_FILE" \
+        || die "$SEARXNG_ENV_FILE is a directory and could not be restored to a file path"
 
     if [ -s "$SEARXNG_ENV_FILE" ]; then
         log "SearXNG secret already present"
+        # Unconditional, not only on the branch that writes: the unit runs this
+        # as root, so a file generated on a boot where the project directory was
+        # still root-owned stays root:root 0600 and a non-root `docker compose
+        # up` cannot read the env_file (`required: false` covers a missing one,
+        # not an unreadable one). freshrss-pre-start.sh does the same.
+        fix_ownership "$SEARXNG_ENV_FILE"
         return 0
     fi
 
@@ -50,10 +53,7 @@ main() {
         | write_secret_file "$SEARXNG_ENV_FILE" \
         || die "Failed to write $SEARXNG_ENV_FILE"
     safe_chmod 600 "$SEARXNG_ENV_FILE"
-    # The systemd unit runs this as root; without this the file lands root:root
-    # 0600, and then a non-root `docker compose up` cannot read the env_file
-    # (`required: false` covers a missing one, not an unreadable one).
-    # tests/stack-up-test.sh enforces this pairing.
+    # tests/stack-up-test.sh enforces this pairing with safe_chmod above.
     fix_ownership "$SEARXNG_ENV_FILE"
 
     log "Generated the SearXNG secret"

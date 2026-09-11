@@ -328,13 +328,15 @@ and nothing to rotate.
 [Architecture](ARCHITECTURE.md) — but it ships in the `open-webui` profile as well, because
 turning the toggle on with nothing behind it is a silent empty result set.
 
-Two settings on the SearXNG side are load-bearing, both in `config/searxng/settings.yml`:
+One setting on the SearXNG side is load-bearing, in `config/searxng/settings.yml`:
+`search.formats` must list `json`. Open WebUI's client sends `format=json`, and a SearXNG
+that was not told to serve it answers **403 with an HTML error page** — which surfaces in
+the chat as a search that returned nothing, with no error anywhere. (`html` alone is the
+upstream default.)
 
-- `search.formats` must list `json`. Open WebUI's client sends `format=json`, and a SearXNG
-  that was not told to serve it answers **403 with an HTML error page** — which surfaces in
-  the chat as a search that returned nothing, with no error anywhere.
-- `server.limiter` stays `false`. It is bot protection for a public instance; here the only
-  caller it could ever throttle is Open WebUI itself.
+`server.limiter` stays `false` there too, but that is already SearXNG's own default, spelled
+out rather than changed: the limiter is bot protection for a public instance, and here the
+only caller it could ever throttle is Open WebUI itself.
 
 The Open WebUI side is `ENABLE_WEB_SEARCH`, `WEB_SEARCH_ENGINE`, `SEARXNG_QUERY_URL`,
 `SEARXNG_LANGUAGE`, `WEB_SEARCH_RESULT_COUNT` and `WEB_SEARCH_CONCURRENT_REQUESTS` on the

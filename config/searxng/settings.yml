@@ -19,10 +19,6 @@ use_default_settings:
 
 general:
   instance_name: "pi-pcloud"
-  # The stock value links searxng.org's contact page, which is not this
-  # instance's operator. false removes the link rather than pointing it at a
-  # household address.
-  contact_url: false
   # /stats and /metrics, per engine and per response time. Nothing consumes them
   # here - Beszel and Uptime Kuma watch the container - and they are the only
   # thing SearXNG keeps a per-query history for.
@@ -35,16 +31,17 @@ server:
   # GRANIAN_HOST=:: / GRANIAN_PORT=8080 baked into the image, so a bind_address
   # in this file would read as load-bearing and change nothing.
   #
-  # The limiter is the only thing in SearXNG that would need Valkey, and it
-  # exists to stop a *public* instance being scraped. Everything here is behind
-  # lan@docker, so all it could rate-limit is Open WebUI's own searches.
+  # Already the upstream default; spelled out because it is the one decision
+  # docs/AI.md points back at. The limiter is the only thing in SearXNG that
+  # would need Valkey, and it exists to stop a *public* instance being scraped.
+  # Everything here is behind lan@docker, so all it could rate-limit is Open
+  # WebUI's own searches.
   #
   # Leaving it off costs one WARNING line per start ("missing config file:
   # /etc/searxng/limiter.toml") - webapp.py loads that config unconditionally,
   # whatever this says. Shipping an inert limiter.toml purely to silence it
   # would be configuration for a feature deliberately turned off.
   limiter: false
-  public_instance: false
   # Image thumbnails are fetched by SearXNG and re-served from here, so the
   # image hosts see the Pi rather than each browser. That is most of the point
   # of self-hosting the search; the cost is only paid on the Images tab.
@@ -57,9 +54,9 @@ search:
   formats:
     - html
     - json
-  # Suggestions under the search box, and what Homepage's `suggestionUrl` calls.
+  # Already the upstream default, pinned because Homepage's `suggestionUrl`
+  # calls /autocompleter and an upstream change to "" would empty it silently.
   autocomplete: "duckduckgo"
-  safe_search: 0
 
 # No `ui.default_locale` and no `search.default_lang`: left empty, SearXNG takes
 # the interface language from the browser's Accept-Language and sends no

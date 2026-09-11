@@ -2243,6 +2243,7 @@ services:
     expose:
       - 8080
     environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
       - SEARXNG_BASE_URL=https://search.${HOST_NAME:-pi.lan}/
     env_file:
       # SEARXNG_SECRET, written by scripts/searxng-pre-start.sh. Frozen at
@@ -2251,20 +2252,22 @@ services:
       - path: ./config/searxng/searxng.env
         required: false
     volumes:
-      # A named volume over /etc/searxng, with the config bind-mounted read-only
-      # *inside* it, rather than binding the directory itself. The entrypoint
-      # chowns that directory to searxng:searxng (uid 977) unless it already
-      # owns it, and a host directory owned by 977 is one the next non-root
-      # `make update` cannot write. FORCE_OWNERSHIP=false avoids the chown but
-      # then prints an eight-line "not owned by searxng:searxng" warning on
-      # every start. A named volume is created from the image directory, so it
-      # arrives already owned by 977 and neither happens - measured all three
-      # ways. Nothing but the entrypoint's own unused fallback settings.yml ever
-      # lands in it.
+      # The image declares `VOLUME /etc/searxng`, so something is mounted there
+      # whatever this file says - leave it out and Docker creates a fresh
+      # *anonymous* volume on every recreate, measured, and this host already
+      # carries 26 dangling ones. Naming it is what keeps it off that pile and
+      # visible in `volumes:` below; nothing in the repo ever reads it.
       - searxng_config:/etc/searxng
+      # The config is bound as a *file* inside it, never as the directory. The
+      # image ships /etc/searxng owned by searxng:searxng (uid 977) and the
+      # named volume is seeded from it, so the entrypoint's ownership check
+      # passes untouched. Binding the host directory there instead would have it
+      # chowned to 977 - a directory the next non-root `make update` cannot
+      # write. FORCE_OWNERSHIP=false avoids that chown but prints an eight-line
+      # "not owned by searxng:searxng" block at every start. All three measured.
       - ./config/searxng/settings.yml:/etc/searxng/settings.yml:ro
-      # Favicon and engine-description caches. Also created from the image, so
-      # it too arrives owned by 977.
+      # Favicon and engine-description caches. Created from the image directory,
+      # so it arrives owned by 977 as well.
       - searxng_cache:/var/cache/searxng
     healthcheck:
       <<: *healthcheck-default
@@ -3266,8 +3269,8 @@ volumes:
   headplane_data:
   tailscale_state:
   redis_data:
-  # Both exist only so the directories arrive owned by uid 977 - see the
-  # searxng service. searxng_config holds nothing this repo reads.
+  # Both are the image's own `VOLUME` declarations, named rather than left
+  # anonymous so a recreate does not strand one - see the searxng service.
   searxng_config:
   searxng_cache:
 
