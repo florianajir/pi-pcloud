@@ -3032,7 +3032,9 @@ services:
     # image keeps PGDATA at /var/lib/postgresql/<major>/docker and refuses to
     # start with anything mounted at /var/lib/postgresql/data, so the mount is
     # the parent and the host path carries the major. That also leaves the
-    # Postgres 16 cluster at ${DATA_LOCATION}/postgres intact as the rollback —
+    # Postgres 16 cluster at <postgres root>/postgres intact as the rollback —
+    # the same root the line below resolves, so a cluster moved with
+    # POSTGRES_DATA_LOCATION has to take its predecessor with it —
     # which also needs `docker compose build backrest`, since its pinned
     # pgNN-client moved with this line and a newer client's dumps do not replay
     # into an older server (config/backrest/Dockerfile).

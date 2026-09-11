@@ -19,11 +19,15 @@ Between checking out the new compose file and finishing `make pg-upgrade`, the o
 From Postgres 18 the upstream image keeps `PGDATA` at `/var/lib/postgresql/<major>/docker` and **refuses to start** with anything mounted at `/var/lib/postgresql/data`. So the mount point became the parent directory and the host path carries the major:
 
 ```yaml
-# before                                             # after
-- ${POSTGRES_DATA_LOCATION}/postgres:/var/lib/postgresql/data - ${POSTGRES_DATA_LOCATION}/postgres18:/var/lib/postgresql
+# before
+- ${DATA_LOCATION:-./data}/postgres:/var/lib/postgresql/data
+# after
+- ${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres18:/var/lib/postgresql
 ```
 
-That is not just a compatibility detail — it is the rollback. The old cluster at `${POSTGRES_DATA_LOCATION}/postgres` is **never written to** by the upgrade, so reverting two lines in `compose.yaml` puts you back exactly where you started.
+`POSTGRES_DATA_LOCATION` is empty on a default install, so unless you have set it the paths below are the ones under `DATA_LOCATION` — that is what the `:-` fallback means, and it is written out in full everywhere a command here would otherwise expand an unset variable to nothing.
+
+That is not just a compatibility detail — it is the rollback. The old cluster at `${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres` is **never written to** by the upgrade, so reverting two lines in `compose.yaml` puts you back exactly where you started.
 
 ## Pre-flight
 
@@ -133,7 +137,12 @@ Only once all nine pass:
 ```sh
 # The old cluster is the rollback. Keep it until you are sure — it costs disk,
 # not correctness, and there is no way to regenerate it afterwards.
-sudo rm -rf ${POSTGRES_DATA_LOCATION}/postgres
+#
+# Neither variable is exported in your shell, so read them out of .env first:
+# pasted bare, ${POSTGRES_DATA_LOCATION} is empty on a default install and this
+# would expand to /postgres, delete nothing, and leave the real cluster behind.
+set -a; . ./.env; set +a
+sudo rm -rf "${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres"
 ```
 
 ## Rollback
@@ -167,9 +176,10 @@ make stop
 # 2. Copy, preserving numeric uids: PGDATA is 999:0 mode 0700 inside the
 #    container, and a uid that maps to a different name on the host (or no
 #    name at all) makes -a without --numeric-ids silently rewrite it.
+set -a; . ./.env; set +a   # DATA_LOCATION is in .env, not in your shell
 sudo mkdir -p /new/disk
 sudo rsync -aHAX --numeric-ids --info=progress2 \
-  ${DATA_LOCATION}/postgres18 /new/disk/
+  "${DATA_LOCATION:-./data}/postgres18" /new/disk/
 
 # 3. Point the stack at it, then start.
 #    POSTGRES_DATA_LOCATION is a *root*: the cluster lands in
@@ -177,10 +187,17 @@ sudo rsync -aHAX --numeric-ids --info=progress2 \
 $EDITOR .env                 # POSTGRES_DATA_LOCATION=/new/disk
 make start
 
-# 4. Prove the running server is reading the new path, not the old one.
-docker exec pi-postgres psql -U postgres -Atc 'SHOW data_directory;'
+# 4. Prove the running server is on the new disk. Only the mount can show
+#    that: `SHOW data_directory` is the path *inside* the container
+#    (/var/lib/postgresql/<major>/docker), which is identical either way.
 docker inspect pi-postgres --format \
   '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+
+# 5. And that the data came with it, rather than a fresh cluster having been
+#    initialised on an empty directory.
+docker exec pi-postgres psql -U postgres -Atc \
+  'SELECT datname, pg_size_pretty(pg_database_size(datname)) FROM pg_database
+    WHERE NOT datistemplate ORDER BY 1;'
 ```
 
 Then check the services, at minimum a login through Authelia (which proves

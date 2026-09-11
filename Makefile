@@ -237,6 +237,7 @@ uninstall:
 	@echo "⚠️  WARNING: This will remove ALL data including:"
 	@echo "   - Docker volumes (pi-hole, headscale, etc.)"
 	@echo "   - Bind-mount data dirs: ./data/nextcloud, ./data/postgres*, ./data/n8n, ./data/immich"
+	@echo "   - The Postgres cluster, wherever POSTGRES_DATA_LOCATION puts it"
 	@echo "   - Generated config: ./data/authelia-config/configuration.yml"
 	@echo "   - Generated config: ./config/headplane/config.yaml" 
 	@echo "   - Generated config: ./config/headscale/config.yaml"
@@ -260,6 +261,19 @@ uninstall:
 # every service fails to authenticate against roles still holding the old
 # PASSWORD. The glob also takes any leftover pg-major-upgrade.sh dump directory.
 	-$(SUDO) rm -rf ./data/nextcloud ./data/postgres* ./data/n8n ./data/immich ./data/lldap ./data/authelia-config
+# POSTGRES_DATA_LOCATION can put the cluster on another disk entirely, which the
+# ./data glob above would then miss - and a surviving PGDATA is exactly the
+# failure that comment describes. Resolved through lib.sh so this cannot drift
+# from what compose.yaml mounts; skipped, loudly, if it resolves to nothing or
+# to "/" rather than expanding into `rm -rf /postgres*`.
+	-@$(LIB_SH); \
+	command -v resolve_postgres_data_location_path >/dev/null 2>&1 \
+		|| { echo "  ⚠ scripts/lib.sh did not define resolve_postgres_data_location_path; remove the Postgres cluster by hand"; exit 0; }; \
+	pgroot="$$(resolve_postgres_data_location_path)"; \
+	case "$$pgroot" in \
+		"" | "/") echo "  ⚠ could not resolve the Postgres data root; remove the cluster by hand"; exit 0 ;; \
+		*) echo "  · Postgres cluster at $$pgroot"; $(SUDO) rm -rf "$$pgroot"/postgres* ;; \
+	esac
 	@echo "🧹 Removing generated config files..."
 	-rm -f ./config/headplane/config.yaml
 	-rm -f ./config/headscale/config.yaml

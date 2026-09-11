@@ -96,27 +96,36 @@ get_env_value_clean() {
 
 # --- Data location ---
 
+# Normalise one data root: strip trailing slashes, then make it absolute
+# against PROJECT_DIR the way Compose resolves a relative bind source.
+#
+# Every caller appends "/something", so a trailing slash here doubled it -
+# harmless to open(2), but it reaches anything printing or comparing these
+# paths. Guarded so a bare "/" does not become the empty string.
+absolute_data_root() {
+    local path="$1"
+
+    while :; do
+        case "$path" in
+            /) break ;;
+            */) path="${path%/}" ;;
+            *) break ;;
+        esac
+    done
+
+    case "$path" in
+        /*) printf '%s' "$path" ;;
+        *) printf '%s/%s' "$PROJECT_DIR" "$path" ;;
+    esac
+}
+
 resolve_data_location_path() {
     local data_location
 
     data_location="$(get_env_value DATA_LOCATION)"
     [ -n "$data_location" ] || data_location="./data"
 
-    # Every caller appends "/something", so a trailing slash here doubled it -
-    # harmless to open(2), but it reaches anything printing or comparing these
-    # paths. Guarded so a bare "/" does not become the empty string.
-    while :; do
-        case "$data_location" in
-            /) break ;;
-            */) data_location="${data_location%/}" ;;
-            *) break ;;
-        esac
-    done
-
-    case "$data_location" in
-        /*) printf '%s' "$data_location" ;;
-        *) printf '%s/%s' "$PROJECT_DIR" "$data_location" ;;
-    esac
+    absolute_data_root "$data_location"
 }
 
 # Root the shared Postgres cluster lives under, made absolute the same way.
@@ -130,18 +139,7 @@ resolve_postgres_data_location_path() {
     postgres_data_location="$(get_env_value POSTGRES_DATA_LOCATION)"
     [ -n "$postgres_data_location" ] || { resolve_data_location_path; return; }
 
-    while :; do
-        case "$postgres_data_location" in
-            /) break ;;
-            */) postgres_data_location="${postgres_data_location%/}" ;;
-            *) break ;;
-        esac
-    done
-
-    case "$postgres_data_location" in
-        /*) printf '%s' "$postgres_data_location" ;;
-        *) printf '%s/%s' "$PROJECT_DIR" "$postgres_data_location" ;;
-    esac
+    absolute_data_root "$postgres_data_location"
 }
 
 # --- Permissions ---

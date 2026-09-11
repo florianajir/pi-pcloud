@@ -113,8 +113,10 @@ PASSWORD="$(get_env_value PASSWORD)"
 
 # Space: the dumps are roughly the cluster size, and the new cluster another
 # copy. Those are two different filesystems as soon as POSTGRES_DATA_LOCATION
-# points off DATA_LOCATION, so each root is checked against what actually lands
-# on it - and only against 3x when they turn out to be the same one.
+# points off DATA_LOCATION, so only the same-filesystem case has to hold all 3x.
+# Split, each root still asks 2x for the one copy that lands on it: plain-SQL
+# dumps are not reliably smaller than the cluster (no indexes, but every value
+# is text), and the restored cluster is not reliably the size of the source.
 # df needs an existing path, and PG_DATA_ROOT may not have been created yet.
 existing_ancestor() {
     local dir="$1"
