@@ -4,13 +4,10 @@
 # over the raw text, comments included - so a reference written in a comment as
 # an example is looked up like any other and fails the start.
 config:
-  # Adds a `user` label carrying the apiKey metadata below (open-webui, trilium,
-  # agent) to every gen_ai_* series on the stats listener, and to the HTTP ones
-  # beside them - so token use and latency are attributable per caller instead of
-  # being one undifferentiated total. The right-hand side is CEL over the same
-  # `apiKey` object the default coalesce(apiKey.group, ...) already reads;
-  # UserMetadata is flattened into it, which is why `apiKey.user` resolves.
-  # Bounded cardinality: one value per key in the policies below.
+  # Puts a `user` label carrying the apiKey metadata below on every gen_ai_*
+  # series, so token use and latency are attributable per caller. CEL over the
+  # same `apiKey` object the default coalesce(apiKey.group, ...) reads, with
+  # UserMetadata flattened into it. One label value per key, so bounded.
   metrics:
     fields:
       add:
