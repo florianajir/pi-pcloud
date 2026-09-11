@@ -196,15 +196,16 @@ One dashboard, four rows, sized to a single screen:
 |-----|--------|-------|
 | **LLM gateway** | spend over the range, tokens/s by model and caller, TTFT p95, request duration p95 | `agentgateway` |
 | **Traefik** | requests/s by router, 4xx and 5xx as a *share* of traffic, router latency p95 | `traefik` |
-| **Authentication** | Authelia attempts succeeded vs failed, regulation bans over the range | `authelia` |
+| **Authentication** | Authelia attempts succeeded vs failed, attempts refused while banned over the range | `authelia` |
 | **Services** | n8n executions, Immich job queues in flight, Headscale nodes, ntfy messages published | `n8n`, `immich-microservices`, `headscale`, `ntfy` |
 
 `llama-cpp` is scraped but has no panel: the agentgateway row already measures the same requests one layer up, with a `user` label the inference server cannot know. Its own series (`llamacpp:requests_processing`, `llamacpp:kv_cache_usage_ratio`, `llamacpp:predicted_tokens_seconds`) are there in Explore when a slow generation needs attributing to the engine rather than to the gateway.
 
-Two panels are worth knowing the shape of before you read them wrong:
+Three things are worth knowing the shape of before you read a panel wrong:
 
 - **The Immich queue panel matches on `__name__`.** Immich puts the queue name in the metric *name*, not in a label (`immich.queues.<queue>.active`), so there is no `queue` label to group by until `label_replace` invents one. That is upstream's shape, not a workaround for ours.
-- **Authelia panels count per graph interval, not per second.** On a household stack these are a handful of events a day, and `rate()` would round them to a flat zero.
+- **The counting panels count per graph interval, not per second.** On a household stack Authelia logins, n8n executions and ntfy publications are a handful of events a day, and `rate()` would round them to a flat zero. Those three panels therefore carry a 5-minute **minimum interval**, and it is load-bearing rather than cosmetic: without it Grafana derives `$__interval` from the panel width, floored at the datasource's 30 s `timeInterval`, and `increase()` over a 30 s window that holds a single 30 s-apart sample returns *nothing at all* — a wide panel on a wide screen renders "No data" while the counter is moving.
+- **The ban panel counts refused attempts, not bans.** `authelia_authn{banned="true"}` is incremented once per attempt *made while banned*, so one ban a client keeps hammering shows as a large number. Read it as pressure, not as a count of bans.
 
 ### What is scraped, and why nothing needed an exporter
 

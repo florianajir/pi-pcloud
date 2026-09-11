@@ -1,9 +1,9 @@
 {
   "uid": "pi-pcloud-overview",
   "title": "pi-pcloud",
-  "description": "The whole stack in four rows. Provisioned from config/grafana/dashboards/pi-pcloud.json; edits made in the browser are discarded on the next Grafana restart.",
+  "description": "The whole stack in four rows. Provisioned from config/grafana/dashboards/pi-pcloud.json with allowUiUpdates: false, so a browser edit can be tried but never saved — Grafana refuses it outright. Change the file.",
   "tags": ["pi-pcloud"],
-  "editable": false,
+  "editable": true,
   "schemaVersion": 41,
   "version": 1,
   "refresh": "1m",
@@ -324,6 +324,7 @@
       "id": 301,
       "title": "Authelia authentication attempts",
       "description": "Counts per graph interval rather than a per-second rate: on a household stack these are a handful of events a day, and a rate would round them to a flat zero. Individual failures are already pushed to the ntfy `security` topic by scripts/authelia-ntfy-watch.sh; this is the shape over time that a push cannot show.",
+      "interval": "5m",
       "gridPos": { "h": 7, "w": 16, "x": 0, "y": 17 },
       "datasource": { "type": "prometheus", "uid": "pi-prometheus" },
       "fieldConfig": {
@@ -374,8 +375,8 @@
     {
       "type": "stat",
       "id": 302,
-      "title": "Regulation bans, selected range",
-      "description": "Attempts refused because Authelia had already banned the account or the source address — regulation.modes is ['user','ip'], so either can be the cause. Any non-zero value here has a matching push on the ntfy `security` topic.",
+      "title": "Attempts refused while banned, selected range",
+      "description": "Attempts refused because Authelia had already banned the account or the source address — regulation.modes is ['user','ip'], so either can be the cause. It counts refused *attempts*, not bans: one ban that a client keeps retrying against adds one here per retry, so read it as pressure rather than as a number of bans. Any non-zero value here has a matching push on the ntfy `security` topic.",
       "gridPos": { "h": 7, "w": 8, "x": 16, "y": 17 },
       "datasource": { "type": "prometheus", "uid": "pi-prometheus" },
       "fieldConfig": {
@@ -426,6 +427,7 @@
       "id": 401,
       "title": "n8n workflow executions",
       "description": "Per graph interval. Workflow and node identity are deliberately absent: N8N_METRICS_INCLUDE_* are all left off, because /metrics is served on n8n's routed port and workflow names would then be readable by anything past the lan allowlist.",
+      "interval": "5m",
       "gridPos": { "h": 7, "w": 6, "x": 0, "y": 25 },
       "datasource": { "type": "prometheus", "uid": "pi-prometheus" },
       "fieldConfig": {
@@ -531,6 +533,7 @@
       "id": 404,
       "title": "ntfy messages published",
       "description": "Per graph interval, across all topics — ntfy counts publications without a topic label. Every alert in the stack lands here, so a flat line while something is visibly broken means the delivery channel itself is the fault.",
+      "interval": "5m",
       "gridPos": { "h": 7, "w": 6, "x": 18, "y": 25 },
       "datasource": { "type": "prometheus", "uid": "pi-prometheus" },
       "fieldConfig": {

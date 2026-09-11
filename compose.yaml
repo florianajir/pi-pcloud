@@ -694,6 +694,12 @@ services:
       - GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES=false
       - GF_NEWS_NEWS_FEED_ENABLED=false
       - GF_USERS_ALLOW_SIGN_UP=false
+      # Grafana defaults this to false whatever root_url says, so without it the
+      # session and OAuth-state cookies ship with no `Secure` attribute: a
+      # mistyped http:// link to grafana.$HOST_NAME sends the session in clear
+      # text and Traefik's 301 only fires after the browser has already put it
+      # on the wire. Verified on 13.2.1.
+      - GF_SECURITY_COOKIE_SECURE=true
       # Both off, and the second is the one that matters: Grafana's API accepts
       # HTTP basic auth from the built-in admin *regardless* of the login form,
       # so disabling the form alone would leave admin/admin usable by anything

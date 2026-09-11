@@ -98,7 +98,7 @@ layout:
       columns: 1
     Monitoring:
       style: row
-      columns: 3
+      columns: 5
       icon: mdi-monitor-dashboard
     Network:
       style: row
