@@ -12,7 +12,8 @@
 #                  success (otherwise the two edits are printed for review)
 #   --keep-dumps   do not delete the dump directory afterwards
 #   --rehearse     dry-run against the live cluster: dump and restore for real
-#                  (into DATA_LOCATION, so point that at scratch space via a
+#                  (dumps into DATA_LOCATION and the scratch cluster into
+#                  POSTGRES_DATA_LOCATION, so point both at scratch space via a
 #                  scratch ENV_FILE), but stop NOTHING — no service, not
 #                  Postgres itself — and refuse --apply. The verification is
 #                  identical; only the outage is missing.
@@ -90,15 +91,19 @@ log "cluster is on Postgres $CURRENT_MAJOR, target is $TARGET_MAJOR"
 [ "$TARGET_MAJOR" -gt "$CURRENT_MAJOR" ] || die "refusing to move backwards ($CURRENT_MAJOR -> $TARGET_MAJOR)"
 
 DATA_LOCATION="$(resolve_data_location_path)"
+# Where the clusters themselves live, which is POSTGRES_DATA_LOCATION when set
+# and DATA_LOCATION otherwise. The dumps stay on DATA_LOCATION: they are
+# transient, roughly cluster-sized, and that root is the one sized for bulk.
+PG_DATA_ROOT="$(resolve_postgres_data_location_path)"
 # The pre-18 layout had no major in the path; from 18 it does. Naming the
 # wrong directory here would send a rollback at the next major (18 -> 19) to a
 # stale cluster, or to one that does not exist.
-if [ -d "$DATA_LOCATION/postgres$CURRENT_MAJOR" ]; then
-    OLD_DIR="$DATA_LOCATION/postgres$CURRENT_MAJOR"
+if [ -d "$PG_DATA_ROOT/postgres$CURRENT_MAJOR" ]; then
+    OLD_DIR="$PG_DATA_ROOT/postgres$CURRENT_MAJOR"
 else
-    OLD_DIR="$DATA_LOCATION/postgres"
+    OLD_DIR="$PG_DATA_ROOT/postgres"
 fi
-NEW_DIR="$DATA_LOCATION/postgres$TARGET_MAJOR"
+NEW_DIR="$PG_DATA_ROOT/postgres$TARGET_MAJOR"
 DUMP_DIR="$DATA_LOCATION/postgres-upgrade-$CURRENT_MAJOR-to-$TARGET_MAJOR"
 
 [ ! -d "$NEW_DIR" ] || die "$NEW_DIR already exists; move it aside or finish the previous attempt"
@@ -107,13 +112,45 @@ PASSWORD="$(get_env_value PASSWORD)"
 [ -n "$PASSWORD" ] || die "PASSWORD is not set in .env"
 
 # Space: the dumps are roughly the cluster size, and the new cluster another
-# copy, so ask for 3x before starting.
+# copy. Those are two different filesystems as soon as POSTGRES_DATA_LOCATION
+# points off DATA_LOCATION, so only the same-filesystem case has to hold all 3x.
+# Split, each root still asks 2x for the one copy that lands on it: plain-SQL
+# dumps are not reliably smaller than the cluster (no indexes, but every value
+# is text), and the restored cluster is not reliably the size of the source.
+# df needs an existing path, and PG_DATA_ROOT may not have been created yet.
+existing_ancestor() {
+    local dir="$1"
+    while [ -n "$dir" ] && [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
+        dir="$(dirname "$dir")"
+    done
+    printf '%s' "${dir:-/}"
+}
+free_kb_at() {
+    df -Pk "$(existing_ancestor "$1")" | awk 'NR==2 {print $4}'
+}
+same_filesystem() {
+    [ "$(df -Pk "$(existing_ancestor "$1")" | awk 'NR==2 {print $1}')" \
+      = "$(df -Pk "$(existing_ancestor "$2")" | awk 'NR==2 {print $1}')" ]
+}
+
 cluster_kb="$(docker exec "$PG_CONTAINER" psql -U postgres -Atc \
     "SELECT ceil(sum(pg_database_size(datname))/1024) FROM pg_database WHERE NOT datistemplate;")"
-free_kb="$(df -Pk "$DATA_LOCATION" | awk 'NR==2 {print $4}')"
-need_kb=$((cluster_kb * 3))
-log "cluster $((cluster_kb / 1024))MB, free $((free_kb / 1024))MB, want $((need_kb / 1024))MB"
-[ "$free_kb" -gt "$need_kb" ] || die "not enough free space at $DATA_LOCATION"
+log "cluster is $((cluster_kb / 1024))MB"
+
+check_space() {
+    local label="$1" dir="$2" multiple="$3" free_kb need_kb
+    free_kb="$(free_kb_at "$dir")"
+    need_kb=$((cluster_kb * multiple))
+    log "$label $dir: free $((free_kb / 1024))MB, want $((need_kb / 1024))MB"
+    [ "$free_kb" -gt "$need_kb" ] || die "not enough free space at $dir"
+}
+
+if same_filesystem "$DATA_LOCATION" "$PG_DATA_ROOT"; then
+    check_space "dumps + new cluster" "$DATA_LOCATION" 3
+else
+    check_space "dumps" "$DATA_LOCATION" 2
+    check_space "new cluster" "$PG_DATA_ROOT" 2
+fi
 
 log "pulling $TARGET_IMAGE"
 docker pull -q "$TARGET_IMAGE" >/dev/null || die "could not pull $TARGET_IMAGE"
@@ -282,12 +319,24 @@ fi
 old_image_line="$(grep -n 'image: ghcr.io/immich-app/postgres:' compose.yaml | head -n1)"
 [ -n "$old_image_line" ] || die "could not find the postgres image line in compose.yaml"
 
+# Only the tail is matched, so the substitution survives whatever interpolation
+# prefixes the host path - today ${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}},
+# which the older ${DATA_LOCATION:-./data} pattern silently no longer matched.
+# A silent miss here is the worst outcome available: compose would still point
+# at the old major's directory, and `make start` would initialise an empty
+# cluster over the top of a migration that had just succeeded.
+PG_VOLUME_RE='/postgres[0-9]*:/var/lib/postgresql\(/data\)\{0,1\}$'
+
 if [ "$APPLY" = "1" ]; then
     log "rewriting compose.yaml"
+    grep -q "$PG_VOLUME_RE" compose.yaml \
+        || die "could not find the postgres data mount in compose.yaml; apply both edits by hand"
     sed -i \
         -e "s|image: ghcr.io/immich-app/postgres:.*|image: $(sed_escape "$TARGET_IMAGE")|" \
-        -e "s|\(\${DATA_LOCATION:-./data}/postgres\)[0-9]*:/var/lib/postgresql\(/data\)\{0,1\}|\1$TARGET_MAJOR:/var/lib/postgresql|" \
+        -e "s|$PG_VOLUME_RE|/postgres$TARGET_MAJOR:/var/lib/postgresql|" \
         compose.yaml
+    grep -q "/postgres$TARGET_MAJOR:/var/lib/postgresql\$" compose.yaml \
+        || die "compose.yaml rewrite did not take; check the postgres volume line before starting"
     git --no-pager diff --stat compose.yaml 2>/dev/null || true
     log "compose.yaml updated; run 'make start' to bring the stack up on Postgres $TARGET_MAJOR"
 else
@@ -297,7 +346,7 @@ Data is migrated. Two edits remain in compose.yaml (postgres service):
 
   image: $TARGET_IMAGE
   volumes:
-    - \${DATA_LOCATION:-./data}/postgres$TARGET_MAJOR:/var/lib/postgresql
+    - \${POSTGRES_DATA_LOCATION:-\${DATA_LOCATION:-./data}}/postgres$TARGET_MAJOR:/var/lib/postgresql
 
 Then: make start
 Re-run with --apply to have this script make both edits.

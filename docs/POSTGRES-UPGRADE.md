@@ -19,11 +19,15 @@ Between checking out the new compose file and finishing `make pg-upgrade`, the o
 From Postgres 18 the upstream image keeps `PGDATA` at `/var/lib/postgresql/<major>/docker` and **refuses to start** with anything mounted at `/var/lib/postgresql/data`. So the mount point became the parent directory and the host path carries the major:
 
 ```yaml
-# before                                             # after
-- ${DATA_LOCATION}/postgres:/var/lib/postgresql/data - ${DATA_LOCATION}/postgres18:/var/lib/postgresql
+# before
+- ${DATA_LOCATION:-./data}/postgres:/var/lib/postgresql/data
+# after
+- ${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres18:/var/lib/postgresql
 ```
 
-That is not just a compatibility detail — it is the rollback. The old cluster at `${DATA_LOCATION}/postgres` is **never written to** by the upgrade, so reverting two lines in `compose.yaml` puts you back exactly where you started.
+`POSTGRES_DATA_LOCATION` is empty on a default install, so unless you have set it the paths below are the ones under `DATA_LOCATION` — that is what the `:-` fallback means, and it is written out in full everywhere a command here would otherwise expand an unset variable to nothing.
+
+That is not just a compatibility detail — it is the rollback. The old cluster at `${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres` is **never written to** by the upgrade, so reverting two lines in `compose.yaml` puts you back exactly where you started.
 
 ## Pre-flight
 
@@ -42,7 +46,7 @@ That is not just a compatibility detail — it is the rollback. The old cluster 
 
 4. **Check free space.** The script wants 3× the cluster size and refuses to start below it: the dumps are roughly one copy and the new cluster another.
 
-5. **Rehearse first.** `scripts/pg-major-upgrade.sh --to <image> --rehearse`, with `ENV_FILE` pointing at a scratch `.env` whose `DATA_LOCATION` is spare disk, runs the entire dump/restore/verify against the live cluster **without stopping anything** — no service, not Postgres itself — and refuses `--apply`. It proves the migration on your real data for the cost of a read.
+5. **Rehearse first.** `scripts/pg-major-upgrade.sh --to <image> --rehearse`, with `ENV_FILE` pointing at a scratch `.env` whose `DATA_LOCATION` and `POSTGRES_DATA_LOCATION` are spare disk, runs the entire dump/restore/verify against the live cluster **without stopping anything** — no service, not Postgres itself — and refuses `--apply`. It proves the migration on your real data for the cost of a read.
 
 6. **Take a backup you did not generate for this.** Run the Backrest plan and let its `db-backup.sh` hooks write their per-database dumps, so there is an off-site copy independent of the upgrade's own working files.
 
@@ -133,7 +137,12 @@ Only once all nine pass:
 ```sh
 # The old cluster is the rollback. Keep it until you are sure — it costs disk,
 # not correctness, and there is no way to regenerate it afterwards.
-sudo rm -rf ${DATA_LOCATION}/postgres
+#
+# Neither variable is exported in your shell, so read them out of .env first:
+# pasted bare, ${POSTGRES_DATA_LOCATION} is empty on a default install and this
+# would expand to /postgres, delete nothing, and leave the real cluster behind.
+set -a; . ./.env; set +a
+sudo rm -rf "${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres"
 ```
 
 ## Rollback
@@ -148,3 +157,56 @@ make start
 ```
 
 Anything written to the *new* cluster since the cutover is lost by rolling back — which is the real reason to run the verification list promptly rather than a week later.
+
+## Moving the cluster to another disk
+
+Unrelated to major versions, and much simpler: `POSTGRES_DATA_LOCATION` decides
+which disk the cluster sits on, defaulting to `DATA_LOCATION`. It is worth
+setting when `DATA_LOCATION` is a large external or rotational disk — see
+`docs/ARCHITECTURE.md` for why a database wants different storage from media.
+
+There is deliberately no script for this. It is a one-off per host, and a copy
+that silently loses file ownership or a sparse file is worse than no automation
+at all.
+
+```sh
+# 1. Stop everything. The cluster must not be running while it is copied.
+make stop
+
+# 2. Copy, preserving numeric uids: PGDATA is 999:0 mode 0700 inside the
+#    container, and a uid that maps to a different name on the host (or no
+#    name at all) makes -a without --numeric-ids silently rewrite it.
+set -a; . ./.env; set +a   # DATA_LOCATION is in .env, not in your shell
+sudo mkdir -p /new/disk
+sudo rsync -aHAX --numeric-ids --info=progress2 \
+  "${DATA_LOCATION:-./data}/postgres18" /new/disk/
+
+# 3. Point the stack at it, then start.
+#    POSTGRES_DATA_LOCATION is a *root*: the cluster lands in
+#    <POSTGRES_DATA_LOCATION>/postgres<major>, same shape as DATA_LOCATION.
+$EDITOR .env                 # POSTGRES_DATA_LOCATION=/new/disk
+make start
+
+# 4. Prove the running server is on the new disk. Only the mount can show
+#    that: `SHOW data_directory` is the path *inside* the container
+#    (/var/lib/postgresql/<major>/docker), which is identical either way.
+docker inspect pi-postgres --format \
+  '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+
+# 5. And that the data came with it, rather than a fresh cluster having been
+#    initialised on an empty directory.
+docker exec pi-postgres psql -U postgres -Atc \
+  'SELECT datname, pg_size_pretty(pg_database_size(datname)) FROM pg_database
+    WHERE NOT datistemplate ORDER BY 1;'
+```
+
+Then check the services, at minimum a login through Authelia (which proves
+Postgres, Redis and lldap together) and one Immich photo.
+
+Keep the old directory until you are satisfied; deleting it is the last step,
+not part of the move. While it exists, rollback is emptying
+`POSTGRES_DATA_LOCATION` in `.env` and running `make start`.
+
+If the destination is rotational, set `DB_STORAGE_TYPE: HDD` on the postgres
+service in `compose.yaml` — the image defaults to `SSD` and tunes
+`effective_io_concurrency` and `random_page_cost` for flash.

@@ -147,8 +147,13 @@ Persistent state is split deliberately:
 
 | Where | What | Why |
 |-------|------|-----|
-| `${DATA_LOCATION}` (default `./data`) | `nextcloud`, `immich`, `postgres18`, `authelia-config`, `lldap`, `vaultwarden`, `uptime-kuma`, `backrest`, `download`, `comics`, `manga`, `n8n`, `open-webui`, `agentgateway`, … | Anything you would miss. **Point this at your SSD.** Backrest mounts most of it read-only |
+| `${DATA_LOCATION}` (default `./data`) | `nextcloud`, `immich`, `authelia-config`, `lldap`, `vaultwarden`, `uptime-kuma`, `backrest`, `download`, `comics`, `manga`, `n8n`, `open-webui`, `agentgateway`, … | Anything you would miss, sized for media. Backrest mounts most of it read-only |
+| `${POSTGRES_DATA_LOCATION}` (defaults to `${DATA_LOCATION}`) | `postgres18` — the cluster shared by Immich, Nextcloud, Authelia, lldap, Open WebUI, Vaultwarden and FreshRSS | **Point this at solid-state storage.** ~1 GB, and the only thing here that suffers from sharing a spindle with media I/O. See below |
 | Named Docker volumes | Pi-hole, Redis, Headscale, Beszel, ntfy, Kavita config, llama.cpp weights, … | Smaller state, and the model weights that belong on the fast root filesystem rather than in backups |
+
+`DATA_LOCATION` is usually the largest disk available, which on a Pi is usually an external USB one. That is the right home for originals and downloads and the wrong home for a database: a rotational disk serves random reads at tens of IOPS, and consumer USB-SATA bridges commonly acknowledge a flush before the data reaches the platter, which is a corrupt cluster after a power cut rather than a slow one. `POSTGRES_DATA_LOCATION` exists so the cluster can sit on the root NVMe while the media stays on the big disk. Postgres writes ~350 MB/day here, so the flash wear it adds is immaterial.
+
+The `ghcr.io/immich-app/postgres` image also ships two tuning profiles selected by `DB_STORAGE_TYPE`, and it **defaults to `SSD`** — which sets `effective_io_concurrency=200` and `random_page_cost=1.2`. If you leave the cluster on a rotational `DATA_LOCATION`, set `DB_STORAGE_TYPE: HDD` on the postgres service in `compose.yaml`; the defaults model a random read as ~90x cheaper than that disk can deliver.
 
 ### The reading libraries
 

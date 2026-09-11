@@ -96,27 +96,50 @@ get_env_value_clean() {
 
 # --- Data location ---
 
+# Normalise one data root: strip trailing slashes, then make it absolute
+# against PROJECT_DIR the way Compose resolves a relative bind source.
+#
+# Every caller appends "/something", so a trailing slash here doubled it -
+# harmless to open(2), but it reaches anything printing or comparing these
+# paths. Guarded so a bare "/" does not become the empty string.
+absolute_data_root() {
+    local path="$1"
+
+    while :; do
+        case "$path" in
+            /) break ;;
+            */) path="${path%/}" ;;
+            *) break ;;
+        esac
+    done
+
+    case "$path" in
+        /*) printf '%s' "$path" ;;
+        *) printf '%s/%s' "$PROJECT_DIR" "$path" ;;
+    esac
+}
+
 resolve_data_location_path() {
     local data_location
 
     data_location="$(get_env_value DATA_LOCATION)"
     [ -n "$data_location" ] || data_location="./data"
 
-    # Every caller appends "/something", so a trailing slash here doubled it -
-    # harmless to open(2), but it reaches anything printing or comparing these
-    # paths. Guarded so a bare "/" does not become the empty string.
-    while :; do
-        case "$data_location" in
-            /) break ;;
-            */) data_location="${data_location%/}" ;;
-            *) break ;;
-        esac
-    done
+    absolute_data_root "$data_location"
+}
 
-    case "$data_location" in
-        /*) printf '%s' "$data_location" ;;
-        *) printf '%s/%s' "$PROJECT_DIR" "$data_location" ;;
-    esac
+# Root the shared Postgres cluster lives under, made absolute the same way.
+# Mirrors compose.yaml's ${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}:
+# unset and empty must both fall back, because .env.dist ships the key empty and
+# an operator clearing the value means "put it back with the rest of the data",
+# not "use the project directory".
+resolve_postgres_data_location_path() {
+    local postgres_data_location
+
+    postgres_data_location="$(get_env_value POSTGRES_DATA_LOCATION)"
+    [ -n "$postgres_data_location" ] || { resolve_data_location_path; return; }
+
+    absolute_data_root "$postgres_data_location"
 }
 
 # --- Permissions ---

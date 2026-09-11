@@ -3032,7 +3032,9 @@ services:
     # image keeps PGDATA at /var/lib/postgresql/<major>/docker and refuses to
     # start with anything mounted at /var/lib/postgresql/data, so the mount is
     # the parent and the host path carries the major. That also leaves the
-    # Postgres 16 cluster at ${DATA_LOCATION}/postgres intact as the rollback —
+    # Postgres 16 cluster at <postgres root>/postgres intact as the rollback —
+    # the same root the line below resolves, so a cluster moved with
+    # POSTGRES_DATA_LOCATION has to take its predecessor with it —
     # which also needs `docker compose build backrest`, since its pinned
     # pgNN-client moved with this line and a newer client's dumps do not replay
     # into an older server (config/backrest/Dockerfile).
@@ -3044,8 +3046,27 @@ services:
     environment:
       POSTGRES_PASSWORD: ${PASSWORD}
       POSTGRES_INITDB_ARGS: "--data-checksums"
+      # No DB_STORAGE_TYPE: the image defaults to SSD, which is what this
+      # cluster wants as long as POSTGRES_DATA_LOCATION points at solid-state
+      # storage. That default is not free — it is the only thing separating the
+      # two tuning profiles the image ships, and it sets
+      # effective_io_concurrency=200 and random_page_cost=1.2. Both are wrong on
+      # a spinning disk, where a random read costs ~18 ms rather than the ~0.2 ms
+      # those numbers assume, so an install leaving the cluster on a rotational
+      # DATA_LOCATION must add `DB_STORAGE_TYPE: HDD` here.
     volumes:
-      - ${DATA_LOCATION:-./data}/postgres18:/var/lib/postgresql
+      # Deliberately not under DATA_LOCATION by default-but-overridable: that
+      # root is sized for media (Immich originals, Nextcloud, downloads) and is
+      # commonly a large external USB disk, while the cluster is ~1 GB and is
+      # the one thing here that wants low seek latency and a truthful fsync.
+      # Sharing a spindle with qBittorrent and thumbnail generation costs the
+      # database far more than it costs them, and consumer USB-SATA bridges
+      # routinely acknowledge a flush before the platter has it, which a
+      # database cannot detect and a power cut turns into a corrupt cluster.
+      # Falls back to DATA_LOCATION so installs that never set it are unchanged.
+      # The major stays in the path for the same reason as below: it is what
+      # makes a major upgrade's rollback a compose edit rather than a restore.
+      - ${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres18:/var/lib/postgresql
       - ./config/postgres/init-databases.sh:/docker-entrypoint-initdb.d/01-init-databases.sh
     networks:
       - immich
