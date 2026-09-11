@@ -29,7 +29,19 @@ derp:
     region_code: headscale
     region_name: pi-pcloud Embedded DERP
     stun_listen_addr: 0.0.0.0:3478
-    ipv4: headscale
+    # Stated though it is already the default: this relay answers the whole
+    # internet, so the value restricting it to enrolled nodes should be readable
+    # here rather than resting on a default surviving a bump. Do not check it
+    # with `tailscale debug derp` - that probes with a throwaway key and only
+    # calls Connect(), so it reports success against a relay correctly refusing
+    # it. docs/TROUBLESHOOTING.md has the test that works.
+    verify_clients: true
+    # No ipv4/ipv6 on purpose: headscale copies them into the DERP map it serves
+    # every client and they must be public addresses. This used to say
+    # `ipv4: headscale`, a container name, so the relay was advertised and never
+    # once usable. Omitting both leaves the HostName alone, which clients
+    # resolve through ddns-updater's record and so survives a WAN address change
+    # where a literal would not. docs/TROUBLESHOOTING.md#vpn.
     private_key_path: /var/lib/headscale/derp_server_private.key
     automatically_add_embedded_derp_region: true
   urls:

@@ -20,6 +20,13 @@ set -eu
 # one: it records what was last *published*, and is only rewritten when that
 # changes, so it reports agreement forever once publishing has broken.
 #
+# It must stay the *host* CLI. That binary has no local tailscaled socket, so it
+# netchecks against the public DERP map and gets the WAN address back. Run the
+# same command as `docker exec pi-tailscale tailscale netcheck` and it uses the
+# tailnet's own map, whose nearest region is the embedded relay on this LAN -
+# GlobalV4 comes back as HOST_LAN_IP, is_globally_routable rejects it, and
+# WAN_HAIRPIN_IP then freezes at whatever it was until someone notices.
+#
 # The IPv6 prefix comes from the LAN interface's routing table, for the same
 # reason. There is no hairpin to observe over IPv6 - with no NAT a LAN client
 # reaches the Pi's global address directly - so what has to be allowlisted is

@@ -89,6 +89,7 @@ n8n:n8n-pre-start.sh
 POST_START_HOOKS='
 postgres-bootstrap.sh
 headscale-init.sh
+tailscale-post-start.sh
 beszel-agent:beszel-agent-bootstrap.py
 dockhand:dockhand-oidc-bootstrap.sh
 nextcloud:nextcloud-oidc-bootstrap.sh

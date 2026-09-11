@@ -356,7 +356,7 @@ Since Pi-hole resolves `*.<HOST_NAME>` to the Pi, every service works from the V
 | 443 | TCP | IPv4 + IPv6 | Traefik | HTTPS for every web service |
 | 443 | UDP | IPv4 + IPv6 | Traefik | HTTP/3 (QUIC). `--entrypoints.websecure.http3=true` advertises it via `Alt-Svc`, which browsers cache for ~30 days; without the UDP listener every connection retried QUIC, timed out and fell back |
 | 53 | TCP/UDP | IPv4 only | Pi-hole | Host + macvlan IP, for LAN and VPN clients. IPv6 would be an open resolver with no client — see [IPv6](#what-stays-ipv4-and-why) |
-| 3478 | UDP | IPv4 only | Headscale | STUN, via the embedded DERP relay. IPv6 would report a Docker address to its own clients |
+| 3478 | UDP | IPv4 only | Headscale | STUN, via the embedded DERP relay. IPv6 would report a Docker address to its own clients. Only STUN is v4-only: the relay itself is reached over Traefik's `443`, which listens in both families. The DERP node advertises no literal address, so clients resolve `headscale.<HOST_NAME>` — over IPv6 only where an `AAAA` exists for it, i.e. with `IPV6_PUBLIC_RECORDS` set, and never from `pi-tailscale`, whose `extra_hosts` pins the name to `HOST_LAN_IP` |
 | 41641 | UDP | IPv4 + IPv6 | Tailscale (host network) | WireGuard. `tailscaled` binds a socket in each family; unlike the rows above this is the host's own listener, not a Docker publish |
 
 Each is written out per family (`"0.0.0.0:443:443"`, `"[::]:443:443"`) rather than left as a bare `"443:443"`, which binds both: an IPv6 listener is only safe once the container behind it has an IPv6 address to DNAT to, and only Traefik has one. See [IPv6](#ipv6).

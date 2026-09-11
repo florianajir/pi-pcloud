@@ -121,7 +121,35 @@ Add the domain to the `ALLOW_LISTS` in `scripts/pihole-bootstrap.sh`, not only i
 
 **Connections relay instead of going direct.** Forward `41641/udp` (WireGuard) and `3478/udp` (STUN) on your router. Without them traffic still works, but rides the embedded DERP relay.
 
-**`netcheck.runProbe: named node "999" has no v6 address`, every 5 minutes.** Expected. `999` is Headscale's embedded DERP region, whose `derp.server` block advertises `ipv4` and no `ipv6`, so a client with working IPv6 probes it over IPv6 and finds nothing. Advertising one would mean publishing `[::]:3478`, which Headscale has no IPv6 address to DNAT to — see [Networking → IPv6](NETWORKING.md#what-stays-ipv4-and-why). Relaying is unaffected; the public DERP regions all answer.
+**The embedded DERP region is never used.** Fixed — but only after `headscale-pre-start.sh` has re-rendered `config/headscale/config.yaml`, which it does on every `make update`. The template used to set `derp.server.ipv4: headscale`, a container name where Headscale wants a public IP address, and it copies that value straight into the DERP map every client receives. So every node in the tailnet carried a region whose only node dialled a host that resolves nowhere:
+
+```
+tailscale debug derp 999
+  Error connecting to node "headscale.<HOST_NAME>" @ "headscale:443"
+  over IPv4: dial tcp4: lookup headscale: no such host
+```
+
+Both `ipv4` and `ipv6` are now omitted, which leaves the node with its `HostName` alone for clients to resolve, and that name survives a WAN address change where a literal would not. Confirm with `docker exec pi-tailscale tailscale netcheck`: the embedded region should appear in the latency list, and on the Pi itself it is the nearest one by three orders of magnitude. Because the region is now every node's nearest, relaying to the Pi depends on Traefik and Headscale answering on `443` — when both are down, clients fall back to the public regions in `derp.urls`, one reconnect later.
+
+**`netcheck.runProbe: named node "999" has no v6 address`, every few minutes.** Expected, and unrelated to the region working. `pi-tailscale` carries `extra_hosts: ["headscale.<HOST_NAME>:<HOST_LAN_IP>"]`, so inside that container the name resolves from `/etc/hosts` to one IPv4 address and the v6 probe finds nothing to dial. Other clients only see an `AAAA` for it when `IPV6_PUBLIC_RECORDS` is set — see [Configuration → Network](CONFIGURATION.md#network). Relaying is unaffected: the region is reached over IPv4.
+
+**`netcheck` reports `<HOST_LAN_IP>` as the Pi's own IPv4.** Also expected, and new since the region started working: the embedded relay's STUN server sits on the Pi's own LAN, so it reflects the LAN address back. The public endpoint is not lost — `magicsock: endpoints changed` lists the LAN address *and* the WAN one, so this is one more candidate path, not one fewer. `scripts/wan-allowlist-sync.sh` is unaffected because it runs the **host** `tailscale` CLI, which has no local `tailscaled` socket and so netchecks against the public DERP map; do not "helpfully" change it to `docker exec pi-tailscale`.
+
+**`tailscale debug derp 999` says the relay is fine. It cannot tell you that.**
+The probe generates a throwaway key (`fakePrivKey := key.NewNode()` in
+`ipn/localapi/debugderp.go`) and only calls `Connect()`, which returns as soon as
+the HTTP upgrade completes and the server key comes back — before the server
+drops a client that failed `verify_clients`. Surfacing that rejection is an open
+TODO in tailscale's own source, so the command reports "Successfully established
+a DERP connection" against a relay that is correctly refusing it. Useful for
+reachability and STUN, worthless for authorization.
+
+To test authorization, use a real node key on a sustained connection: enrol a
+throwaway node, confirm `magicsock: derp-999 connected; connGen=1` in its log,
+`headscale nodes delete` it, then force a reconnect with `tailscale debug
+break-derp-conns`. A closed relay answers `derp.Recv: EOF` on every retry and the
+client raises the `no-derp-connection` health warning. One daemon, one region,
+one variable.
 
 **A node shows offline while the device is connected.** "Last seen" lags by design — check `tailscale status` on the device itself before trusting the list.
 

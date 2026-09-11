@@ -4,7 +4,7 @@ Headscale is a self-hosted Tailscale control plane. You get the official Tailsca
 
 | Component | Where | Access |
 |-----------|-------|--------|
-| **headscale** | `https://headscale.<HOST_NAME>` | Public by necessity — clients must reach it from anywhere. Runs an embedded DERP relay (STUN on `3478/udp`) |
+| **headscale** | `https://headscale.<HOST_NAME>` | Public by necessity — clients must reach it from anywhere. Runs an embedded DERP relay (STUN on `3478/udp`), which relays only for enrolled nodes (`derp.server.verify_clients`) |
 | **headplane** | `https://headscale.<HOST_NAME>/admin` | Admin web UI — LAN-only, `admin` group, 2FA. Bare `https://headscale.<HOST_NAME>/` redirects here |
 | **tailscale** | The Pi's own node, on the host network | WireGuard on `41641/udp` |
 
@@ -52,6 +52,19 @@ Revoke reusable keys if they leak — they allow registration with no interactiv
   ```
 
 Details of the DNS side: [Networking → DNS on the VPN](NETWORKING.md#dns-on-the-vpn).
+
+### The IPv6 half of the exit node
+
+`tailscaled` advertises `0.0.0.0/0` **and** `::/0`, but on this host it only ever installed the IPv4 netfilter chains — `iptables-legacy` carries `ts-input`, `ts-forward` and `ts-postrouting` while `ip6tables` carried none. Nothing complains: `tailscale status` looks right, the Pi's own IPv6 works, and a client using the exit node still reaches every v4 site. Only the AAAA-capable ones stall, because their packets leave the uplink with the client's `fd7a:115c:a1e0::/48` source intact and the first upstream router drops them. An `ip6tables -S` dump is the only place it shows.
+
+`scripts/tailscale-post-start.sh` (a post-start hook, so it runs on every boot and every `make update`) mirrors the four v4 rules into the same backend `tailscaled` chose, with the address family translated and the WireGuard port read back off the v4 rule. It compares before it writes, so a run that finds the chains already in step changes nothing.
+
+```bash
+sudo ip6tables-legacy -t filter -S ts-forward   # should mirror the -S of the v4 chain
+sudo ip6tables-legacy -t nat    -S ts-postrouting
+```
+
+The mirror is a hardcoded copy of what `tailscaled` v1.102.3 installs. A version that starts managing IPv6 itself will not be left alone — its rules will differ and get overwritten — so re-check that script whenever the `tailscale/tailscale` image is bumped.
 
 ## Managing users and devices
 
