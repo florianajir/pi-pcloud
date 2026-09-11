@@ -609,14 +609,24 @@ rotate_trilium() {
 
     # snake_case, unlike everything else Trilium takes: passwordApiRoute reads
     # `current_password` and `new_password`.
-    if RP_OLD_PASSWORD="$OLD_PASSWORD" RP_NEW_PASSWORD="$NEW_PASSWORD" \
+    if ! RP_OLD_PASSWORD="$OLD_PASSWORD" RP_NEW_PASSWORD="$NEW_PASSWORD" \
         jq -nc '{current_password:$ENV.RP_OLD_PASSWORD, new_password:$ENV.RP_NEW_PASSWORD}' \
         | docker_curl_stdin -X POST -H "Cookie: $cookies" -H "x-csrf-token: $token" \
             -H 'Content-Type: application/json' \
             "$url/api/password/change" >/dev/null 2>&1; then
+        note "✘ FAILED to rotate Trilium (POST /api/password/change rejected)"
+        return 0
+    fi
+
+    # The status is not the answer: that route reports a refusal as HTTP 200
+    # with `{"success": false}`, so `-f` passes on a rotation that changed
+    # nothing and the old password would keep minting ETAPI tokens. Judged the
+    # way trilium-bootstrap.sh judges /set-password - by signing in.
+    if [ -n "$(trilium_open_session "$url" "$NEW_PASSWORD" || true)" ]; then
         note "✔ Rotated the Trilium owner password"
     else
-        note "✘ FAILED to rotate Trilium (POST /api/password/change rejected)"
+        note "✘ FAILED to rotate Trilium (the new password does not sign in)"
+        note "   The old password still mints ETAPI tokens - change it in Trilium: Options -> Password"
     fi
 }
 

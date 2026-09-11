@@ -167,6 +167,35 @@ write_file_atomic() {
     return 1
 }
 
+# Docker materialises a *missing* bind-mount source as an empty directory, so a
+# path that must be a file can come back as one - and then every `-r`/`-s` guard
+# on it reads as success while the file is never written. Restore the file path:
+# rmdir when it is only the empty directory compose made, move aside when it is
+# not, because a non-empty one is somebody else's data.
+# Usage: ensure_config_target_is_file <path>
+ensure_config_target_is_file() {
+    local target="$1"
+    local backup_dir=""
+
+    [ -d "$target" ] || return 0
+
+    if [ -z "$(ls -A "$target" 2>/dev/null)" ]; then
+        rmdir "$target" || {
+            log "ERROR: could not remove the empty directory at $target"
+            return 1
+        }
+        log "Removed empty directory at $target to restore file path"
+        return 0
+    fi
+
+    backup_dir="${target}.dir.bak.$(date +%Y%m%d-%H%M%S)"
+    mv "$target" "$backup_dir" || {
+        log "ERROR: could not move the directory at $target aside"
+        return 1
+    }
+    log "Moved directory $target to $backup_dir to restore file path"
+}
+
 # Same idea for a *rendered* file that carries a secret. `cmd > "$file"` creates
 # it under the caller's umask, world-readable until a chmod that may never come;
 # mktemp is 0600 from creation and mv preserves that.
@@ -463,16 +492,8 @@ ensure_authelia_oidc_materials() {
     # here, and every guard below then reads as success: `-r` is true for a
     # directory, and generate_oidc_secret's `[ ! -s ]` is false because a
     # directory has a size. The client is silently never given a secret and the
-    # service comes up healthy with an empty one. rmdir, not rm -rf: only the
-    # empty directory compose made; a non-empty one is somebody else's data.
-    if [ -d "$secret_file" ]; then
-        if rmdir "$secret_file" 2>/dev/null; then
-            log "Removed the empty directory compose left at $secret_file (it started before the secret existed)"
-        else
-            log "ERROR: $secret_file is a non-empty directory; refusing to touch it"
-            return 1
-        fi
-    fi
+    # service comes up healthy with an empty one.
+    ensure_config_target_is_file "$secret_file" || return 1
 
     if [ -r "$secret_file" ] && [ -f "$config_file" ] && grep -q "client_id: ${client_id}" "$config_file" 2>/dev/null; then
         return 0
@@ -528,7 +549,7 @@ ensure_authelia_oidc_materials() {
 # agentgateway is the only consumer.
 # Usage: trilium_etapi_token_file
 trilium_etapi_token_file() {
-    printf '%s/agentgateway/secrets/%s' "$(resolve_data_location_path)" "trilium_etapi_token"
+    printf '%s/agentgateway/secrets/trilium_etapi_token' "$(resolve_data_location_path)"
 }
 
 # Echo the stored ETAPI token, or nothing before it has been minted. Never
@@ -591,8 +612,11 @@ trilium_csrf_material() {
     token="$(printf '%s' "$body" | jq -r '.csrfToken // empty' 2>/dev/null)"
     [ -n "$token" ] || return 1
 
+    # `-d';'`, one character: paste treats -d as a *list* it cycles through, so
+    # `-d'; '` joins the third cookie with a space instead of a semicolon and
+    # mangles it. Two cookies hid that; /bootstrap sets exactly two today.
     cookies="$(printf '%s' "$headers" \
-        | sed -n 's/^[Ss]et-[Cc]ookie: *\([^;]*\).*/\1/p' | paste -sd'; ' -)"
+        | sed -n 's/^[Ss]et-[Cc]ookie: *\([^;]*\).*/\1/p' | paste -sd';' -)"
     [ -n "$cookies" ] || cookies="$session"
 
     printf '%s|%s' "$cookies" "$token"

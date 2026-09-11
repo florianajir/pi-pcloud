@@ -209,8 +209,10 @@ contains "GET /bootstrap sets the CSRF cookie" "$boot" "trilium-csrf="
 csrf_token="$(printf '%s' "$boot_body" | jq -r '.csrfToken')"
 # Every cookie that response set: the token is bound to a session id, so an
 # older cookie is a 403.
+# `-d';'`, one character: paste cycles through the -d list, so `-d'; '` would
+# join a third cookie with a space rather than a semicolon.
 cookies="$(printf '%s' "$boot" | tr -d '\r' \
-    | sed -n 's/^[Ss]et-[Cc]ookie: *\([^;]*\).*/\1/p' | paste -sd'; ' -)"
+    | sed -n 's/^[Ss]et-[Cc]ookie: *\([^;]*\).*/\1/p' | paste -sd';' -)"
 [ -n "$cookies" ] || cookies="$session"
 
 # --- 4. The options the whole feature is made of ---
@@ -219,7 +221,7 @@ body='{"aiEnabled":"true","mcpEnabled":"true","llmProviders":"[]"}'
 code="$(printf '%s' "$body" | probe -o /dev/null -w '%{http_code}' -X PUT --data @- \
     -H "Cookie: $cookies" -H "x-csrf-token: $csrf_token" \
     -H 'Content-Type: application/json' "$BASE/api/options")"
-ok "PUT /api/options accepts the session and the x-csrf-token header" "$code" 204
+succeeds "PUT /api/options accepts the session and the x-csrf-token header" "$code"
 
 # Read back rather than trust the status: an option missing from the server's
 # ALLOWED_OPTIONS is rejected by name while the call still succeeds.

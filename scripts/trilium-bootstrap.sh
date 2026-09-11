@@ -50,7 +50,11 @@ claim_instance() {
     # ?skipDemoDb drops the 177-note "Trilium Demo" tree; the built-in help
     # subtree is separate and stays. Its *value* is never read (upstream tests
     # `!== undefined`), so `=false` would skip the demo too - not a boolean.
-    if [ "$(printf '%s' "$status" | jq -r '.isInitialized | tostring')" != "true" ]; then
+    # `= false`, not `!= true`: an unparseable or renamed field yields neither,
+    # and `!= true` sent *that* down the discardExistingData() path against a
+    # populated instance, with only upstream's checkAppNotInitialized between it
+    # and the notes.
+    if [ "$(printf '%s' "$status" | jq -r '.isInitialized | tostring' 2>/dev/null)" = "false" ]; then
         log "Creating Trilium's initial document (without the demo notes)"
         printf '{}' \
             | api_send_json_stdin POST "$TRILIUM_URL" "/api/setup/new-document?skipDemoDb=true" >/dev/null 2>&1 || {
@@ -69,7 +73,7 @@ claim_instance() {
     # `res.redirect("login")`, so no status distinguishes them. Whether the stack
     # owns the password is answered by the sign-in below instead.
     jq -cn --arg p "$password" '{password1: $p, password2: $p}' \
-        | docker_curl_stdin -X POST -o /dev/null \
+        | docker_curl_stdin -X POST \
             -H 'Content-Type: application/json' \
             "$TRILIUM_URL/set-password" >/dev/null 2>&1 || true
 }
@@ -121,6 +125,14 @@ apply_options() {
             desired="$(jq -cn --argjson p "$providers" \
                 '{aiEnabled: "true", mcpEnabled: "true", llmProviders: ($p | tostring)}')"
         fi
+    elif container_is_running "pi-agentgateway"; then
+        # Reachable through `make enable trilium` on a gateway that predates
+        # this feature: its pre-start hook is not re-run for a service that was
+        # already on, so the key lands only in refresh_agentgateway() below and
+        # the AI half is wired on the *next* run - which needs a password
+        # session, so do it before enrolling SSO.
+        log "NOTE: agentgateway is running but has no Trilium LLM key yet; enabling MCP only"
+        log "  Run 'make update' before enrolling SSO to finish the AI wiring."
     else
         log "NOTE: agentgateway is not part of this stack; enabling MCP only"
     fi
@@ -202,7 +214,10 @@ refresh_agentgateway() {
     sh "$SCRIPT_DIR/agentgateway-pre-start.sh" >/dev/null 2>&1 \
         || { log "WARNING: could not re-render agentgateway's environment"; return 0; }
     # up -d, not restart: env_file values are frozen at container creation.
-    compose up -d agentgateway >/dev/null 2>&1 \
+    # --no-deps, as every other targeted recreate here: without it compose also
+    # evaluates authelia, traefik and llama-cpp and blocks this post-start hook
+    # on their healthchecks.
+    compose up -d --no-deps agentgateway >/dev/null 2>&1 \
         || log "WARNING: could not recreate agentgateway with the new token"
 }
 

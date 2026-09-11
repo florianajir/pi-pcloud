@@ -279,7 +279,7 @@ Do **not** stack `authelia@docker` forward-auth on this router — the Bitwarden
 
 ## Secrets
 
-Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/secrets/`, never committed. All but the last two come from `scripts/authelia-pre-start.sh`:
+Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/secrets/`, never committed. They come from `scripts/authelia-pre-start.sh`, except where a row names its own writer:
 
 | Secret | Purpose |
 |--------|---------|
@@ -295,21 +295,22 @@ Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/se
 | `vaultwarden_admin_token` | Vaultwarden `/admin` token, plaintext — the one you type. Written by `scripts/vaultwarden-pre-start.sh`, never mounted into any container |
 | `vaultwarden_admin_token_hash` | Argon2id digest of the above, the only form Vaultwarden receives |
 | `freshrss_oidc_crypto_key` | `OIDCCryptoPassphrase` for FreshRSS's `mod_auth_openidc` — it encrypts that module's session cookie and cache, so it is independent of `PASSWORD` and regenerating it only signs everyone out. Written by `scripts/freshrss-pre-start.sh` |
-| `trilium_llm_key` | The virtual key Trilium presents to agentgateway's `/v1`. Separate from `llm_api_key` so revoking the notes' access to the models does not log Open WebUI out. Written by `scripts/agentgateway-pre-start.sh` under `${DATA_LOCATION}/agentgateway/secrets/` |
-| `mcp_api_key` | The inbound key for agentgateway's `/mcp`. Everything behind it reads and writes every note, so it is not shared with `/v1`. Same writer |
-| `trilium_etapi_token` | Trilium's own API token, which agentgateway's MCP target presents back to it. Minted by `scripts/trilium-bootstrap.sh` beside the two keys above — not under Trilium's data directory, which its container `chown -R`'s to uid 1000 on every start. Paste one there by hand from *Options → ETAPI* when the owner password is not `${PASSWORD}` |
 | `homepage_auth_secret` | `HOMEPAGE_AUTH_SECRET` — the key NextAuth signs and encrypts Homepage's session cookie with. Independent of `PASSWORD`; regenerating it only signs everyone out. Written by `scripts/homepage-pre-start.sh` |
 
-Two more are generated per-service under `${DATA_LOCATION}`, mode `600`, for the same reason as the
-Vaultwarden token — `llm.<HOST_NAME>` carries no forward-auth, so a `PASSWORD` leak must not also be
-admin over it:
+The gateway keeps its own under `${DATA_LOCATION}/agentgateway/secrets/`, mode `600`, for the same
+reason as the Vaultwarden token — `llm.<HOST_NAME>` carries no forward-auth, so a `PASSWORD` leak must
+not also be admin over it. `make api-keys` prints the three a client presents:
 
 | Secret | Purpose |
 |--------|---------|
-| `agentgateway/secrets/cookie_secret` | AES-256-GCM key for agentgateway's OIDC session cookie. Regenerating it only logs everyone out |
-| `agentgateway/secrets/llm_api_key` | The virtual key every `/v1` caller presents. Exported as `sk-<key>` into the gateway's own `apiKey` policy and into the `open-webui` entrypoint from the same file, so the caller and the gateway cannot disagree. Open WebUI mounts **this file alone**, not the directory: the cookie secret next to it signs admin sessions |
+| `cookie_secret` | AES-256-GCM key for agentgateway's OIDC session cookie. Regenerating it only logs everyone out |
+| `llm_api_key` | The virtual key every `/v1` caller presents. Exported as `sk-<key>` into the gateway's own `apiKey` policy and into the `open-webui` entrypoint from the same file, so the caller and the gateway cannot disagree. Open WebUI mounts **this file alone**, not the directory: the cookie secret next to it signs admin sessions |
+| `agent_api_key` | The same, for tools on other machines, on the `/groq/v1` and `/openrouter/v1` routes — separate so revoking one does not lock the other out |
+| `trilium_llm_key` | The virtual key Trilium's AI assistant presents to `/v1`. Separate from `llm_api_key` so revoking the notes' access to the models does not log Open WebUI out |
+| `mcp_api_key` | The inbound key for `/mcp`. Everything behind it reads and writes every note, so it is not shared with `/v1` |
+| `trilium_etapi_token` | Trilium's own API token, which the MCP target presents back to it. Minted by `scripts/trilium-bootstrap.sh`, beside the keys above rather than under Trilium's data directory — that one its container `chown -R`'s to uid 1000 on every start. Paste one here by hand from *Options → ETAPI* when the owner password is not `${PASSWORD}` |
 
-`scripts/agentgateway-pre-start.sh` copies those two and the OIDC client secret into
+`scripts/agentgateway-pre-start.sh` copies those and the OIDC client secret into
 `config/agentgateway/agentgateway.env` (mode `600`, gitignored), because the agentgateway image is
 distroless — no shell — so the `export $(cat …)` entrypoint the other services use is not available and
 an `env_file` is. Those values are frozen at container creation: pick a change up with
