@@ -219,11 +219,11 @@ run_hook() {
     _hook="$PROJECT_DIR/scripts/$1"
     [ -f "$_hook" ] || return 0
     if is_dry_run; then
-        echo "DRY-RUN: $(script_interpreter "$1") $_hook"
+        echo "DRY-RUN: $(script_interpreter "$_hook") $_hook"
         return 0
     fi
     log "Running hook $1..."
-    run_script "$1" || log "warning: hook $1 failed (continuing)"
+    run_script "$_hook" || log "warning: hook $1 failed (continuing)"
 }
 
 # Same, for the pre-start hooks: a failure there stops the start, exactly as it
@@ -235,11 +235,11 @@ run_pre_start_hook() {
     _hook="$PROJECT_DIR/scripts/$1"
     [ -f "$_hook" ] || return 0
     if is_dry_run; then
-        echo "DRY-RUN: $(script_interpreter "$1") $_hook"
+        echo "DRY-RUN: $(script_interpreter "$_hook") $_hook"
         return 0
     fi
     log "Running hook $1..."
-    run_script "$1" || die "hook $1 failed; nothing was started"
+    run_script "$_hook" || die "hook $1 failed; nothing was started"
 }
 
 # Every scripts/<svc>-*bootstrap.{sh,py}, matching run-hooks.sh's
