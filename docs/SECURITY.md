@@ -93,6 +93,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | **Shelfmark** | openid profile email groups | client_secret_basic | one_factor | PKCE (S256) required; admin comes from the `admin` group; local login disabled |
 | **Audiobookshelf** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required; **no `groups` scope** — it reads the claim as a role and denies anyone outside admin/user/guest |
 | **FreshRSS** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required — the flow runs in Apache (`mod_auth_openidc`), not in FreshRSS, and the module sends a code challenge by default even though the image's `FreshRSS.Apache.conf` never sets `OIDCPKCEMethod`. **No `groups` scope** — FreshRSS derives no roles from the token, so `one_factor` is the whole access decision |
+| **Trilium** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required — neither Authelia's integration guide (which says `require_pkce: false`) nor Trilium's own `authorizationParams` shows it, but the bundled `express-openid-connect` sets `code_challenge_method=S256` for every code-flow request. **No `groups` scope** — it has no roles. `one_factor` is not the last gate: Trilium binds the first `sub` that enrolls and rejects every other one, so it is single-owner regardless of who else passes the policy |
 | **Homepage** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required. **No `groups` scope** — homepage has no roles, so `one_factor` is the whole access decision. Its NextAuth provider is declared `idToken: true`, so it never calls UserInfo and sees no `email` or `name` — it needs neither, the only thing it reads off the session is that there is one. One of the two clients that keep forward-auth *as well* (with Headplane): see the matrix below |
 
 `admin_only` is a named policy in the template: deny by default, `two_factor` for members of the `admin` group.
@@ -115,6 +116,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Shelfmark | ✓ | — | ✓ | LAN-only + OIDC only; password login disabled (`DISABLE_LOCAL_AUTH`), so requests and download history stay per-user |
 | Audiobookshelf | ✓ | — | ✓ | LAN-only + OIDC only; local login disabled once the bootstrap holds an API key, so the shared `PASSWORD` is not a second way into everyone's listening history. No forward-auth: the mobile apps can't pass an interactive portal, and they have their own OIDC redirect URI |
 | FreshRSS | ✓ | — | ✓ | LAN-only + OIDC. Apache's `mod_auth_openidc` guards `/i/` (the whole web UI) and maps `preferred_username` onto a per-user FreshRSS account, auto-created on first sign-in — so Authelia's `one_factor` policy is what decides who has a reading list at all. `/api/greader.php` is deliberately outside that: feed-reader apps can't pass an interactive portal, and it checks the account's own API password. No forward-auth for the same reason (as with Kavita's OPDS clients) |
+| Trilium | ✓ | — | ✓ | LAN-only + its own account / OIDC. No forward-auth: `/etapi` (scripting) and `/api/clipper` (the Web Clipper extension) can't pass an interactive portal, as with Kavita's OPDS clients. SSO is **not** live until the owner enrolls it — see below |
 | n8n | ✓ | — | — | LAN-only + its own auth |
 | ntfy | ✓ | — | — | LAN-only + its own accounts and ACLs (`deny-all` default) |
 | Homepage | ✓ | ✓ | ✓ | LAN-only + SSO + its own OIDC — all three, as Headplane already does, and here it costs nothing to: `HOMEPAGE_OIDC_AUTO_LOGIN=true` (v2.3.0) sends an unauthenticated visitor straight to Authelia rather than to a page whose only control is a sign-in button, and the forward-auth hop in front has already established that same session — so the dashboard still opens in one hop. Stacking is not redundant: forward-auth only guards the Traefik path, and `/api/*` — which proxies every widget's credentials — is reachable from anything on `frontend` that dials `:3000` with a forged `Host: homepage.<HOST_NAME>`, which is all `HOMEPAGE_ALLOWED_HOSTS` checks. `/api/healthcheck` and `/api/config/custom.css` stay public by design |
@@ -130,7 +132,50 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Stremio | ✓ | — | — | LAN-only; streaming clients and cast receivers can't do the portal |
 | Comet | partial | — | — | Split in two routers. `/s/<PUBLIC_API_TOKEN>/` is public so an addon installed on a Stremio account resolves off-tailnet; `/configure` is excluded from it, and `/`, `/health` and `/admin*` stay LAN-only. No forward-auth on either — Stremio fetches manifests programmatically. The public half carries `rate-limit-auth`, because each request fans out to Torrentio/MediaFusion/Zilean from the Pi's WAN IP. Its two passwords are generated per-service (`config/comet/comet.env`), never `${PASSWORD}` |
 
-Services with their own account system (Immich, Kavita, Shelfmark, Audiobookshelf, FreshRSS) deliberately do **not** stack forward-auth on top of OIDC — their apps and clients cannot complete an interactive portal. Homepage and Headplane are not on that list: neither has such clients — both are only ever opened in a browser, which completes both hops.
+Services with their own account system (Immich, Kavita, Shelfmark, Audiobookshelf, FreshRSS, Trilium) deliberately do **not** stack forward-auth on top of OIDC — their apps and clients cannot complete an interactive portal. Homepage and Headplane are not on that list: neither has such clients — both are only ever opened in a browser, which completes both hops.
+
+### Trilium's SSO has to be enrolled by hand, once
+
+Trilium is the one OIDC client whose *enrollment* no script performs, because none can:
+binding an identity requires a browser session that is already signed in as the owner.
+`scripts/trilium-pre-start.sh` prepares the client secret, and the environment variables
+make the option available — the last step is yours.
+
+On a fresh install:
+
+1. Nothing, normally: `scripts/trilium-bootstrap.sh` has already created the document (without the
+   demo notes) and set the owner password to `${PASSWORD}` on the first start, which is what closes the window in which anyone who
+   reached the instance from the LAN first would have become its owner. Kavita still has
+   that window; Trilium no longer does. Change the password afterwards if you want — the
+   stack only needs it until step 3, and never types it again.
+2. Sign in with that password, then go to *Options → MFA* and choose OpenID as the
+   method. That writes `mfaMethod=oauth`, which is what actually arms the flow: the
+   environment variables alone leave `isOpenIDConfigured()` false.
+3. Click through to Authelia and back. That round-trip is the enrollment: Trilium stores
+   the `sub` it receives and, from then on, refuses every other one with `wrong_account`.
+
+The order matters and is enforced upstream. Enrolling from an anonymous session is
+refused (`not_enrolled`) so a stranger cannot claim the instance by being the first to
+authenticate, and before enrollment the login page keeps offering the password form so a
+misconfigured provider cannot lock the owner out.
+
+Step 2 is also the point of no return for automation: once `mfaMethod` is `oauth` and a
+subject is bound, `POST /login` stops checking passwords and redirects to Authelia, so
+nothing can script a session again. That is why the AI and MCP options are written by the
+bootstrap *before* this step and have to be set by hand afterwards — see
+[Local AI](AI.md#trilium-on-both-sides-of-the-gateway).
+
+That binding is also what makes `one_factor` an adequate policy here. TriliumNext#8606
+described OIDC as authenticating without authorizing — every account Authelia knew could
+get in — and the enrollment model is the fix. Trilium is single-owner: there is no second
+account to authorize.
+
+One consequence worth knowing: logout is local only. Authelia advertises no
+`end_session_endpoint`, so Trilium sets `idpLogout: false` and signing out clears its own
+session while the Authelia one stays valid — the next sign-in is one silent redirect. This
+is the stack-wide limitation described under [OIDC](#oidc--for-services-that-can-authenticate-themselves);
+unlike Nextcloud and the others, Trilium cannot be pointed at Authelia's portal logout
+instead, because `postLogoutRedirect` is hardcoded to `/login`.
 
 ## The middleware chain
 
@@ -234,7 +279,7 @@ Do **not** stack `authelia@docker` forward-auth on this router — the Bitwarden
 
 ## Secrets
 
-Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/secrets/`, never committed. All but the last two come from `scripts/authelia-pre-start.sh`:
+Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/secrets/`, never committed. They come from `scripts/authelia-pre-start.sh`, except where a row names its own writer:
 
 | Secret | Purpose |
 |--------|---------|
@@ -252,16 +297,20 @@ Generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/se
 | `freshrss_oidc_crypto_key` | `OIDCCryptoPassphrase` for FreshRSS's `mod_auth_openidc` — it encrypts that module's session cookie and cache, so it is independent of `PASSWORD` and regenerating it only signs everyone out. Written by `scripts/freshrss-pre-start.sh` |
 | `homepage_auth_secret` | `HOMEPAGE_AUTH_SECRET` — the key NextAuth signs and encrypts Homepage's session cookie with. Independent of `PASSWORD`; regenerating it only signs everyone out. Written by `scripts/homepage-pre-start.sh` |
 
-Two more are generated per-service under `${DATA_LOCATION}`, mode `600`, for the same reason as the
-Vaultwarden token — `llm.<HOST_NAME>` carries no forward-auth, so a `PASSWORD` leak must not also be
-admin over it:
+The gateway keeps its own under `${DATA_LOCATION}/agentgateway/secrets/`, mode `600`, for the same
+reason as the Vaultwarden token — `llm.<HOST_NAME>` carries no forward-auth, so a `PASSWORD` leak must
+not also be admin over it. `make api-keys` prints the three a client presents:
 
 | Secret | Purpose |
 |--------|---------|
-| `agentgateway/secrets/cookie_secret` | AES-256-GCM key for agentgateway's OIDC session cookie. Regenerating it only logs everyone out |
-| `agentgateway/secrets/llm_api_key` | The virtual key every `/v1` caller presents. Exported as `sk-<key>` into the gateway's own `apiKey` policy and into the `open-webui` entrypoint from the same file, so the caller and the gateway cannot disagree. Open WebUI mounts **this file alone**, not the directory: the cookie secret next to it signs admin sessions |
+| `cookie_secret` | AES-256-GCM key for agentgateway's OIDC session cookie. Regenerating it only logs everyone out |
+| `llm_api_key` | The virtual key every `/v1` caller presents. Exported as `sk-<key>` into the gateway's own `apiKey` policy and into the `open-webui` entrypoint from the same file, so the caller and the gateway cannot disagree. Open WebUI mounts **this file alone**, not the directory: the cookie secret next to it signs admin sessions |
+| `agent_api_key` | The same, for tools on other machines, on the `/groq/v1` and `/openrouter/v1` routes — separate so revoking one does not lock the other out |
+| `trilium_llm_key` | The virtual key Trilium's AI assistant presents to `/v1`. Separate from `llm_api_key` so revoking the notes' access to the models does not log Open WebUI out |
+| `mcp_api_key` | The inbound key for `/mcp`. Everything behind it reads and writes every note, so it is not shared with `/v1` |
+| `trilium_etapi_token` | Trilium's own API token, which the MCP target presents back to it. Minted by `scripts/trilium-bootstrap.sh`, beside the keys above rather than under Trilium's data directory — that one its container `chown -R`'s to uid 1000 on every start. Paste one here by hand from *Options → ETAPI* when the owner password is not `${PASSWORD}` |
 
-`scripts/agentgateway-pre-start.sh` copies those two and the OIDC client secret into
+`scripts/agentgateway-pre-start.sh` copies those and the OIDC client secret into
 `config/agentgateway/agentgateway.env` (mode `600`, gitignored), because the agentgateway image is
 distroless — no shell — so the `export $(cat …)` entrypoint the other services use is not available and
 an `env_file` is. Those values are frozen at container creation: pick a change up with

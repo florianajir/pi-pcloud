@@ -29,12 +29,16 @@ WRITER_GID="${WRITER_GID:-1000}"
 main() {
     local data_dir="" secrets_dir="" cookie_file="" key_file="" agent_key_file=""
     local client_secret="" cookie_secret="" llm_api_key="" agent_api_key=""
+    local trilium_key_file="" mcp_key_file="" trilium_llm_key="" mcp_api_key=""
+    local trilium_etapi_token=""
 
     data_dir="$(resolve_data_location_path)/agentgateway"
     secrets_dir="$data_dir/secrets"
     cookie_file="$secrets_dir/cookie_secret"
     key_file="$secrets_dir/llm_api_key"
     agent_key_file="$secrets_dir/agent_api_key"
+    trilium_key_file="$secrets_dir/trilium_llm_key"
+    mcp_key_file="$secrets_dir/mcp_api_key"
 
     mkdir -p "$secrets_dir"
     safe_chmod 700 "$secrets_dir"
@@ -69,6 +73,23 @@ main() {
         safe_chmod 600 "$agent_key_file"
         log "Generated the agentgateway agent API key"
     fi
+    # Trilium's own /v1 credential, separate for the same reason agent_api_key
+    # is: revoking the notes' access to the models must not log the chat out.
+    if [ ! -s "$trilium_key_file" ]; then
+        write_file_atomic "$trilium_key_file" generate_secret \
+            || die "Failed to generate the Trilium LLM API key"
+        safe_chmod 600 "$trilium_key_file"
+        log "Generated the Trilium LLM API key"
+    fi
+    # The inbound credential for /mcp, a different surface from /v1 with no
+    # gate of its own by default (docs/AI.md). Everything behind it reads and
+    # writes every note, so it is nobody else's key.
+    if [ ! -s "$mcp_key_file" ]; then
+        write_file_atomic "$mcp_key_file" generate_secret \
+            || die "Failed to generate the agentgateway MCP API key"
+        safe_chmod 600 "$mcp_key_file"
+        log "Generated the agentgateway MCP API key"
+    fi
     # -R, and after the writes: a root-run systemd boot leaves both a 0700
     # directory the next non-root run cannot mktemp in and 0600 files it cannot
     # read, and this is a blocking pre-start hook.
@@ -77,6 +98,18 @@ main() {
     cookie_secret="$(cat "$cookie_file")"
     llm_api_key="sk-$(cat "$key_file")"
     agent_api_key="sk-$(cat "$agent_key_file")"
+    trilium_llm_key="sk-$(cat "$trilium_key_file")"
+    mcp_api_key="sk-$(cat "$mcp_key_file")"
+
+    # Minted post-start by scripts/trilium-bootstrap.sh, which re-runs this
+    # hook and recreates agentgateway once it holds the real one - so the gap
+    # closes inside the same `make update`.
+    #
+    # The placeholder is not cosmetic: an empty expansion leaves a null where
+    # config.yaml wants a string and agentgateway refuses the whole mcp:
+    # section. A wrong token 401s one target; an empty one downs the gateway.
+    trilium_etapi_token="$(read_trilium_etapi_token)"
+    [ -n "$trilium_etapi_token" ] || trilium_etapi_token="pending-trilium-bootstrap"
 
     client_secret="$(get_oidc_secret agentgateway)" || client_secret=""
     if [ -z "$client_secret" ]; then
@@ -85,8 +118,9 @@ main() {
     fi
 
     mkdir -p "$AGW_ENV_DIR"
-    printf 'OIDC_COOKIE_SECRET=%s\nUI_CLIENT_SECRET=%s\nLLM_API_KEY=%s\nAGENT_API_KEY=%s\n' \
+    printf 'OIDC_COOKIE_SECRET=%s\nUI_CLIENT_SECRET=%s\nLLM_API_KEY=%s\nAGENT_API_KEY=%s\nTRILIUM_LLM_KEY=%s\nMCP_API_KEY=%s\nTRILIUM_ETAPI_TOKEN=%s\n' \
         "$cookie_secret" "$client_secret" "$llm_api_key" "$agent_api_key" \
+        "$trilium_llm_key" "$mcp_api_key" "$trilium_etapi_token" \
         | write_secret_file "$AGW_ENV_FILE" \
         || die "Failed to write $AGW_ENV_FILE"
     safe_chmod 600 "$AGW_ENV_FILE"

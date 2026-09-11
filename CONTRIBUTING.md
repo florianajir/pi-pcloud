@@ -13,8 +13,25 @@ Found a security issue? Please report it privately through GitHub's [security ad
 ```bash
 git clone https://github.com/florianajir/pi-pcloud.git
 cd pi-pcloud
-make test          # installer, CLI, check-env, service-selection, start-sequence and compose-invariant suites; touches nothing on the host
+make test          # installer, CLI, check-env, service-selection, start-sequence, compose-invariant and Trilium-API-contract suites
 make lint          # every static check CI runs: shell, YAML, Python, Dockerfiles, workflows, secrets
+```
+
+All of these leave the running stack alone. One is not purely static, though:
+`tests/trilium-api-contract.sh` starts a throwaway Trilium from the image
+`compose.yaml` pins — its own container, its own network, no volumes and no
+published ports — and pulls that image if it is not already local.
+
+It exists because `scripts/trilium-bootstrap.sh` drives Trilium's *private*
+endpoints (the setup wizard, a password sign-in, the CSRF handshake,
+`PUT /api/options`), none of which Trilium exposes as configuration, and they
+have moved before. The bootstrap is deliberately tolerant — declining is correct
+on an instance whose password the stack does not own — so without this test an
+image bump that broke the wiring would look exactly like a hook correctly
+stepping aside. Point it at a candidate before committing a bump:
+
+```bash
+TRILIUM_CONTRACT_IMAGE=ghcr.io/triliumnext/trilium:v0.106.0 sh tests/trilium-api-contract.sh
 ```
 
 `make lint` runs `scripts/lint.sh`, which the CI workflow calls too, so a green

@@ -79,6 +79,7 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **Shelfmark** | Book and audiobook search; files what it downloads into the Kavita Books library | users |
 | **Audiobookshelf** | Audiobook player for `download/audiobooks/`, with Audible metadata matching and progress sync | users |
 | **FreshRSS** | RSS/Atom reader; per-account subscriptions and read state in Postgres, refreshed by its own cron | users, and Google Reader API clients |
+| **Trilium** | Personal knowledge base: a single-owner note tree in SQLite, edited in the browser | the owner, plus the Web Clipper and ETAPI scripts |
 | **Stremio + Comet** | Streaming server and its debrid addon | users |
 | **stremio-lan** | The same Stremio server on a LAN macvlan address instead of the VPN, for DLNA casting — mutually exclusive with `stremio` | users, LAN renderers |
 | **Open WebUI** | Local AI chat frontend — see [Local AI](AI.md) | users |

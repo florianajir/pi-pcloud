@@ -127,7 +127,7 @@ each surface has to gate itself:
 | `/ui` | `ui.policies.oidc` | Authelia, `admin_only` — the `admin` group with 2FA |
 | `/v1` | `llm.policies.apiKey`, `mode: strict` | 401 without a key |
 | `/groq/v1`, `/openrouter/v1` | each route's own `policies.apiKey` | 401 without a key |
-| `/mcp` | whatever policy is attached to the target | **nothing by default** |
+| `/mcp` | `mcp.policies.apiKey`, `mode: strict` | 401 without a key — a *different* key from `/v1`'s |
 
 The third row repeats the second rather than inheriting it: `llm.policies.apiKey`
 is attached to the `llm:` section and does not cover a top-level route. Drop that
@@ -144,14 +144,60 @@ models, the providers and the credentials through the browser, everyone else con
 WebUI and any script holding one are untouched by it, and none of them could complete an interactive
 login anyway.
 
-The third row is the one to watch. An MCP target you add is served with no policy on it, so attach one —
-`jwtAuth`, `apiKey` or `basicAuth` all work there — before pointing anything at `/mcp`.
+The fourth row used to read "nothing by default", and that is still what an MCP target added through the
+UI gets: the `apiKey` policy on `llm:` is attached to that section and does not reach a target. `mcp:`
+now carries its own, with its own key — whoever holds it reads and writes every note through the Trilium
+target below, which is not what an `/v1` key is for. `jwtAuth` and `basicAuth` work there too.
 
 The MCP Authorization spec's own flow (`mcpAuthentication`) is not wired. As written it expects the
 identity provider to support Dynamic Client Registration, and Authelia does not — its discovery document
 publishes no `registration_endpoint`. Setting `clientId` and `clientSecret` on the policy short-circuits
 registration with a client declared in `config/authelia/configuration.yml.template`, which is the way in
 if you want it; every MCP client then shares that one registration.
+
+### Trilium, on both sides of the gateway
+
+Trilium is a consumer of the LLM API *and* a target on the MCP one, and neither side is configurable
+from the environment: `config.ts` has no AI section at all, so `aiEnabled`, `mcpEnabled` and
+`llmProviders` are rows in Trilium's own database. The only way in is `PUT /api/options`, which wants a
+session cookie **and** a CSRF token — there is no ETAPI equivalent — and `POST /login` hands the browser
+to Authelia the moment SSO is enrolled. So the window in which any of it can be scripted is *before*
+that enrolment, which is where `scripts/trilium-bootstrap.sh` runs on a fresh install:
+
+1. creates the initial document with `?skipDemoDb`, then sets the owner password to `${PASSWORD}`
+   (`POST /set-password`), claiming the instance. The 177-note *Trilium Demo* tree the wizard would
+   otherwise seed is left out — a personal knowledge base should start empty. The built-in help
+   subtree is separate and stays. Upstream reads that flag as `!== undefined`, so its *presence* is
+   the switch and `?skipDemoDb=false` would skip the demo just as thoroughly
+2. opens a session, reads the CSRF token off `GET /bootstrap`
+3. writes `aiEnabled`, `mcpEnabled` and an `llmProviders` entry pointing at `http://agentgateway:4000/v1`
+   with `${TRILIUM_LLM_KEY}` — provider type `openai-compatible`, whose `baseURL` is honoured, rather
+   than `openai`, which talks to api.openai.com whatever you set
+4. mints an ETAPI token (`POST /api/login/token`) for agentgateway's MCP target
+
+Every one of those calls is a private endpoint rather than a published API, and they have moved before —
+`/api/login/token` answers `{"token": ...}` while the project's own `internal.openapi.yaml` still says
+`{"authToken": ...}`. `tests/trilium-api-contract.sh` asserts each of them against the pinned image, so an
+image bump that breaks the wiring fails a test instead of quietly wiring nothing. Run it against a
+candidate image before bumping; see [CONTRIBUTING](../CONTRIBUTING.md).
+
+Step 4 is the only one that still works afterwards: that route verifies the password itself instead of
+deferring to Authelia. The rest is a fresh-install path and says so when it declines —
+
+**On an instance whose password this stack did not set, all of it declines.** The hook is not a repair
+tool: it writes nothing it cannot verify, and an owner who chose their own password in the setup wizard
+keeps it. Then the manual equivalents are Trilium's *Options → AI* for the provider and the MCP toggle,
+and *Options → ETAPI* for the token, which goes beside agentgateway's own keys under
+`${DATA_LOCATION}/agentgateway/secrets/` — `agentgateway-pre-start.sh` reads it from there on the
+next run. Not under Trilium's data directory, which that container `chown -R`'s to uid 1000 on
+every start, leaving a hook that runs as anyone else unable to manage a file inside it.
+
+That file expands into the MCP target's `Authorization` header, and it must never be empty: agentgateway
+substitutes the reference before parsing, so an unset token leaves a null where it wants a string and it
+refuses the whole `mcp:` section at startup — the gateway goes down, not just the target. Hence the
+`pending-trilium-bootstrap` placeholder, which Trilium simply answers 401 to. For the same class of
+reason the section carries `failureMode: failOpen`: `trilium` is an optional profile, and a target that
+cannot initialize should not take `/mcp` down with it.
 
 ### The key that is not `PASSWORD`
 
