@@ -21,7 +21,7 @@
 # enable (and config, for newly-enabled services) runs the same per-service
 # hooks the systemd unit runs around `docker compose up`:
 #   scripts/<svc>-pre-start.sh                      before starting
-#   scripts/<svc>-*bootstrap.sh                     after starting
+#   scripts/<svc>-*bootstrap.{sh,py}                after starting
 # Hooks are found by filename convention, never hardcoded, so future services
 # get theirs automatically. Post hooks tolerate failure, like the systemd
 # unit's `-` prefix does.
@@ -212,17 +212,18 @@ run_compose_up_with() {
     fi
 }
 
-# Run scripts/<name> with /bin/sh if it exists; tolerate failure like the
-# systemd unit's `-` prefix does. Dry mode prints instead.
+# Run scripts/<name> if it exists, under the interpreter its extension calls
+# for; tolerate failure like the systemd unit's `-` prefix does. Dry mode prints
+# instead.
 run_hook() {
     _hook="$PROJECT_DIR/scripts/$1"
     [ -f "$_hook" ] || return 0
     if is_dry_run; then
-        echo "DRY-RUN: /bin/sh $_hook"
+        echo "DRY-RUN: $(script_interpreter "$_hook") $_hook"
         return 0
     fi
     log "Running hook $1..."
-    /bin/sh "$_hook" || log "warning: hook $1 failed (continuing)"
+    run_script "$_hook" || log "warning: hook $1 failed (continuing)"
 }
 
 # Same, for the pre-start hooks: a failure there stops the start, exactly as it
@@ -234,24 +235,32 @@ run_pre_start_hook() {
     _hook="$PROJECT_DIR/scripts/$1"
     [ -f "$_hook" ] || return 0
     if is_dry_run; then
-        echo "DRY-RUN: /bin/sh $_hook"
+        echo "DRY-RUN: $(script_interpreter "$_hook") $_hook"
         return 0
     fi
     log "Running hook $1..."
-    /bin/sh "$_hook" || die "hook $1 failed; nothing was started"
+    run_script "$_hook" || die "hook $1 failed; nothing was started"
 }
 
-# Every scripts/<svc>-*bootstrap.sh, matching stack-up.sh's POST_START_HOOKS.
-# Two exact names used to be hardcoded here, which missed the -settings- and
-# -library- ones and left those services half-configured.
+# Every scripts/<svc>-*bootstrap.{sh,py}, matching run-hooks.sh's
+# POST_START_HOOKS. Two exact names used to be hardcoded here, which missed the
+# -settings- and -library- ones and left those services half-configured.
 #
 # A script belongs to the longest service name prefixing it, so
-# beszel-agent-bootstrap.sh stays beszel-agent's and is not also run for beszel.
+# beszel-agent-bootstrap.py stays beszel-agent's and is not also run for beszel.
+#
+# A .py beside a .sh of the same stem is the wrapper case (kapowarr's runs
+# inside the container, uptime-kuma's in a throwaway one): the .sh is the entry
+# point and running the .py here as well would run it twice, on the host, where
+# it cannot reach what it configures.
 run_post_start_hooks() {
     _svc="$1"
     _known="$2"
-    for _hook in "$PROJECT_DIR/scripts/$_svc"-*bootstrap.sh; do
+    for _hook in "$PROJECT_DIR/scripts/$_svc"-*bootstrap.sh "$PROJECT_DIR/scripts/$_svc"-*bootstrap.py; do
         [ -f "$_hook" ] || continue
+        case "$_hook" in
+            *.py) [ -f "${_hook%.py}.sh" ] && continue ;;
+        esac
         _base="${_hook##*/}"
         _owner="$_svc"
         for _other in $_known; do

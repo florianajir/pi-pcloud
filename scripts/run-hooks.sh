@@ -28,6 +28,10 @@
 # separated, for a service more than one profile starts - agentgateway runs
 # whenever open-webui does, so its hook has to too.
 #
+# The extension is load-bearing: lib.sh's run_script picks python3 for a .py
+# and sh for everything else, so a hook that changes language changes its
+# entry here and nothing else.
+#
 # Host-only, never mounted into a container, so sourcing lib.sh is fine here.
 
 set -eu
@@ -84,7 +88,7 @@ n8n:n8n-pre-start.sh
 POST_START_HOOKS='
 postgres-bootstrap.sh
 headscale-init.sh
-beszel-agent:beszel-agent-bootstrap.sh
+beszel-agent:beszel-agent-bootstrap.py
 dockhand:dockhand-oidc-bootstrap.sh
 nextcloud:nextcloud-oidc-bootstrap.sh
 pihole-bootstrap.sh
@@ -152,5 +156,5 @@ for entry in $list; do
         continue
     fi
 
-    /bin/sh "$SCRIPT_DIR/$script" || hook_problem "$script failed"
+    run_script "$script" || hook_problem "$script failed"
 done

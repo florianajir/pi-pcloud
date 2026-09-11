@@ -23,7 +23,7 @@ Configured automatically from `.env`:
 | **Vaultwarden** | Invitations, and the whole emergency-access flow (invite, grant, takeover notice). Emergency access is useless without working SMTP — and since `SSO_ONLY` is on, the trusted contact also needs an LLDAP account. See [Security](SECURITY.md#vaultwarden) |
 | **n8n** | Workflow **Send Email** nodes and error notifications (`N8N_SMTP_*`) |
 | **ntfy** | Email delivery for topics, when a subscriber asks for it |
-| **Beszel** | Alert emails, configured through its API by `scripts/beszel-agent-bootstrap.sh` |
+| **Beszel** | Alert emails, configured through its API by `scripts/beszel-agent-bootstrap.py` |
 
 Configured in their own UI — they don't read `.env`:
 

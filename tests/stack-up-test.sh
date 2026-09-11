@@ -45,9 +45,23 @@ lacks() {
 
 # The entries run-hooks.sh declares, in order: "script.sh", "service:script.sh",
 # or "service,service:script.sh" for a hook whose service is started by more
-# than one profile.
+# than one profile. The extension is part of the entry: lib.sh's run_script
+# reads it to pick sh or python3, so a hook that changed language while keeping
+# its old suffix here would be handed to the wrong interpreter.
 hook_entries() {
-    grep -oE '^[a-z0-9,-]*:?[a-z0-9-]+\.sh$' "$HOOKS"
+    grep -oE '^[a-z0-9,-]*:?[a-z0-9-]+\.(sh|py)$' "$HOOKS"
+}
+
+# One stub per declared hook, announcing itself so the run is a transcript. Each
+# is written in the language its extension claims, or the dispatch under test is
+# never exercised.
+write_stubs() {
+    hook_entries | sed 's/.*://' | sort -u | while read -r name; do
+        case "$name" in
+            *.py) printf '#!/usr/bin/env python3\nprint("HOOK %s")\n' "$name" ;;
+            *) printf '#!/bin/sh\necho "HOOK %s"\n' "$name" ;;
+        esac >"$WORK/scripts/$name"
+    done
 }
 
 # --- the sequence is complete -----------------------------------------------
@@ -57,9 +71,23 @@ hook_entries() {
 # later is covered without touching this test.
 
 declared="$(hook_entries | sed 's/.*://' | sort -u)"
-for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*-bootstrap.sh; do
+for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*-bootstrap.sh \
+             "$REPO_DIR"/scripts/*-bootstrap.py; do
     name="$(basename "$path")"
+
+    # A .py that runs somewhere other than the host is declared through its
+    # sibling wrapper instead: uptime-kuma's goes into a throwaway container and
+    # kapowarr's into Kapowarr itself (gluetun's namespace), so the entry in
+    # run-hooks.sh is the .sh that performs that hand-off. Same-stem only, so a
+    # .py with no wrapper at all is still caught.
+    case "$name" in
+        *.py) wrapper="${name%.py}.sh" ;;
+        *) wrapper="" ;;
+    esac
+
     if printf '%s\n' "$declared" | grep -qx "$name"; then
+        pass=$((pass + 1))
+    elif [ -n "$wrapper" ] && printf '%s\n' "$declared" | grep -qx "$wrapper"; then
         pass=$((pass + 1))
     else
         fail=$((fail + 1))
@@ -79,8 +107,9 @@ done
 # safe_chmod is the signal because it is lib.sh's host-path helper: a bootstrap
 # that writes inside a container (shelfmark's, through `docker exec`) chowns to
 # the service's own uid instead and must not appear here.
-for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*bootstrap.sh; do
-    grep -qE 'safe_chmod 6[0-7][0-7]' "$path" || continue
+for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*bootstrap.sh \
+             "$REPO_DIR"/scripts/*bootstrap.py; do
+    grep -qE 'safe_chmod[ (](0o)?6[0-7][0-7]' "$path" || continue
     name="$(basename "$path")"
     if grep -q 'fix_ownership' "$path"; then
         pass=$((pass + 1))
@@ -114,7 +143,7 @@ contains "the bootstrap prefixes the key it stores in the database" \
 # And exactly one home for it: a list left behind in stack-up.sh would be the
 # one the boot path used while CI kept running the other.
 ok "stack-up.sh declares no hook list of its own" \
-    "$(grep -cE '^[a-z0-9,-]*:?[a-z0-9-]+\.sh$' "$SCRIPT" || true)" 0
+    "$(grep -cE '^[a-z0-9,-]*:?[a-z0-9-]+\.(sh|py)$' "$SCRIPT" || true)" 0
 
 # The unit must go through the script, or boot and update drift apart again.
 contains "the unit starts the stack through stack-up.sh" \
@@ -125,10 +154,7 @@ contains "the unit starts the stack through stack-up.sh" \
 mkdir -p "$WORK/scripts" "$WORK/bin"
 cp "$SCRIPT" "$HOOKS" "$REPO_DIR/scripts/lib.sh" "$REPO_DIR/scripts/run-if-enabled.sh" "$WORK/scripts/"
 
-# One stub per declared hook, announcing itself so the run is a transcript.
-hook_entries | sed 's/.*://' | sort -u | while read -r name; do
-    printf '#!/bin/sh\necho "HOOK %s"\n' "$name" >"$WORK/scripts/$name"
-done
+write_stubs
 
 # Announces every call, and fails the next `up` once when the control file
 # exists — enough to exercise the fallback without looping.
@@ -182,6 +208,12 @@ contains "an ungated hook always runs"        "$out" "HOOK authelia-pre-start.sh
 contains "the selected service's hook runs"   "$out" "HOOK qbittorrent-pre-start.sh"
 contains "and so does its bootstrap"          "$out" "HOOK qbittorrent-bootstrap.sh"
 lacks    "an unselected service is skipped"   "$out" "HOOK prowlarr-pre-start.sh"
+
+# A .py hook is run by python3, not handed to sh: run-hooks.sh invoked every
+# entry as `/bin/sh <script>`, which turns a Python bootstrap into a parse error
+# on line 1, reported as the hook "failing" with no hint why.
+out="$(run beszel-agent)"
+contains "a python hook runs under python3"   "$out" "HOOK beszel-agent-bootstrap.py"
 
 # agentgateway carries open-webui's profile as well as its own, so a hook gated
 # on its own name alone was skipped on exactly the boots that start it.
@@ -313,9 +345,7 @@ lacks    "without taking the stack down"        "$out" "DOCKER compose down"
 
 # The cases above left two stubs broken on purpose; put every one of them back,
 # so what follows tests run-hooks.sh and not the wreckage of an earlier case.
-hook_entries | sed 's/.*://' | sort -u | while read -r name; do
-    printf '#!/bin/sh\necho "HOOK %s"\n' "$name" >"$WORK/scripts/$name"
-done
+write_stubs
 
 # run_hooks <compose-profiles> <phase> [mode] : as run_rc, for run-hooks.sh.
 run_hooks() {

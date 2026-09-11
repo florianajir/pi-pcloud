@@ -25,7 +25,7 @@ Read the source, then the doc — not the other way around.
 | `docs/TROUBLESHOOTING.md` | the command in each block actually runs as written, against the container/host it names |
 | `docs/SECURITY.md` | Traefik labels in `compose.yaml` (middlewares per router, headers values), `config/authelia/configuration.yml.template` (access_control, session, OIDC clients), `scripts/authelia-pre-start.sh` (secrets) |
 | `docs/NETWORKING.md` | compose `networks:` (subnets, static IPs, internal flags), published `ports:`, Pi-hole/Unbound config, `config/headscale/config.yaml` DNS block |
-| `docs/MONITORING.md` | `scripts/uptime-kuma-bootstrap.py` (GROUPS), `scripts/beszel-agent-bootstrap.sh` (thresholds), `scripts/ntfy-pre-start.sh` (topics, accounts), `scripts/authelia-ntfy-watch.sh`, `config/backrest/config.json.template` (schedule, retention, hooks) |
+| `docs/MONITORING.md` | `scripts/uptime-kuma-bootstrap.py` (GROUPS), `scripts/beszel-agent-bootstrap.py` (thresholds), `scripts/ntfy-pre-start.sh` (topics, accounts), `scripts/authelia-ntfy-watch.sh`, `config/backrest/config.json.template` (schedule, retention, hooks) |
 | `docs/EMAIL.md` | compose SMTP env per service, `config/authelia/configuration.yml.template` notifier block |
 | `docs/TAILSCALE.md` | `config/headscale/config.yaml`, tailscale service `TS_EXTRA_ARGS`, `Makefile` headscale targets, `scripts/headscale-init.sh` |
 | systemd claims anywhere | `config/systemd/system/pi-pcloud.service`, and `scripts/stack-up.sh` for which scripts run, pre vs post |

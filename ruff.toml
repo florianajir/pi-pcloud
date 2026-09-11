@@ -1,11 +1,14 @@
 # Static analysis for the Python helpers: the FastAPI shims baked into the
-# piper/parakeet/system-tools images, and the two scripts that scripts/*.sh
-# drive (services-picker on the host, uptime-kuma-bootstrap in a container).
+# piper/parakeet/system-tools images, and the scripts AGENTS.md's language rule
+# puts on this side - the host-side bootstraps and pilib.py, services-picker,
+# and the two that run somewhere else (uptime-kuma-bootstrap in a throwaway
+# container, kapowarr-bootstrap piped into Kapowarr's own interpreter).
 #
 # py311 is the floor, not a preference: the three baked images are
 # python:3.14-slim and uptime-kuma-bootstrap.py runs in a python:3.12-slim
-# throwaway container, but services-picker.py runs on the host's interpreter,
-# which is 3.11 on Raspberry Pi OS bookworm.
+# throwaway container, but services-picker.py, pilib.py and
+# beszel-agent-bootstrap.py run on the host's interpreter, which is 3.11 on
+# Raspberry Pi OS bookworm.
 target-version = "py311"
 
 # Matches the yamllint ceiling, so one number governs the whole repo.
