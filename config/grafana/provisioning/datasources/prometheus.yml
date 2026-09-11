@@ -1,0 +1,25 @@
+apiVersion: 1
+
+# Provisioned by file so Grafana's SQLite stays disposable: nothing here has to
+# be clicked, and nothing has to be backed up. `deleteDatasources` first, so a
+# datasource left behind by an earlier uid is not orphaned next to this one.
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # Pinned, because config/grafana/dashboards/pi-pcloud.json references it by
+    # uid. A generated uid would leave every panel pointing at nothing.
+    uid: pi-prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    # Kept in sync by hand with prometheus.yml's scrape_interval: Grafana uses
+    # it as the floor for $__rate_interval, and a value below the real interval
+    # is what produces the sawtooth rate() graphs that look like packet loss.
+    jsonData:
+      timeInterval: 30s
+      httpMethod: POST
+    editable: false

@@ -1,16 +1,17 @@
 # Monitoring & Alerts
 
-Five things watch the stack, each covering what the others cannot see:
+Six things watch the stack, each covering what the others cannot see:
 
 | Watcher | Covers | Notifies |
 |---------|--------|----------|
 | **Beszel** | The hardware: CPU, RAM, swap, disk, temperature, network | ntfy + email, after 5 minutes over a threshold |
 | **Uptime Kuma** | The services, *and the request path through Traefik* | ntfy, priority by blast radius |
+| **Prometheus + Grafana** | What the services were *doing*: request rates, latencies, token use, queue depths, auth outcomes — 90 days of them | nothing. It is asked, it does not tell |
 | **Dockhand** | Container events: OOM kills, healthcheck failures | ntfy |
 | **Backrest** | Backups that fail | ntfy |
 | **Authelia log watcher** | Failed logins, unknown users, regulation bans, rejected OIDC grants | ntfy |
 
-Everything converges on ntfy, so a phone is the only dashboard you need to look at.
+Everything that alerts converges on ntfy, so a phone is still the only dashboard you need to *watch*. Grafana is the one you go and look at once a push has told you something is wrong.
 
 ## ntfy topics
 
@@ -98,7 +99,7 @@ The group decides the check interval, the retry budget and the ntfy priority:
 | **External Chain** | route checks, TLS certificate | 120 s | 4 (high) | each monitor |
 | **Personal Data** | immich, immich-ml, nextcloud, vaultwarden, kavita, audiobookshelf, freshrss, trilium, backrest, backup freshness | 120 s | 3 | each monitor |
 | **Media & Downloads** | qbittorrent, stremio, stremio-lan, comet, prowlarr, kapowarr, flaresolverr, shelfmark, route qbittorrent | 300 s | 2 (low) | the group only |
-| **Tools & Observability** | homepage, beszel, beszel-agent, dockhand | 300 s | 2 (low) | the group only |
+| **Tools & Observability** | homepage, beszel, beszel-agent, dockhand, prometheus, grafana | 300 s | 2 (low) | the group only |
 | **Automation & AI** | n8n, n8n-runners, open-webui, llama-cpp, piper, searxng, agentgateway | 300 s | 2 (low) | the group only |
 
 `ntfy` sits in **Core** because it delivers every other alert. A container in `compose.yaml` but in no group above is monitored under **Tools & Observability**.
@@ -138,6 +139,147 @@ The `uptimekuma` widget reads the public **`homepage` status page**, which lists
 ### Known blind spot
 
 Uptime Kuma cannot alert on its own host being down. A whole-Pi outage — power, kernel, disk — is invisible to it. Covering that needs an external heartbeat service.
+
+## Prometheus — the numbers
+
+`prometheus` + `grafana`, both optional profiles, both `["<name>", "all"]`.
+
+### Where it sits between the other two
+
+Beszel, Uptime Kuma and Prometheus answer three different questions, and each is useless for the other two:
+
+| | Beszel | Uptime Kuma | Prometheus |
+|---|---|---|---|
+| Question | is the **hardware** healthy? | is the **service** answering? | what was it **doing**, and how much of it? |
+| Subject | the host: CPU, RAM, swap, disk, temperature | one container, one route, one DNS answer | every request, token, job and login the stack handled |
+| Shape | a level against a threshold | up or down | a time series you can slice by router, model, caller, queue |
+| Horizon | aggregated, grows slowly | 90 days, heartbeats aggregated after 24 h | 90 days, capped at 8 GiB |
+| Pushes to ntfy | yes | yes | **no** |
+
+The split is deliberate and there is no plan to merge it. Beszel already covers the host, so **cAdvisor and node_exporter are not in the stack** — they would be a second, disagreeing source for numbers a phone alert already carries. And Prometheus deliberately has **no Alertmanager**: ntfy plus Uptime Kuma already deliver every alert this box has, and a second alerting path would mean two places to silence something at 3 a.m.
+
+What Prometheus adds is the axis the other two have no concept of: *time and quantity*. Uptime Kuma can tell you Immich was up all night; only Prometheus can tell you its thumbnail queue sat at 4 000 for six hours, which is why the Pi felt slow.
+
+### Prometheus has no URL, on purpose
+
+There is no `prometheus.<HOST_NAME>`. The service carries no Traefik labels, no router, no `expose` and no OIDC client — Grafana is the only UI and the only reader.
+
+That is one decision, not an oversight. Prometheus's query API is unauthenticated and it has no concept of a user, so publishing it would mean inventing an access-control story (a router, a middleware, an Authelia rule, a client) for a page whose entire content is already on a Grafana dashboard that *does* have one. The access control is instead that only containers on `frontend` and `ai` can open `:9090` — Prometheus needs both to reach its targets — and the only one that does is Grafana, over `frontend`. Grafana itself is deliberately **not** on `ai`: it dials nothing but `prometheus:9090`, and the browser-facing half of this pair has no business reaching the segment where system-tools holds the Docker socket.
+
+When you do need its own pages — the targets list is the one thing Grafana cannot show you — go in through the container:
+
+```bash
+docker exec pi-prometheus wget -qO- 'http://localhost:9090/api/v1/targets?state=active' \
+  | python3 -m json.tool | grep -E '"(job|health|lastError)"'
+docker exec pi-prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=up'
+```
+
+### Grafana
+
+`https://grafana.<HOST_NAME>`, LAN-only + Authelia forward-auth + Authelia OIDC, `admin` group and 2FA on both gates. Local login is off — and so is HTTP basic auth, which is the one that matters: Grafana's API accepts basic auth from the built-in admin *regardless* of `disable_login_form`, so turning off the form alone would have left `admin` usable by anything on `frontend` that dialled `:3000`. With `GF_AUTH_BASIC_ENABLED=false` the account is inert, which is why no `PASSWORD` is injected into the container.
+
+If OIDC ever breaks and locks you out, the escape hatch is two commands and a restart:
+
+```bash
+# add `- GF_AUTH_BASIC_ENABLED=true` to grafana's environment in compose.yaml, then
+docker compose up -d grafana
+docker exec pi-grafana grafana cli admin reset-admin-password '<new password>'
+```
+
+**The datasource and the dashboard are provisioned from files** — `config/grafana/provisioning/` and `config/grafana/dashboards/pi-pcloud.json` — mounted read-only, with `allowUiUpdates: false`. So Grafana's SQLite database holds nothing but sessions and per-user preferences, which is exactly why **it is absent from Backrest**: losing it costs a re-login, and the dashboard comes back from Git. `allowUiUpdates: false` means Grafana refuses the save outright ("Cannot save provisioned dashboard") rather than letting an edit sit there until a restart quietly drops it. Change `pi-pcloud.json` instead — panel-by-panel edits are still possible in the browser for *trying* something, they just cannot be persisted.
+
+### The dashboard
+
+One dashboard, four rows, sized to a single screen:
+
+| Row | Panels | Reads |
+|-----|--------|-------|
+| **LLM gateway** | spend over the range, tokens/s by model and caller, TTFT p95, request duration p95 | `agentgateway` |
+| **Traefik** | requests/s by router, 4xx and 5xx as a *share* of traffic, router latency p95 | `traefik` |
+| **Authentication** | Authelia attempts succeeded vs failed, regulation bans over the range | `authelia` |
+| **Services** | n8n executions, Immich job queues in flight, Headscale nodes, ntfy messages published | `n8n`, `immich-microservices`, `headscale`, `ntfy` |
+
+`llama-cpp` is scraped but has no panel: the agentgateway row already measures the same requests one layer up, with a `user` label the inference server cannot know. Its own series (`llamacpp:requests_processing`, `llamacpp:kv_cache_usage_ratio`, `llamacpp:predicted_tokens_seconds`) are there in Explore when a slow generation needs attributing to the engine rather than to the gateway.
+
+Two panels are worth knowing the shape of before you read them wrong:
+
+- **The Immich queue panel matches on `__name__`.** Immich puts the queue name in the metric *name*, not in a label (`immich.queues.<queue>.active`), so there is no `queue` label to group by until `label_replace` invents one. That is upstream's shape, not a workaround for ours.
+- **Authelia panels count per graph interval, not per second.** On a household stack these are a handful of events a day, and `rate()` would round them to a flat zero.
+
+### What is scraped, and why nothing needed an exporter
+
+Every target already serves `/metrics` natively or does so behind a single flag. **Not one exporter sidecar was added**, and that constraint is what shaped the list:
+
+| Job | Endpoint | What turned it on |
+|-----|----------|-------------------|
+| `traefik` | `traefik:8080/metrics` | `--metrics.prometheus=true` in `compose.yaml`. It lands on the implicit `traefik` entrypoint, beside `api@internal` — *not* on `websecure`, where `/metrics` is a 404. `--metrics.prometheus.addRoutersLabels=true` beside it is what makes the rate readable per site; router labels are off by default |
+| `authelia` | `authelia:9959/metrics` | `telemetry.metrics` in `config/authelia/configuration.yml.template`, with the address spelled out rather than defaulted. Its own listener, so `auth.<HOST_NAME>/metrics` stays a 404 |
+| `headscale` | `headscale:9090/metrics` | nothing — `metrics_listen_addr` was already set and the port already exposed |
+| `agentgateway` | `agentgateway:15020/metrics` | nothing — the stats listener is on by default; only the `expose` is new |
+| `llama-cpp` | `llama-cpp:8080/metrics` | `LLAMA_ARG_ENDPOINT_METRICS=1` |
+| `n8n` | `n8n:5678/metrics` | `N8N_METRICS=true` |
+| `immich-api` | `immich-server:8081/metrics` | `IMMICH_TELEMETRY_INCLUDE=all` |
+| `immich-microservices` | `immich-server:8082/metrics` | the same variable — one container, two workers, two ports, so two jobs |
+| `ntfy` | `ntfy:9090/metrics` | `NTFY_METRICS_LISTEN_HTTP=:9090` |
+| `prometheus`, `grafana` | themselves | on by default |
+
+Targets are **static**, not discovered. `docker_sd_configs` would mean mounting the Docker socket into the container, and a process whose job is to read counters has no business being able to inspect and control every container on the host. The cost is visible: a service you have not enabled shows as **DOWN** on Prometheus's targets page. That is expected, nothing alerts on it, and the dashboard panels simply show no data — availability is Uptime Kuma's job.
+
+### What enabling metrics exposes
+
+Three of those flags widen a surface, and it is worth being explicit about which:
+
+- **n8n has no separate telemetry listener.** `/metrics` is served on the port Traefik routes and n8n does not gate it, so `n8n.<HOST_NAME>/metrics` is now readable by anything past the `lan` allowlist. The contents are Node process counters and execution totals; every `N8N_METRICS_INCLUDE_*` option is deliberately left off, so no workflow or node *names* are in there.
+- **Traefik's `/metrics` sits on the same `:8080` as `api@internal`**, and the `internalapi-allow` middleware that restricts the latter to Homepage's address does **not** cover it — the metrics handler is an entrypoint-level handler, not a router. Anything on `frontend` can read router names and request counts. That port is never published to the LAN, and the payload is names and counters, not rules or credentials. `--metrics.prometheus.manualrouting=true` is the lever if that ever stops being acceptable: it removes the automatic handler and exposes a `prometheus@internal` service you route (and gate) yourself.
+- **ntfy uses `NTFY_METRICS_LISTEN_HTTP`, not `NTFY_ENABLE_METRICS`.** The second one adds `/metrics` to ntfy's *public* port; the first opens a separate listener and leaves `ntfy.<HOST_NAME>/metrics` answering the web app, as before.
+
+Everything else (`authelia`, `headscale`, `agentgateway`, `immich`) exports on a dedicated port that has no router in front of it.
+
+### LLM cost is per-caller, and currently empty
+
+`config/agentgateway/config.yaml` adds one field to the gateway's metrics:
+
+```yaml
+config:
+  metrics:
+    fields:
+      add:
+        user: 'apiKey.user'
+```
+
+That puts a `user` label — `open-webui`, `trilium` or `agent`, the metadata on the API key that made the call — on every `gen_ai_*` series and on the HTTP ones beside them, so token use and latency are attributable per caller rather than being one undifferentiated total. Cardinality is bounded by the number of keys. Verified against a running v1.5.0, not inferred.
+
+**The spend panel is empty, and will stay empty until a cost catalog exists.** agentgateway only emits `agentgateway_gen_ai_client_cost_usd_total` when its catalog resolves a price for the model; with `config.modelCatalog` unset every lookup returns `NoCatalog`, which is visible as `agentgateway_cost_catalog_lookups_total{status="NoCatalog"}`. The local model is free, so the only thing a catalog would price is the Groq and OpenRouter path routes — see [What is not scraped](#what-is-not-scraped) below.
+
+### What is not scraped
+
+Four services in the stack expose no metrics of their own and would each need a dedicated exporter container. On a box sized for 8–16 GB that is four more containers for numbers nothing currently asks for, so they are deliberately left out — listed here rather than forgotten:
+
+| Service | Would need | Why it is not here |
+|---------|------------|--------------------|
+| PostgreSQL | `postgres_exporter` | Connection counts and slow queries would be genuinely useful; this is the strongest candidate if the list is ever reopened |
+| Redis (Valkey) | `redis_exporter` | Capped at a 192 MB `maxmemory` and used only as a session/cache store; eviction is the only interesting number and `redis-cli info` answers it |
+| Pi-hole | `pihole_exporter` | The v6 API already answers block rates, and the Homepage widget reads it |
+| Nextcloud | `nextcloud-exporter` | Its serverinfo API needs a token, and the Homepage widget already surfaces what it reports |
+
+Also deliberately absent, and in scope only for a later, separate change:
+
+- **A cost catalog.** `config.modelCatalog` accepts an inline or file-based price list and would light up the spend panel. It is left out because the prices would be hand-maintained with no source of truth in this repository, and the models it would price are added through the agentgateway UI rather than declared in `config.yaml`.
+- **Loki, or logs of any kind.** Logs go to journald, and `journalctl -t pi-<service>` is the interface.
+- **OTLP tracing.** agentgateway already emits OpenTelemetry GenAI semconv natively, so a trace backend is a real option — but it is a separate decision with its own storage budget, not a rider on this one.
+
+### Retention, and what it costs
+
+```
+--storage.tsdb.retention.time=90d
+--storage.tsdb.retention.size=8GiB
+```
+
+Both, not either. The time bound is the intent — a season of history, matching Uptime Kuma's `keepDataPeriodDays` — and the size bound is what stops a cardinality mistake filling the root filesystem before anyone notices. Whichever trips first wins, and the size cap counts the WAL and the head block as well as the compacted blocks.
+
+The cardinality to watch is **Immich**. `IMMICH_TELEMETRY_INCLUDE=all` turns on all five groups, and two of them (`repo`, `io`) are a histogram per repository method and per filesystem operation — by far the largest contributor here. Set `IMMICH_TELEMETRY_EXCLUDE=repo,io` on the `immich-server` service if the size cap starts truncating the window; `host`, `api` and `job` are what the dashboard actually reads.
+
+The TSDB lives in the `prometheus_data` named volume, on the root filesystem rather than under `DATA_LOCATION` — the same reasoning as llama.cpp's weights: high-churn, regenerable, and deliberately out of Backrest. Losing it costs history, not state.
 
 ## Authelia log alerts
 

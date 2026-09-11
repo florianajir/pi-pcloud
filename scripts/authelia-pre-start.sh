@@ -124,9 +124,23 @@ main() {
     fi
 
     # Add a client here when declaring one in configuration.yml.template.
-    for client in nextcloud immich beszel dockhand headplane headscale open-webui kavita vaultwarden shelfmark audiobookshelf agentgateway freshrss homepage trilium; do
+    for client in nextcloud immich beszel dockhand headplane headscale open-webui kavita vaultwarden shelfmark audiobookshelf agentgateway freshrss homepage trilium grafana; do
         generate_oidc_secret "oidc_${client}_secret"
     done
+
+    # 0644, and the only OIDC secret here that is not 0600 — same trade as the
+    # two files redis-pre-start.sh writes. Grafana's image runs as uid 472 and
+    # reads this one itself, through its own `$__file{}` expander, so a 0600
+    # file written by root (systemd) or by the project owner (`make update`) is
+    # unreadable to it: the container exits before serving with "got error
+    # while expanding auth.generic_oauth.client_secret with expander 'file':
+    # permission denied" and crash-loops. Neither writer can hand the file to
+    # 472 without the other losing it; a bind-mounted file is reached by its own
+    # mode inside the container while the host still has to traverse the 0700
+    # directory, which is what carries the protection. Unconditional, not inside
+    # generate_oidc_secret's `-s` guard, so an install that already has the file
+    # at 0600 is repaired on the next run.
+    safe_chmod 644 "$SECRETS_DIR/oidc_grafana_secret.txt"
 
     # Overridable for CI and helper containers, which mount the project read-only.
     LLDAP_CONFIG_DIR="${LLDAP_CONFIG_DIR:-$PROJECT_DIR/config/lldap}"
