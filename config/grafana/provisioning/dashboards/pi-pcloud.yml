@@ -5,19 +5,15 @@ providers:
     orgId: 1
     folder: ""
     type: file
-    # false: removing pi-pcloud.json from config/grafana/dashboards/ is how the
-    # dashboard is retired, and the next restart should take it away with it.
-    # It only guards deletion, not editing - that is the key below.
+    # Removing pi-pcloud.json is how the dashboard is retired, so the next
+    # restart should take it away with it.
     disableDeletion: false
-    # false, and this is the one that keeps the repository authoritative:
-    # Grafana refuses the save outright ("Cannot save provisioned dashboard")
-    # rather than accepting an edit that a later reload would drop. Panel edits
-    # are still possible in the browser for *trying* something; they just
-    # cannot be persisted. Change config/grafana/dashboards/pi-pcloud.json.
+    # What keeps the repository authoritative: Grafana refuses the save
+    # outright rather than letting an edit sit until a reload drops it. Change
+    # config/grafana/dashboards/pi-pcloud.json.
     allowUiUpdates: false
     options:
       path: /var/lib/grafana/dashboards
-      # One flat provider, so the dashboard lands in the General folder named by
-      # `folder` above rather than in one named after the directory it sits in.
-      # There is a single JSON file here and no directory structure to mirror.
+      # One flat file, so there is no directory structure to mirror into
+      # folder names.
       foldersFromFilesStructure: false
