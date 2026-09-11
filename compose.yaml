@@ -639,7 +639,7 @@ services:
       - "homepage.group=Monitoring"
       - "homepage.name=Prometheus"
       - "homepage.icon=prometheus.png"
-      - "homepage.description=Metrics collection behind Grafana"
+      - "homepage.description=Metrics collection and storage"
     cpu_shares: *cpu-prio-batch
     # 32 MiB measured at rest; the rest is headroom for the in-memory head
     # block, which compaction briefly doubles.
@@ -738,7 +738,7 @@ services:
       - "homepage.name=Grafana"
       - "homepage.icon=grafana.png"
       - "homepage.href=https://grafana.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Metric dashboards over Prometheus"
+      - "homepage.description=Metric dashboards and visualisation"
       # No homepage.widget: it authenticates with a local username and
       # password, and basic auth is off above.
       #
