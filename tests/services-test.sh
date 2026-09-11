@@ -151,6 +151,20 @@ ok       "enable open-webui succeeds"          "$rc" 0
 contains "  and runs the dependency's hook"    "$out" "agentgateway-pre-start.sh"
 contains "  starting both"                     "$out" "agentgateway open-webui"
 
+# Grafana's OIDC client secret is written by authelia-pre-start.sh, not by a
+# hook of its own, and compose bind-mounts that one file straight into the
+# container. Without the always-on hooks running here, enabling grafana left the
+# file missing, Docker created a directory at the bind source, and Grafana
+# crash-looped on "is a directory" - so this asserts the hook runs, and runs
+# before the container is created rather than after.
+run_rc beszel enable grafana
+ok       "enable grafana succeeds"             "$rc" 0
+contains "  runs the authelia hook"            "$out" "authelia-pre-start.sh"
+contains "  pulling prometheus in with it"     "$out" "grafana"
+ok       "  before the container is created" \
+    "$(printf '%s\n' "$out" | grep -nE 'authelia-pre-start\.sh|docker compose up -d' \
+        | head -n1 | grep -c 'authelia-pre-start')" 1
+
 # --- the two networking modes stay exclusive ---------------------------------
 
 # "all" already runs stremio, so this must not silently start a second server

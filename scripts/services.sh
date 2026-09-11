@@ -242,6 +242,24 @@ run_pre_start_hook() {
     run_script "$_hook" || die "hook $1 failed; nothing was started"
 }
 
+# Hooks that belong to an always-on service but write files a *newly enabled*
+# one needs. Only `$svc-pre-start.sh` used to run on enable, and every OIDC
+# client secret is written by authelia-pre-start.sh rather than by the client's
+# own hook - so `make enable s=grafana` on a running stack left
+# authelia-config/secrets/oidc_grafana_secret.txt missing, Docker created a
+# *directory* at that single-file bind mount's source, and Grafana crash-looped
+# on "expanding auth.generic_oauth.client_secret ... is a directory" until the
+# directory was removed by hand. Grafana is the one that fails loudly (it mounts
+# the secret); the others just fail to authenticate.
+#
+# Cheap to run unconditionally: the hook compares the rendered configuration.yml
+# before writing it, so enabling a service that is not an OIDC client changes
+# nothing and Authelia is not restarted. Redis's hook is deliberately not here -
+# it is core, so its password file exists by the time anything can be enabled.
+run_shared_pre_start_hooks() {
+    run_pre_start_hook authelia-pre-start.sh
+}
+
 # Every scripts/<svc>-*bootstrap.{sh,py}, matching run-hooks.sh's
 # POST_START_HOOKS. Two exact names used to be hardcoded here, which missed the
 # -settings- and -library- ones and left those services half-configured.
@@ -561,6 +579,7 @@ cmd_enable() {
     # rather than silently doing nothing.
     [ -n "$newly_on" ] || newly_on=" $svc"
 
+    run_shared_pre_start_hooks
     for _svc in $newly_on; do
         run_pre_start_hook "$_svc-pre-start.sh"
     done
@@ -668,6 +687,7 @@ cmd_config() {
     # something does not redraw the whole stack (and does not rebuild images
     # to reach a state it is already in).
     if [ -n "$newly_on" ]; then
+        run_shared_pre_start_hooks
         for svc in $newly_on; do
             run_pre_start_hook "$svc-pre-start.sh"
         done
