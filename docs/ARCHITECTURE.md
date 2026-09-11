@@ -20,7 +20,7 @@ flowchart LR
     subgraph Apps["Routed services"]
       A1["nextcloud · immich · vaultwarden\nn8n · ntfy · kavita"]
       A2["qbittorrent · prowlarr · kapowarr\nstremio (via gluetun)"]
-      A3["open-webui · agentgateway\nbeszel · uptime-kuma · homepage\ndockhand · backrest"]
+      A3["open-webui · agentgateway\nbeszel · uptime-kuma · grafana\nhomepage · dockhand · backrest"]
       Authelia[authelia]
     end
 
@@ -30,6 +30,7 @@ flowchart LR
       LLDAP[(lldap)]
       PiholeDNS[(pihole + unbound)]
       AI["llama-cpp · piper\nparakeet · system-tools"]
+      Prometheus[(prometheus)]
     end
   end
 
@@ -41,6 +42,7 @@ flowchart LR
   Authelia --> LLDAP & Postgres & Redis
   A1 & A3 --> Postgres & Redis
   A3 --> AI
+  Prometheus -.->|scrapes /metrics| A1 & A3 & Traefik & Authelia & AI
   LAN -->|DNS 53| PiholeDNS
   VPN <-->|WireGuard| Tailscale
   Tailscale <--> Headscale
@@ -90,6 +92,8 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **Beszel** | Hardware metrics and threshold alerts | admins |
 | **beszel-agent** | Host-side collector feeding the Beszel hub over a shared Unix socket | Beszel only |
 | **Uptime Kuma** | Service and route monitoring | admins |
+| **Prometheus** | Scrapes the /metrics endpoints the stack already serves and keeps 90 days of them. No UI and no Traefik router — Grafana is the only reader | Grafana |
+| **Grafana** | The dashboards over Prometheus: LLM spend and tokens, Traefik request rates, Authelia outcomes, service queues | admins, 2FA |
 | **Dockhand** | Container management UI | admins, 2FA |
 | **Backrest** | Nightly restic backups | S3 |
 
@@ -150,7 +154,7 @@ Persistent state is split deliberately:
 |-------|------|-----|
 | `${DATA_LOCATION}` (default `./data`) | `nextcloud`, `immich`, `authelia-config`, `lldap`, `vaultwarden`, `uptime-kuma`, `backrest`, `download`, `comics`, `manga`, `n8n`, `open-webui`, `agentgateway`, … | Anything you would miss, sized for media. Backrest mounts most of it read-only |
 | `${POSTGRES_DATA_LOCATION}` (defaults to `${DATA_LOCATION}`) | `postgres18` — the cluster shared by Immich, Nextcloud, Authelia, lldap, Open WebUI, Vaultwarden and FreshRSS | **Point this at solid-state storage.** ~1 GB, and the only thing here that suffers from sharing a spindle with media I/O. See below |
-| Named Docker volumes | Pi-hole, Redis, Headscale, Beszel, ntfy, Kavita config, llama.cpp weights, … | Smaller state, and the model weights that belong on the fast root filesystem rather than in backups |
+| Named Docker volumes | Pi-hole, Redis, Headscale, Beszel, ntfy, Kavita config, llama.cpp weights, Prometheus TSDB, Grafana, … | Smaller state, and the write-heavy or regenerable state that belongs on the fast root filesystem rather than in backups |
 
 `DATA_LOCATION` is usually the largest disk available, which on a Pi is usually an external USB one. That is the right home for originals and downloads and the wrong home for a database: a rotational disk serves random reads at tens of IOPS, and consumer USB-SATA bridges commonly acknowledge a flush before the data reaches the platter, which is a corrupt cluster after a power cut rather than a slow one. `POSTGRES_DATA_LOCATION` exists so the cluster can sit on the root NVMe while the media stays on the big disk. Postgres writes ~350 MB/day here, so the flash wear it adds is immaterial.
 

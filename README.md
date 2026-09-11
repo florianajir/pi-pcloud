@@ -35,7 +35,7 @@ Prefer doing it by hand? See the [Installation guide](docs/INSTALLATION.md).
 - **Private DNS.** Pi-hole filters ads and trackers for your whole LAN; Unbound resolves recursively from the root servers, so no DNS provider sees your queries.
 - **Reachable from anywhere, exposed to no one.** Headscale runs your own Tailscale control plane; everything but the login portal is restricted to your LAN and your tailnet.
 - **Backups you can restore.** Backrest (restic) snapshots app data and databases nightly, encrypted and deduplicated, to any S3-compatible bucket.
-- **Alerts on your phone.** Beszel watches the hardware, Uptime Kuma watches the services *through* Traefik, and everything pushes to ntfy — split into muteable topics.
+- **Alerts on your phone.** Beszel watches the hardware, Uptime Kuma watches the services *through* Traefik, Prometheus records what they were doing at the time, and everything pushes to ntfy — split into muteable topics.
 - **A local AI assistant.** Open WebUI on top of llama.cpp, with speech in and out, running entirely on the Pi's CPU. It can even report the machine's own health. Agentgateway puts one OpenAI-compatible endpoint with virtual keys in front of it, so your editor and your scripts reach the same models — and the same gateway federates MCP tool servers.
 
 ### Why not something else?
@@ -58,7 +58,7 @@ Prefer doing it by hand? See the [Installation guide](docs/INSTALLATION.md).
 | **Notes & knowledge** | Trilium |
 | **Search** | SearXNG |
 | **AI** | Open WebUI, Agentgateway, llama.cpp, Piper (TTS), Parakeet (STT), system-tools |
-| **Monitoring & backup** | Beszel, Uptime Kuma, Homepage, Backrest, Dockhand |
+| **Monitoring & backup** | Beszel, Uptime Kuma, Prometheus + Grafana, Homepage, Backrest, Dockhand |
 | **Infrastructure** | PostgreSQL, Redis (Valkey), ddns-updater |
 
 You don't have to run all of it. Core infrastructure always starts; every other service is toggled per-install with `make enable` / `make disable`, or the `make config` checklist — see [Choosing which services run](docs/CONFIGURATION.md#choosing-which-services-run).

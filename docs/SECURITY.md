@@ -94,6 +94,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | **Audiobookshelf** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required; **no `groups` scope** — it reads the claim as a role and denies anyone outside admin/user/guest |
 | **FreshRSS** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required — the flow runs in Apache (`mod_auth_openidc`), not in FreshRSS, and the module sends a code challenge by default even though the image's `FreshRSS.Apache.conf` never sets `OIDCPKCEMethod`. **No `groups` scope** — FreshRSS derives no roles from the token, so `one_factor` is the whole access decision |
 | **Trilium** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required — neither Authelia's integration guide (which says `require_pkce: false`) nor Trilium's own `authorizationParams` shows it, but the bundled `express-openid-connect` sets `code_challenge_method=S256` for every code-flow request. **No `groups` scope** — it has no roles. `one_factor` is not the last gate: Trilium binds the first `sub` that enrolls and rejects every other one, so it is single-owner regardless of who else passes the policy |
+| **Grafana** | openid profile email groups | client_secret_basic | **admin_only** | 2FA + `admin` group. PKCE (S256) required. `groups` **is** read, unlike most clients here: `role_attribute_path` maps the `admin` group onto Grafana's Admin org role and everyone else onto Viewer — a fail-safe rather than a live path, since both gates in front already require that group. `client_secret_basic` is not cosmetic: Grafana's generic provider is `golang.org/x/oauth2` at `AuthStyleAutoDetect`, which tries the header first, so declaring `post` would 400 every first token exchange and publish a spurious "OIDC grant rejected" alert |
 | **Homepage** | openid profile email | client_secret_basic | one_factor | PKCE (S256) required. **No `groups` scope** — homepage has no roles, so `one_factor` is the whole access decision. Its NextAuth provider is declared `idToken: true`, so it never calls UserInfo and sees no `email` or `name` — it needs neither, the only thing it reads off the session is that there is one. One of the two clients that keep forward-auth *as well* (with Headplane): see the matrix below |
 
 `admin_only` is a named policy in the template: deny by default, `two_factor` for members of the `admin` group.
@@ -121,6 +122,8 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | n8n | ✓ | — | — | LAN-only + its own auth |
 | ntfy | ✓ | — | — | LAN-only + its own accounts and ACLs (`deny-all` default) |
 | Homepage | ✓ | ✓ | ✓ | LAN-only + SSO + its own OIDC — all three, as Headplane already does, and here it costs nothing to: `HOMEPAGE_OIDC_AUTO_LOGIN=true` (v2.3.0) sends an unauthenticated visitor straight to Authelia rather than to a page whose only control is a sign-in button, and the forward-auth hop in front has already established that same session — so the dashboard still opens in one hop. Stacking is not redundant: forward-auth only guards the Traefik path, and `/api/*` — which proxies every widget's credentials — is reachable from anything on `frontend` that dials `:3000` with a forged `Host: homepage.<HOST_NAME>`, which is all `HOMEPAGE_ALLOWED_HOSTS` checks. `/api/healthcheck` and `/api/config/custom.css` stay public by design |
+| Grafana | ✓ | ✓ | ✓ | LAN-only + SSO + OIDC + admin + 2FA. Forward-auth *as well* as its own OIDC, as Homepage and Headplane already do: the dashboards carry per-caller LLM spend and Authelia's own failure counts, and Grafana's `/api` is reachable from anything on `frontend` that dials `:3000`, which no forward-auth in front covers. Its built-in admin account is inert — `GF_AUTH_BASIC_ENABLED=false` as well as `GF_AUTH_DISABLE_LOGIN_FORM=true`, because Grafana's API accepts HTTP basic auth from that account *regardless* of the login form, which is why no `PASSWORD` is injected into the container. On `frontend` only, unlike the Prometheus it reads: it dials nothing but `prometheus:9090`, so joining `ai` would give the browser-facing half of the pair a path to system-tools and the Docker socket for no reachability it uses |
+| Prometheus | — | — | — | **Not routed at all**: no Traefik labels, no router, no `expose`. Its query API is unauthenticated, so the access control is that only containers on `frontend` and `ai` can reach `:9090`, and Grafana is the only one that does |
 | Uptime Kuma | ✓ | ✓ | — | LAN-only + SSO |
 | qBittorrent | ✓ | ✓ | — | LAN-only + SSO |
 | Prowlarr / Kapowarr | ✓ | ✓ | — | LAN-only + SSO |
@@ -403,8 +406,9 @@ and do nothing.
 
 No consumer takes it as an environment variable, so `docker inspect` shows none of them holding it.
 
-**The two files under `${DATA_LOCATION}/redis` are `0644`, and that is deliberate.** They are the
-only secrets in this stack that are not `0600`, because the processes that read them are not root:
+**The two files under `${DATA_LOCATION}/redis` are `0644`, and that is deliberate.** With Grafana's
+OIDC client secret (below) they are the only secrets in this stack that are not `0600`, because the
+processes that read them are not root:
 the Valkey entrypoint re-execs the server under `setpriv --reuid=valkey --clear-groups` (uid 999),
 and Nextcloud's cron and post-installation hooks run as `www-data` (uid 33) — while the hook that
 writes them runs as root under systemd and as the project owner under `make update`. Neither of those
@@ -413,6 +417,15 @@ its own mode inside the container while the host still has to traverse the direc
 `${DATA_LOCATION}/redis` is `0700` and carries the protection — the same way the Authelia secrets
 directory does under a `0777` `DATA_LOCATION`. The authoritative copy in the secrets directory stays
 `0600`.
+
+**`oidc_grafana_secret.txt` is `0644` for the same reason**, and `scripts/authelia-pre-start.sh`
+re-applies it on every run. Grafana's image runs as uid 472 and resolves the value itself through its
+own `$__file{}` expander — no root entrypoint reads it first, as Immich's and Nextcloud's do — so a
+`0600` file written by root under systemd or by the project owner under `make update` makes the
+container exit at startup with `got error while expanding auth.generic_oauth.client_secret with
+expander 'file': permission denied`. The `0700` secrets directory carries the protection, exactly as
+it does for the two Redis files. Every other OIDC client secret here is read by a process running as
+root and stays `0600`.
 
 The Nextcloud copy exists because `_FILE` is not resolved once. The image's `file_env` exports
 `REDIS_HOST_PASSWORD` and unsets the `_FILE` variable for Apache, but `config/redis.config.php` keeps

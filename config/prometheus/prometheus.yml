@@ -1,0 +1,92 @@
+# Scrape targets for the pi-pcloud stack.
+#
+# Static, not service-discovered on purpose: the alternative is
+# docker_sd_configs, which needs the Docker socket mounted in, and this
+# container exists to read counters - it has no business being able to inspect
+# or control every container on the host. The cost is that a target for a
+# service you have not enabled shows as DOWN on Prometheus's own targets page.
+# That is not an error and nothing alerts on it; availability is Uptime Kuma's
+# job, and the dashboards key off the real metrics, which are simply absent.
+#
+# Every job below scrapes an endpoint the service already serves, or serves
+# behind a single flag set in compose.yaml. Nothing here has an exporter
+# sidecar - see docs/MONITORING.md#what-is-not-scraped for the ones that would
+# need one and are deliberately left out.
+
+global:
+  # 30s rather than the 15s default: nothing here is a trading system, and it
+  # halves both the series volume in the head block and the scrape cost on
+  # three shared cores.
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  # Only used by rules and alerts, of which this instance has none. Left at the
+  # interval so a future recording rule inherits something sane.
+  evaluation_interval: 30s
+  external_labels:
+    monitor: pi-pcloud
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: grafana
+    # Grafana serves /metrics unauthenticated on its routed port. Traefik's
+    # forward-auth covers the router, not a container dialling :3000 directly,
+    # which is how this reaches it.
+    static_configs:
+      - targets: ["grafana:3000"]
+
+  # The implicit `traefik` entrypoint, not websecure: --metrics.prometheus puts
+  # the handler on the internal :8080 beside api@internal, and /metrics on 443
+  # is a 404. That port is `expose`d, never published.
+  - job_name: traefik
+    static_configs:
+      - targets: ["traefik:8080"]
+
+  # telemetry.metrics.address in config/authelia/configuration.yml.template - a
+  # second listener, so this is not the port the portal answers on.
+  - job_name: authelia
+    static_configs:
+      - targets: ["authelia:9959"]
+
+  # metrics_listen_addr in config/headscale/config.yaml, already set and already
+  # exposed before this stack had a Prometheus to read it.
+  - job_name: headscale
+    static_configs:
+      - targets: ["headscale:9090"]
+
+  # NTFY_METRICS_LISTEN_HTTP in compose.yaml. Deliberately not
+  # NTFY_ENABLE_METRICS, which would publish /metrics on the routed :80.
+  - job_name: ntfy
+    static_configs:
+      - targets: ["ntfy:9090"]
+
+  # N8N_METRICS in compose.yaml. n8n has no separate telemetry listener, so this
+  # is the same port Traefik routes.
+  - job_name: n8n
+    static_configs:
+      - targets: ["n8n:5678"]
+
+  # Two jobs, one container: immich-server runs both workers and each exports on
+  # its own port. The queue depths and job outcomes are on microservices; the
+  # HTTP and user counters on api.
+  - job_name: immich-api
+    static_configs:
+      - targets: ["immich-server:8081"]
+
+  - job_name: immich-microservices
+    static_configs:
+      - targets: ["immich-server:8082"]
+
+  # The stats listener agentgateway opens by default on 15020. Its gen_ai_*
+  # series carry the `user` label added by config/agentgateway/config.yaml.
+  - job_name: agentgateway
+    static_configs:
+      - targets: ["agentgateway:15020"]
+
+  # LLAMA_ARG_ENDPOINT_METRICS in compose.yaml, on the same 8080 as the API.
+  # Reached over `ai`, which is where llama-cpp lives and which is internal.
+  - job_name: llama-cpp
+    static_configs:
+      - targets: ["llama-cpp:8080"]

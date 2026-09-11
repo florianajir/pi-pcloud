@@ -345,6 +345,13 @@ services:
       - "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=0"
       - "--entrypoints.websecure.transport.respondingTimeouts.writeTimeout=0"
       - "--entrypoints.websecure.transport.respondingTimeouts.idleTimeout=0"
+      # Lands on the implicit `traefik` entrypoint (:8080), beside api@internal -
+      # not on websecure, where /metrics is a 404. Measured on v3.7.13.
+      - "--metrics.prometheus=true"
+      # Off by default, and the one label that makes the request rate readable
+      # per site rather than per entrypoint. Entrypoint and service labels are
+      # already on by default.
+      - "--metrics.prometheus.addRoutersLabels=true"
       - "--providers.docker=true"
       - "--providers.docker.watch=true"
       - "--providers.docker.network=frontend"
@@ -589,6 +596,199 @@ services:
     mem_limit: 256m
     oom_score_adj: *oom-score-important
 
+  # The metric half of the monitoring split: Beszel answers "is the hardware
+  # healthy", Uptime Kuma "is the service answering", and this one "what was it
+  # doing, and how much of it" - over time, per router, per model, per caller.
+  # See docs/MONITORING.md#prometheus--the-numbers.
+  #
+  # Nothing here is an exporter sidecar: every target below already serves
+  # /metrics natively or does so behind one flag. Services that would need a
+  # dedicated exporter (postgres, redis, pihole, nextcloud) are deliberately not
+  # scraped - that would be four more containers for a box with 8-16 GB.
+  prometheus:
+    <<: *service-defaults
+    # v3.13.3, not v3.14.0: 3.14.0 is the newer minor but predates 3.13.3's
+    # dependency CVE bumps and its three TSDB fixes, one of which is
+    # out-of-order queries blocking compaction and growing memory for hours -
+    # which is exactly the failure mode a 90-day retention on a Pi would meet.
+    # 3.14.0 adds only Hetzner/OCI discovery and experimental flags.
+    image: prom/prometheus:v3.13.3@sha256:6976aa8a60fec930796ce5772b8d12da7a318a5daa8d40d69c5c7819a05eeed7
+    container_name: pi-prometheus
+    profiles: ["prometheus", "all"]
+    networks:
+      # frontend reaches traefik, authelia, headscale, n8n, immich, ntfy and
+      # agentgateway; ai reaches llama-cpp and agentgateway again. Those two
+      # cover every target in prometheus.yml - no third network is needed.
+      - frontend
+      - ai
+    # No expose and no Traefik router at all: Grafana is the only UI, and the
+    # query API is unauthenticated. `expose` is documentation to Compose rather
+    # than a gate, so Grafana still reaches :9090 over `frontend`; leaving it out
+    # is what says nothing else should. To read the targets page, which is the
+    # one thing Grafana cannot show, go in through the container:
+    # `docker exec pi-prometheus wget -qO- localhost:9090/api/v1/targets`.
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      # Both, not either: the time bound is the intent, the size bound is what
+      # keeps a cardinality mistake (immich `repo`/`io`, a new label) from
+      # filling the root filesystem before anyone notices. Whichever trips first
+      # wins, and the size cap counts the WAL and the head block too.
+      - "--storage.tsdb.retention.time=90d"
+      - "--storage.tsdb.retention.size=8GiB"
+      # The default, spelled out because nothing else in this service names the
+      # port: there is no `expose` and no router to read it off.
+      # --web.enable-admin-api and --web.enable-lifecycle stay unset, so the
+      # delete-series and reload endpoints do not exist on it.
+      - "--web.listen-address=0.0.0.0:9090"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # A named volume, not DATA_LOCATION: the TSDB is high-churn, regenerable
+      # and deliberately out of Backrest, so it belongs on the NVMe root
+      # filesystem with the other unbacked state (see docs/ARCHITECTURE.md).
+      - prometheus_data:/prometheus
+    healthcheck:
+      <<: *healthcheck-default
+      # busybox wget; the image has no curl. /-/healthy is 200 as soon as the
+      # web stack is up, which is what a dependent would wait for.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/healthy"]
+      start_period: 30s
+    labels:
+      # No traefik.* and no homepage.href: there is no URL to open. It still
+      # carries a group and a description so `make config` lists it.
+      - "homepage.group=Monitoring"
+      - "homepage.name=Prometheus"
+      - "homepage.icon=prometheus.png"
+      - "homepage.description=Metrics collection behind Grafana"
+    cpu_shares: *cpu-prio-batch
+    # 32 MiB measured at rest on this Pi. The rest is head-block headroom: the
+    # in-memory head holds ~2 h of every active series, and compaction doubles
+    # that briefly, so the ceiling has to be several times the idle figure.
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize
+
+  grafana:
+    <<: *service-defaults
+    image: grafana/grafana:13.2.1@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283
+    container_name: pi-grafana
+    profiles: ["grafana", "all"]
+    networks:
+      # frontend alone, unlike prometheus beside it: the only thing Grafana
+      # dials is prometheus:9090, and Prometheus is on this segment too. Putting
+      # it on `ai` as well would hand the one browser-facing half of this pair a
+      # leg into the segment where system-tools reads the Docker socket and
+      # open-webui runs admin-supplied Python - for no reachability it uses.
+      - frontend
+    extra_hosts:
+      # Grafana calls the token and userinfo endpoints server-side, so it has to
+      # resolve Authelia without going out to public DNS and back in.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 3000
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - GF_SERVER_ROOT_URL=https://grafana.${HOST_NAME:-pi.lan}
+      # No phoning home and no update banner on a LAN-only box.
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES=false
+      - GF_NEWS_NEWS_FEED_ENABLED=false
+      - GF_USERS_ALLOW_SIGN_UP=false
+      # Grafana defaults this to false whatever root_url says, so without it the
+      # session and OAuth-state cookies ship with no `Secure` attribute: a
+      # mistyped http:// link to grafana.$HOST_NAME sends the session in clear
+      # text and Traefik's 301 only fires after the browser has already put it
+      # on the wire. Verified on 13.2.1.
+      - GF_SECURITY_COOKIE_SECURE=true
+      # Both off, and the second is the one that matters: Grafana's API accepts
+      # HTTP basic auth from the built-in admin *regardless* of the login form,
+      # so disabling the form alone would leave admin/admin usable by anything
+      # on frontend that dials :3000. With basic auth off the account is inert,
+      # which is why no PASSWORD is injected here. If OIDC ever breaks, flip
+      # GF_AUTH_BASIC_ENABLED back on and
+      # `docker exec pi-grafana grafana cli admin reset-admin-password <new>`.
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_AUTH_BASIC_ENABLED=false
+      - GF_AUTH_GENERIC_OAUTH_ENABLED=true
+      - GF_AUTH_GENERIC_OAUTH_NAME=Authelia
+      - GF_AUTH_GENERIC_OAUTH_CLIENT_ID=grafana
+      # Grafana's own file provider, so the secret is read at startup from the
+      # mount below rather than sitting in `docker inspect`. `$$` escapes
+      # compose's interpolation: `$__file` is a valid variable name to it, and
+      # unescaped it would expand to the empty string and 401 every login.
+      - GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET=$$__file{/run/secrets/oidc_grafana_secret}
+      - GF_AUTH_GENERIC_OAUTH_SCOPES=openid profile email groups
+      # Spelled out rather than discovered: Grafana has no issuer-only mode, it
+      # wants the three endpoints.
+      - GF_AUTH_GENERIC_OAUTH_AUTH_URL=https://auth.${HOST_NAME:-pi.lan}/api/oidc/authorization
+      - GF_AUTH_GENERIC_OAUTH_TOKEN_URL=https://auth.${HOST_NAME:-pi.lan}/api/oidc/token
+      - GF_AUTH_GENERIC_OAUTH_API_URL=https://auth.${HOST_NAME:-pi.lan}/api/oidc/userinfo
+      - GF_AUTH_GENERIC_OAUTH_LOGIN_ATTRIBUTE_PATH=preferred_username
+      - GF_AUTH_GENERIC_OAUTH_GROUPS_ATTRIBUTE_PATH=groups
+      # Fail-safe rather than dead code: the Traefik forward-auth and the client
+      # policy both already require the `admin` group, so only admins reach this
+      # at all. If either is ever relaxed, this is what keeps the newcomer
+      # read-only instead of silently promoting them.
+      - GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH=contains(groups[*], 'admin') && 'Admin' || 'Viewer'
+      - GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP=true
+      - GF_AUTH_GENERIC_OAUTH_USE_PKCE=true
+      # Authelia grants no offline_access to this client, so asking for a
+      # refresh token would only add a failing background call per session.
+      - GF_AUTH_GENERIC_OAUTH_USE_REFRESH_TOKEN=false
+      # Authelia implements no RP-initiated logout; its portal logout route is
+      # what every other client here redirects to. See docs/SECURITY.md.
+      - GF_AUTH_SIGNOUT_REDIRECT_URL=https://auth.${HOST_NAME:-pi.lan}/logout?rd=https%3A%2F%2Fgrafana.${HOST_NAME:-pi.lan}%2Flogin
+    volumes:
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_grafana_secret.txt:/run/secrets/oidc_grafana_secret:ro
+      # Provisioned by file, both of them, so the SQLite database below stays
+      # disposable and nothing has to be clicked or backed up.
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # A named volume for the same reason: sessions and preferences only, and
+      # the image seeds it with uid 472's ownership, which a bind mount would
+      # not. It is deliberately absent from backrest.
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+        required: false
+      authelia:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-default
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/health"]
+      start_period: 40s
+    labels:
+      - "homepage.group=Monitoring"
+      - "homepage.name=Grafana"
+      - "homepage.icon=grafana.png"
+      - "homepage.href=https://grafana.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Metric dashboards over Prometheus"
+      # No homepage.widget: the grafana widget authenticates with a local
+      # username and password, and basic auth is off above.
+      #
+      # This direction and not the other: selecting grafana has to pull
+      # prometheus in, because its one datasource is the only thing it draws.
+      # The reverse would leave `COMPOSE_PROFILES=grafana` rendering an empty
+      # dashboard against a datasource that is not there.
+      - "pi-pcloud.companion-of=prometheus"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      # Forward-auth *and* its own OIDC, as homepage and headplane already do:
+      # the dashboards carry per-caller LLM spend and Authelia's failure counts,
+      # and Grafana's /api is reachable from anything on frontend that dials
+      # :3000, which the forward-auth in front does not cover either way.
+      - "traefik.http.routers.grafana.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.grafana.tls=true"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    cpu_shares: *cpu-prio-batch
+    # 262 MiB measured at rest on this Pi with this dashboard loaded; rendering
+    # a wide range query is what takes it above that.
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize
+
   dockhand:
     <<: *service-defaults
     image: fnsys/dockhand:v1.0.46
@@ -780,6 +980,12 @@ services:
       - N8N_SMTP_SSL=${SMTP_SSL:-false}
       - N8N_RUNNERS_MODE=external
       - N8N_RUNNERS_BROKER_LISTEN_ADDRESS=0.0.0.0
+      # /metrics on 5678, the port Traefik already routes - n8n has no separate
+      # telemetry listener and does not gate the endpoint, so this also makes
+      # n8n.$HOST_NAME/metrics readable by anything past lan@docker. Process and
+      # execution counters only, no workflow names: N8N_METRICS_INCLUDE_* are all
+      # left off. See docs/MONITORING.md#what-enabling-metrics-exposes.
+      - N8N_METRICS=true
       - NODE_OPTIONS=--max-old-space-size=512
     # N8N_RUNNERS_AUTH_TOKEN, generated by scripts/n8n-pre-start.sh. The broker
     # listens on 0.0.0.0 inside `frontend`, so this gates ~25 containers out of
@@ -1056,6 +1262,12 @@ services:
       REDIS_PASSWORD_FILE: /run/secrets/redis_password
       IMMICH_CONFIG_FILE: /immich-oauth-config.yaml
       IMMICH_TRUSTED_PROXIES: 172.30.11.250/32
+      # host, api, io, repo and job - the whole enum. `repo` and `io` are the
+      # expensive halves (a histogram per repository method and per filesystem
+      # op); set IMMICH_TELEMETRY_EXCLUDE=repo,io if the TSDB size cap starts
+      # biting. The two workers run in this one container but export on separate
+      # ports, hence two scrape jobs: 8081 is the API, 8082 microservices.
+      IMMICH_TELEMETRY_INCLUDE: all
       CPU_CORES: 3
       TZ: ${TIMEZONE:-Europe/Paris}
     networks:
@@ -1068,6 +1280,10 @@ services:
         condition: service_healthy
     expose:
       - 2283
+      # IMMICH_API_METRICS_PORT and IMMICH_MICROSERVICES_METRICS_PORT, at their
+      # defaults (config.repository.js). Both listeners live in this container.
+      - 8081
+      - 8082
     labels:
       - "homepage.group=Storage"
       - "homepage.name=Immich"
@@ -2418,8 +2634,13 @@ services:
       - ntfy
     expose:
       - 80
+      - 9090
     environment:
       - TZ=${TIMEZONE:-Europe/Paris}
+      # Its own listener, deliberately not NTFY_ENABLE_METRICS - that one adds
+      # /metrics to the routed :80, i.e. to ntfy.$HOST_NAME. Here and not in
+      # config/ntfy/ntfy.env, which scripts/ntfy-pre-start.sh rewrites whole.
+      - NTFY_METRICS_LISTEN_HTTP=:9090
       - NTFY_BASE_URL=https://ntfy.${HOST_NAME:-pi.lan}
       - NTFY_BEHIND_PROXY=true
       - NTFY_CACHE_FILE=/var/cache/ntfy/cache.db
@@ -2633,6 +2854,9 @@ services:
       - auth
     expose:
       - 9091
+      # telemetry.metrics in config/authelia/configuration.yml.template. Its own
+      # listener, so /metrics is never served on the port Traefik routes.
+      - 9959
     environment:
       - TZ=${TIMEZONE:-Europe/Paris}
       - X_AUTHELIA_CONFIG_FILTERS=template
@@ -2733,6 +2957,9 @@ services:
       - LLAMA_ARG_N_PARALLEL=1
       # open-webui is the routed frontend; keep the surface down to the API.
       - LLAMA_ARG_UI=false
+      # /metrics on the same 8080 as the API. Mono-model here (no
+      # --models-preset), so the bare endpoint covers the whole server.
+      - LLAMA_ARG_ENDPOINT_METRICS=1
     volumes:
       - llama_models:/models
     healthcheck:
@@ -3080,6 +3307,10 @@ services:
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
     expose:
       - 4000
+      # The stats listener, on by default at config.rs's `stats_addr` - nothing
+      # enables it, this only opens it to Prometheus. The per-caller `user` label
+      # on its gen_ai_* series comes from config.metrics in config.yaml.
+      - 15020
     command: ["-f", "/config.yaml"]
     environment:
       # Expanded by agentgateway inside /config.yaml, not by Compose.
@@ -3273,6 +3504,11 @@ volumes:
   # anonymous so a recreate does not strand one - see the searxng service.
   searxng_config:
   searxng_cache:
+  # Both deliberately unbacked and on the root filesystem: the TSDB is
+  # regenerable churn, and Grafana's SQLite holds nothing that is not
+  # provisioned from config/grafana/.
+  prometheus_data:
+  grafana_data:
 
 networks:
   dns_internal:

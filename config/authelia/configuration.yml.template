@@ -8,7 +8,13 @@ theme: auto
 
 telemetry:
   metrics:
-    enabled: false
+    enabled: true
+    # Spelled out rather than left to the default (which is this value): it is a
+    # second listener on a port compose has to `expose` for Prometheus to reach,
+    # and the two would drift silently if only one of them named the number.
+    # Separate from server.address above, so /metrics is never served on the
+    # port Traefik routes - auth.__HOST_NAME__/metrics stays a 404.
+    address: 'tcp://0.0.0.0:9959'
 
 webauthn:
   disable: false
@@ -89,6 +95,7 @@ access_control:
         - 'pihole.__HOST_NAME__'
         - 'traefik.__HOST_NAME__'
         - 'lldap.__HOST_NAME__'
+        - 'grafana.__HOST_NAME__'
       subject:
         - 'group:admin'
       policy: two_factor
@@ -518,6 +525,50 @@ __OIDC_PRIVATE_KEY__
         # Must stay `none`: enrollment calls fetchUserInfo() to get the name and
         # email that the ID token does not carry under the code flow, and
         # express-openid-connect parses that response as plain JSON.
+        userinfo_signed_response_alg: none
+
+      - client_id: grafana
+        client_name: Grafana
+        client_secret: '{{ secret "/config/secrets/oidc_grafana_secret_hash" }}'
+        public: false
+        # admin_only, matching the access_control rule above and Dockhand's
+        # stance: the dashboards carry per-caller LLM spend and Authelia's own
+        # failure counts, which is admin data rather than household data.
+        authorization_policy: admin_only
+        consent_mode: implicit
+        # Fixed by Grafana: /login/<provider id>, and the generic provider's id
+        # is `generic_oauth` whatever GF_AUTH_GENERIC_OAUTH_NAME says.
+        redirect_uris:
+          - 'https://grafana.__HOST_NAME__/login/generic_oauth'
+        # GF_AUTH_GENERIC_OAUTH_USE_PKCE=true in compose.yaml.
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        # `groups` is read, unlike most clients here: Grafana's
+        # role_attribute_path maps the `admin` group onto its Admin org role and
+        # everyone else onto Viewer.
+        scopes:
+          - openid
+          - profile
+          - email
+          - groups
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+        # No offline_access: GF_AUTH_GENERIC_OAUTH_USE_REFRESH_TOKEN is false, so
+        # a refresh token would only be a credential nothing spends - and
+        # requesting the scope would re-introduce the consent prompt Kavita hit.
+        #
+        # basic, not post, and not cosmetic: Grafana's generic provider is
+        # golang.org/x/oauth2 at AuthStyleAutoDetect, which tries the header
+        # (basic) first and only falls back to form parameters after a failure.
+        # Declaring `post` here would therefore make every first token exchange
+        # 400 before succeeding on the retry - and scripts/authelia-ntfy-watch.sh
+        # publishes exactly that rejection to the `security` topic.
+        token_endpoint_auth_method: client_secret_basic
+        # Must stay `none`: Grafana reads the groups claim from UserInfo (the ID
+        # token under the code flow does not carry it) and parses that response
+        # as plain JSON.
         userinfo_signed_response_alg: none
 
       - client_id: homepage

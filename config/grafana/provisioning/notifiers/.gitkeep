@@ -1,0 +1,6 @@
+Deliberately empty. The mount in compose.yaml replaces the image's whole
+/etc/grafana/provisioning tree, and Grafana logs an error-level line on every
+start for each of its six subdirectories that is then missing - alerting and
+plugins do so today, the other two are here so a version that starts checking
+them does not reintroduce the noise. Git does not track an empty directory,
+hence this file.

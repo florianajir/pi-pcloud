@@ -152,7 +152,14 @@ GROUPS = [
         "retry": 120,
         "maxretries": 2,
         "resend": 0,
-        "containers": ["pi-homepage", "pi-beszel", "pi-beszel-agent", "pi-dockhand"],
+        "containers": [
+            "pi-homepage",
+            "pi-beszel",
+            "pi-beszel-agent",
+            "pi-dockhand",
+            "pi-prometheus",
+            "pi-grafana",
+        ],
         # Any container found in compose.yaml but absent from every list above
         # lands here, so a newly added service is still monitored (quietly).
         "fallback": True,
