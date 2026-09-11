@@ -742,7 +742,7 @@ services:
 
   n8n:
     <<: *service-defaults
-    image: n8nio/n8n:2.38.5
+    image: n8nio/n8n:2.38.6
     container_name: pi-n8n
     profiles: ["n8n", "n8n-runners", "all"]
     expose:
