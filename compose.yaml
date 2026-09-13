@@ -1953,7 +1953,7 @@ services:
 
   flaresolverr:
     <<: *service-defaults
-    image: ghcr.io/flaresolverr/flaresolverr:v3.5.0
+    image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
     container_name: pi-flaresolverr
     profiles: ["flaresolverr", "prowlarr", "all"]
     labels:
