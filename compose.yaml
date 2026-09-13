@@ -2655,7 +2655,7 @@ services:
 
   vaultwarden:
     <<: *service-defaults
-    image: vaultwarden/server:1.37.2
+    image: vaultwarden/server:1.37.3
     container_name: pi-vaultwarden
     profiles: ["vaultwarden", "all"]
     # Not frontend: no east-west consumer at all. See `vaultwarden_web` below.
