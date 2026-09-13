@@ -604,7 +604,7 @@ services:
     # v3.13.3, not the newer v3.14.0: 3.14.0 predates 3.13.3's dependency CVE
     # bumps and its TSDB fix for out-of-order queries blocking compaction, which
     # is the failure mode a 90-day retention meets. It adds nothing used here.
-    image: prom/prometheus:v3.13.3@sha256:6976aa8a60fec930796ce5772b8d12da7a318a5daa8d40d69c5c7819a05eeed7
+    image: prom/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
     container_name: pi-prometheus
     profiles: ["prometheus", "all"]
     networks:
