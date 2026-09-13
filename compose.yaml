@@ -1298,7 +1298,7 @@ services:
 
   nextcloud:
     <<: *service-defaults
-    image: nextcloud:34.0.3-apache
+    image: nextcloud:34.0.4-apache
     container_name: pi-nextcloud
     profiles: ["nextcloud", "all"]
     environment:
