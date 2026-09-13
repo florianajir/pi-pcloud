@@ -48,6 +48,12 @@ updates:
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
+    # codeql-action's sub-actions refuse to run against each other across
+    # versions, so a PR bumping one of them alone fails CI. Keep them together.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
     schedule:
       interval: "weekly"
       day: "sunday"
