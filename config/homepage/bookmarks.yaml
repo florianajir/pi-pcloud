@@ -38,6 +38,14 @@
                     - abbr: X
                       href: https://x.com
                       icon: si-x
+          - AliExpress:
+                    - abbr: AE
+                      href: https://www.aliexpress.com
+                      icon: si-aliexpress
+          - Framework:
+                    - abbr: FW
+                      href: https://frame.work
+                      icon: si-framework
           # The upstream tmux wiki page that lists the default key bindings.
           - tmux wiki:
                     - abbr: TM
