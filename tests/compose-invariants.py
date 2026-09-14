@@ -141,6 +141,9 @@ def project(service):
         "image": service.get("image"),
         "has_build": bool(service.get("build")),
         "has_healthcheck": bool(service.get("healthcheck")),
+        # A service name, never a credential - and the one thing that says which
+        # containers a recreate cannot leave behind. See recreate_mapping_gaps.
+        "network_mode": service.get("network_mode"),
         "depends_on": {
             target: spec.get("condition")
             for target, spec in (service.get("depends_on") or {}).items()
@@ -453,6 +456,170 @@ def postgres_roles(repo_dir):
     return set(match.group(1).split())
 
 
+def recreate_exceptions(repo_dir):
+    """The lists scripts/changed-services.sh classifies an unowned path by.
+
+    Read out of the script rather than restated here. This check exists to keep
+    one naming convention true; a second copy of its exceptions would be a
+    second thing to keep true, and the two would disagree the first time only
+    one was updated - which is how the old hardcoded hook names in services.sh
+    came to miss half the bootstraps.
+    """
+    try:
+        source = Path(repo_dir, "scripts/changed-services.sh").read_text()
+    except OSError:
+        # The synthetic trees the tests build hold compose files and nothing
+        # else; there is no convention to check there. Same shape as
+        # tracked_files() returning None outside a checkout.
+        return None
+    names = ("HOST_CONFIG_DIRS", "ALWAYS_ALL_CONFIG_DIRS", "SHARED_START_PATH",
+             "PER_INVOCATION", "HOST_ONLY", "CONFIG_DIR_ALIASES", "ALSO_RECREATE")
+    found = {}
+    for name in names:
+        match = re.search(rf"^{name}='([^']*)'", source, re.M | re.S)
+        found[name] = set(match.group(1).split()) if match else None
+    return found
+
+
+def recreate_mapping_gaps(repo_dir, services):
+    """Every config/ tree and scripts/ file resolves to the services reading it.
+
+    `compose up -d` compares a container's image and spec, never the contents of
+    the files bind-mounted into it, so something has to name which services a
+    changed file obliges `make update` to recreate. That something is a naming
+    convention already in the tree - config/<service>/ and
+    scripts/<service>-*.sh - which scripts/changed-services.sh reads.
+
+    A path the convention does not cover is answered with ALL, a full-stack
+    restart: correct, and the cost the targeted recreate exists to avoid. So the
+    gap is reported here instead of being paid on the host, once per update,
+    forever.
+
+    The render this is handed is `all,stremio-lan`, i.e. every declared service.
+    Should a profile ever hide one from CI again, its config directory shows up
+    below - a visible failure rather than a silent hole.
+    """
+    lists = recreate_exceptions(repo_dir)
+    if lists is None:
+        return []
+    messages = []
+    for name, value in sorted(lists.items()):
+        if value is None:
+            messages.append(f"scripts/changed-services.sh no longer defines {name}, "
+                            "so nothing here reads its exceptions")
+    if any(value is None for value in lists.values()):
+        return messages
+
+    aliased = {}
+    for entry in sorted(lists["CONFIG_DIR_ALIASES"]):
+        directory, _, readers = entry.partition(":")
+        if not readers:
+            messages.append(f"CONFIG_DIR_ALIASES entry {entry} names no reader; "
+                            "the spelling is <dir>:<service>[,<service>]")
+            continue
+        aliased[directory] = readers.split(",")
+        if not Path(repo_dir, "config", directory).is_dir():
+            messages.append(f"CONFIG_DIR_ALIASES maps config/{directory}, which does not exist")
+        for reader in aliased[directory]:
+            if reader not in services:
+                messages.append(f"CONFIG_DIR_ALIASES says {reader} reads config/{directory}, "
+                                "but no such service is declared")
+
+    # Which containers each service drags along when it is recreated. A name that
+    # stopped being a service is a recreate that silently stops happening, and
+    # nothing on the host would say so.
+    coupled = {}
+    for entry in sorted(lists["ALSO_RECREATE"]):
+        owner, _, others = entry.partition(":")
+        if not others:
+            messages.append(f"ALSO_RECREATE entry {entry} names nothing to recreate with it; "
+                            "the spelling is <service>:<service>[,<service>]")
+            continue
+        coupled[owner] = others.split(",")
+        for name in [owner, *coupled[owner]]:
+            if name not in services:
+                messages.append(f"ALSO_RECREATE names {name}, which is not a declared service")
+
+    # The check that matters: not that the table is well-formed, but that it is
+    # complete. `network_mode: service:X` is resolved to a container *id* when
+    # the container is created, so recreating X alone leaves every sharer
+    # running, healthy-looking, and with no network at all - the exact silent
+    # failure this table exists to prevent, and one a fourth sharer added later
+    # would reintroduce with CI green.
+    for name, service in sorted(services.items()):
+        mode = service.get("network_mode") or ""
+        if not mode.startswith("service:"):
+            continue
+        target = mode[len("service:"):]
+        if name not in coupled.get(target, []):
+            messages.append(
+                f"{name} runs in {target}'s network namespace but is not in ALSO_RECREATE under {target}, "
+                f"so recreating {target} alone would leave it running with no network"
+            )
+
+    tracked = tracked_files(repo_dir)
+    if tracked is None:
+        return messages
+
+    config_dirs = {path.split("/")[1] for path in tracked
+                   if path.startswith("config/") and path.count("/") >= 2}
+    for directory in sorted(config_dirs):
+        if directory in services or directory in aliased:
+            continue
+        if directory in lists["HOST_CONFIG_DIRS"] or directory in lists["ALWAYS_ALL_CONFIG_DIRS"]:
+            continue
+        messages.append(
+            f"config/{directory} matches no service, so every change under it restarts the whole stack; "
+            "rename it after the service that reads it, or add it to HOST_CONFIG_DIRS "
+            "(applied without a container), ALWAYS_ALL_CONFIG_DIRS (only a restart applies it) "
+            "(host files) or CONFIG_DIR_ALIASES (read by a differently-named service) "
+            "in scripts/changed-services.sh"
+        )
+    for name in ("HOST_CONFIG_DIRS", "ALWAYS_ALL_CONFIG_DIRS"):
+        for directory in sorted(lists[name]):
+            if directory not in config_dirs:
+                messages.append(f"{name} names config/{directory}, which no longer exists")
+
+    # The two shapes the convention has no name for at all, so neither the
+    # checks above nor changed-services.sh's rules can classify them: they fall
+    # to ALL forever, quietly, which is the cost this whole check exists to
+    # avoid paying.
+    for path in sorted(p for p in tracked
+                       if p.startswith("config/") and p.count("/") == 1):
+        messages.append(
+            f"{path} sits straight under config/, which names no service, so every change to it "
+            "restarts the whole stack; move it into config/<service>/"
+        )
+    for path in sorted(p for p in tracked
+                       if p.startswith("scripts/") and p.count("/") > 1):
+        messages.append(
+            f"{path} is below scripts/, where the <service>- prefix is not read, so every change "
+            "to it restarts the whole stack; keep it directly in scripts/"
+        )
+
+    # Top level only: a script in a subdirectory of scripts/ is not a hook the
+    # boot path runs, and the convention says nothing about its name.
+    scripts = {path[len("scripts/"):] for path in tracked
+               if path.startswith("scripts/") and path.count("/") == 1}
+    classified = lists["SHARED_START_PATH"] | lists["PER_INVOCATION"] | lists["HOST_ONLY"]
+    for script in sorted(scripts):
+        # Longest service name prefixing it, the rule services.sh applies to
+        # bootstraps so beszel-agent-* does not also read as beszel's.
+        if any(script.startswith(f"{service}-") for service in services):
+            continue
+        if script in classified:
+            continue
+        messages.append(
+            f"scripts/{script} is prefixed by no service name, so every change to it restarts the whole "
+            "stack; rename it <service>-*, or classify it in SHARED_START_PATH / PER_INVOCATION / "
+            "HOST_ONLY in scripts/changed-services.sh"
+        )
+    for script in sorted(classified):
+        if script not in scripts:
+            messages.append(f"scripts/changed-services.sh classifies {script}, which no longer exists")
+    return messages
+
+
 def main():
     repo_dir = sys.argv[1]
     config = json.load(sys.stdin)
@@ -467,6 +634,9 @@ def main():
 
     for message in dependabot_blind_spots(repo_dir):
         report("DEPENDABOT", message)
+
+    for message in recreate_mapping_gaps(repo_dir, services):
+        report("RECREATE", message)
 
     if len(services) < MIN_SERVICES:
         report("FLOOR", f"rendered only {len(services)} services, expected at least {MIN_SERVICES}")

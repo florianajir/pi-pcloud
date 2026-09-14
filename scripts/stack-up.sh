@@ -18,21 +18,28 @@ set -eu
 
 [ "$#" -eq 0 ] || die "takes no arguments (got: $*)"
 
-# systemd supplies COMPOSE_PROFILES (EnvironmentFile=.env, falling back to its
-# own Environment=all for installs predating per-service profiles). Under make
-# there is no such wrapper, so both rules are reproduced here. Empty stays
-# empty: that means core-only, not everything.
-if [ -z "${COMPOSE_PROFILES+x}" ]; then
-    if grep -qE '^COMPOSE_PROFILES=' "$ENV_FILE" 2>/dev/null; then
-        # Compose, systemd and run-if-enabled.sh all strip quotes and CR;
-        # get_env_value reads verbatim. Left in, `"stremio"` would match no
-        # profile while --remove-orphans deleted the optional containers.
-        COMPOSE_PROFILES="$(get_env_value_clean COMPOSE_PROFILES)"
-    else
-        COMPOSE_PROFILES=all
-    fi
-    export COMPOSE_PROFILES
-fi
+# How long await_healthy below gives the stack before it reports what is still
+# down. Overridable for CI, which starts a subset and has no reason to wait the
+# full boot budget. The last full boot measured 4m15s wall clock, most of it
+# image-heavy services starting in parallel, so 300s is a ceiling rather than a
+# target: the loop returns as soon as everything is healthy.
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-300}"
+HEALTH_INTERVAL="${HEALTH_INTERVAL:-5}"
+# Both reach $(( )) below, where dash reads a non-number as 0 and then treats
+# the division by zero as a fatal *shell* error, not a failed command: the
+# `await_healthy || true` at the call site cannot contain it, and a stack-up.sh
+# that exits non-zero is a failed ExecStart - which systemd follows with
+# ExecStop, `docker compose down`. A typo in an override must not do that.
+case "$HEALTH_TIMEOUT" in '' | *[!0-9]*) HEALTH_TIMEOUT=300 ;; esac
+case "$HEALTH_INTERVAL" in '' | *[!0-9]*) HEALTH_INTERVAL=5 ;; esac
+# `0` is not the only way to spell zero, and a glob cannot say "numerically
+# greater than zero": `00` passes the case above and divides just as fatally.
+# The redirection is for a value too large for the shell's integers, which is
+# an error here rather than a comparison.
+[ "$HEALTH_INTERVAL" -gt 0 ] 2>/dev/null || HEALTH_INTERVAL=5
+
+# In lib.sh, because changed-services.sh has to resolve the same selection.
+resolve_compose_profiles
 
 # `stremio` and `stremio-lan` are one server in two networking modes, sharing a
 # single data volume and the same Traefik host rules. Compose cannot express
@@ -79,6 +86,69 @@ start_containers() {
     compose up -d --remove-orphans
 }
 
+# `<service> <state>` for everything compose reports as other than
+# up-and-healthy. A container with no healthcheck counts as ready once it is
+# running, which is the rule `compose up --wait` applies too.
+#
+# `-a` is load-bearing: a bare `compose ps` lists only what is running, so a
+# container that started and died is not reported as unhealthy - it is not
+# reported at all, and the loop below would call the stack healthy. That is the
+# one failure this exists to name.
+#
+# The state comes out with the name because the loop needs it: `-a` also lists
+# containers that are never going to move again, and those must not be waited
+# on. See await_healthy.
+#
+# A compose that could not be answered is not a healthy stack either, so the
+# failure is named rather than dropped: an empty list here reads as "everything
+# is fine", and the bootstraps would then run into a daemon that is not
+# answering.
+unready_services() {
+    if ! _ps="$(compose ps -a --format '{{.Service}} {{.State}} {{.Health}}' 2>/dev/null)"; then
+        printf 'compose-ps-unavailable unknown\n'
+        return 0
+    fi
+    printf '%s\n' "$_ps" |
+        awk '$2 != "running" || ($3 != "" && $3 != "healthy") { print $1, $2 }'
+}
+
+# Give the stack a bounded chance to settle, then say what did not.
+#
+# Deliberately *not* `compose up -d --wait`: that makes `up` exit non-zero when
+# one container is slow to pass its healthcheck, and under systemd a failed
+# ExecStart is followed by ExecStop - `docker compose down`. One flaky service
+# would take the whole stack down at boot. This only observes, so both callers
+# still get exactly the same start, and a slow healthcheck cannot kill it.
+#
+# What it buys: `make update` used to print its success line with half the
+# stack unhealthy, and the post-start bootstraps ran against services that were
+# not answering yet. Now both say so.
+await_healthy() {
+    _deadline_loops=$((HEALTH_TIMEOUT / HEALTH_INTERVAL))
+    _i=0
+    while :; do
+        _unready="$(unready_services)"
+        [ -n "$_unready" ] || return 0
+
+        # Only a container that is still moving can be waited into health. `-a`
+        # also lists the ones that started and died, and `exited` is where they
+        # stay: Docker restarts a crashing container through `restarting`, so
+        # anything reported as exited here has either been stopped by hand or
+        # given up on. Polling those costs the whole budget - 300s added to
+        # every boot and every `make update`, with the bootstraps queued behind
+        # it - and cannot change the answer, so report and move on.
+        _settling="$(printf '%s\n' "$_unready" | awk '$2 != "exited" && $2 != "dead" { print $1 }')"
+        [ -n "$_settling" ] || break
+        [ "$_i" -lt "$_deadline_loops" ] || break
+
+        sleep "$HEALTH_INTERVAL"
+        _i=$((_i + 1))
+    done
+
+    log "warning: still not healthy after $((_i * HEALTH_INTERVAL))s: $(printf '%s\n' "$_unready" | awk '{ print $1 }' | tr '\n' ' ')"
+    return 1
+}
+
 # --- Run ---
 
 log "Preparing configuration..."
@@ -86,6 +156,11 @@ log "Preparing configuration..."
 
 log "Starting containers (only what changed is recreated)..."
 start_containers
+
+log "Waiting for the containers to report healthy..."
+# Never fatal, for the reason above - the caller reads the warning, systemd does
+# not act on it.
+await_healthy || true
 
 log "Running bootstraps..."
 /bin/sh "$SCRIPT_DIR/run-hooks.sh" post-start

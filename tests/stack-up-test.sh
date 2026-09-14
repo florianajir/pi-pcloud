@@ -158,8 +158,17 @@ write_stubs
 
 # Announces every call, and fails the next `up` once when the control file
 # exists — enough to exercise the fallback without looping.
+#
+# `compose ps` is answered with an empty list and no announcement: await_healthy
+# polls it, an unparseable "DOCKER compose ps ..." line reads as a container
+# that is not running, and the script would then wait out its whole health
+# budget on every single run of this file.
 cat >"$WORK/bin/docker" <<STUB
 #!/bin/sh
+if [ "\$1" = compose ] && [ "\$2" = ps ]; then
+    [ -f "$WORK/unhealthy" ] && cat "$WORK/unhealthy"
+    exit 0
+fi
 echo "DOCKER \$*"
 if [ "\$1" = compose ] && [ "\$2" = up ] && [ -f "$WORK/fail-up" ]; then
     cat "$WORK/fail-up"
@@ -277,6 +286,50 @@ order="$(printf '%s\n' "$out" | grep -nE 'HOOK authelia-pre-start|DOCKER compose
 ok "pre-start, then up, then bootstrap" \
     "$(printf '%s\n' "$order" | sed 's/^[0-9]*://' | cut -d' ' -f1-2 | tr '\n' '|')" \
     "HOOK authelia-pre-start.sh|DOCKER compose|HOOK homepage-widgets-bootstrap.sh|"
+
+# --- the health report ------------------------------------------------------
+#
+# It only observes. `compose up --wait` would have been the short way to write
+# it, and it exits non-zero on a slow healthcheck - under systemd a failed
+# ExecStart is followed by ExecStop, `docker compose down`, so one flaky service
+# would take the whole stack down at boot. These two assertions are the reason
+# it is a poll and a warning instead.
+
+printf 'kavita running starting\ntraefik running healthy\n' >"$WORK/unhealthy"
+HEALTH_TIMEOUT=2 HEALTH_INTERVAL=1 run_rc all
+ok       "an unhealthy container does not fail the start" "$rc" 0
+contains "and it is named"                                "$out" "still not healthy"
+# The warning line on its own, not the whole transcript: every hook stub
+# announces itself, so "kavita" is in $out through HOOK kavita-pre-start.sh
+# whether or not await_healthy ever named it.
+warned="$(printf '%s\n' "$out" | grep 'still not healthy' || true)"
+contains "by service"                                     "$warned" "kavita"
+lacks    "a healthy one is not"                           "$warned" "traefik"
+contains "the bootstraps still run"                       "$out" "HOOK homepage-widgets-bootstrap.sh"
+rm -f "$WORK/unhealthy"
+
+# A container with no healthcheck counts as ready once it is running - the rule
+# `compose up --wait` applies too, and 5 of the 46 services declare none.
+printf 'agentgateway running \n' >"$WORK/unhealthy"
+HEALTH_TIMEOUT=2 HEALTH_INTERVAL=1 run_rc all
+lacks    "a running container with no healthcheck is ready" "$out" "still not healthy"
+rm -f "$WORK/unhealthy"
+
+# `-a` lists containers that started and died, and `exited` is where they stay -
+# Docker takes a crashing container through `restarting`, so one reported as
+# exited has been stopped by hand or given up on. Polling it cannot change the
+# answer, and doing so would add the whole HEALTH_TIMEOUT to every boot and every
+# `make update` for as long as a single service is down. The budget here is ten
+# minutes: the elapsed figure in the warning is what proves none of it was spent.
+printf 'kapowarr exited \n' >"$WORK/unhealthy"
+HEALTH_TIMEOUT=600 HEALTH_INTERVAL=30 run_rc all
+warned="$(printf '%s\n' "$out" | grep 'still not healthy' || true)"
+contains "a container that died is named"                  "$warned" "kapowarr"
+contains "and is not waited on"                            "$warned" "after 0s"
+rm -f "$WORK/unhealthy"
+# An assignment prefixing a *function* call outlives the call, so the budget
+# would otherwise stay at two seconds for every test written after this one.
+unset HEALTH_TIMEOUT HEALTH_INTERVAL
 
 # --- failure semantics ------------------------------------------------------
 #

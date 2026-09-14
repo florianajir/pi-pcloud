@@ -300,6 +300,30 @@ compose() {
     (cd "$PROJECT_DIR" && docker compose "$@")
 }
 
+# Export COMPOSE_PROFILES the way the boot path resolves it, unless the caller
+# already set one. systemd supplies it (EnvironmentFile=.env, falling back to
+# its own Environment=all for installs predating per-service profiles); under
+# make there is no such wrapper, so the same two rules are reproduced here.
+#
+# Empty stays empty: that means core-only, not everything.
+#
+# Lives here rather than in stack-up.sh because changed-services.sh has to
+# resolve the *same* selection to decide which services are running at all - and
+# two copies of this is two answers to "is kavita enabled".
+resolve_compose_profiles() {
+    [ -z "${COMPOSE_PROFILES+x}" ] || return 0
+
+    if grep -qE '^COMPOSE_PROFILES=' "$ENV_FILE" 2>/dev/null; then
+        # Compose, systemd and run-if-enabled.sh all strip quotes and CR;
+        # get_env_value reads verbatim. Left in, `"stremio"` would match no
+        # profile while --remove-orphans deleted the optional containers.
+        COMPOSE_PROFILES="$(get_env_value_clean COMPOSE_PROFILES)"
+    else
+        COMPOSE_PROFILES=all
+    fi
+    export COMPOSE_PROFILES
+}
+
 # Silent generic retry loop; the caller logs around it.
 # Usage: wait_for_cmd <max_retries> <interval_seconds> <command...>
 wait_for_cmd() {
