@@ -505,7 +505,8 @@ def recreate_mapping_gaps(repo_dir, services):
     messages = []
     for name, value in sorted(lists.items()):
         if value is None:
-            messages.append(f"scripts/changed-services.sh no longer defines {name}, so nothing here reads its exceptions")
+            messages.append(f"scripts/changed-services.sh no longer defines {name}, "
+                            "so nothing here reads its exceptions")
     if any(value is None for value in lists.values()):
         return messages
 
@@ -513,32 +514,26 @@ def recreate_mapping_gaps(repo_dir, services):
     for entry in sorted(lists["CONFIG_DIR_ALIASES"]):
         directory, _, readers = entry.partition(":")
         if not readers:
-            messages.append(f"CONFIG_DIR_ALIASES entry {entry} names no reader; the spelling is <dir>:<service>[,<service>]")
+            messages.append(f"CONFIG_DIR_ALIASES entry {entry} names no reader; "
+                            "the spelling is <dir>:<service>[,<service>]")
             continue
         aliased[directory] = readers.split(",")
         if not Path(repo_dir, "config", directory).is_dir():
             messages.append(f"CONFIG_DIR_ALIASES maps config/{directory}, which does not exist")
         for reader in aliased[directory]:
             if reader not in services:
-                messages.append(f"CONFIG_DIR_ALIASES says {reader} reads config/{directory}, but no such service is declared")
+                messages.append(f"CONFIG_DIR_ALIASES says {reader} reads config/{directory}, "
+                                "but no such service is declared")
 
-    # Same treatment for the couplings: a name that stopped being a service is a
-    # recreate that silently stops happening, and nothing on the host says so.
-    for entry in sorted(lists["ALSO_RECREATE"]):
-        service, _, coupled = entry.partition(":")
-        if not coupled:
-            messages.append(f"ALSO_RECREATE entry {entry} names nothing to recreate with it; the spelling is <service>:<service>[,<service>]")
-            continue
-        for name in [service, *coupled.split(",")]:
-            if name not in services:
-                messages.append(f"ALSO_RECREATE names {name}, but no such service is declared")
-
-    # Which containers each service drags along when it is recreated.
+    # Which containers each service drags along when it is recreated. A name that
+    # stopped being a service is a recreate that silently stops happening, and
+    # nothing on the host would say so.
     coupled = {}
     for entry in sorted(lists["ALSO_RECREATE"]):
         owner, _, others = entry.partition(":")
         if not others:
-            messages.append(f"ALSO_RECREATE entry {entry} names nothing to recreate with it; the spelling is <service>:<service>[,<service>]")
+            messages.append(f"ALSO_RECREATE entry {entry} names nothing to recreate with it; "
+                            "the spelling is <service>:<service>[,<service>]")
             continue
         coupled[owner] = others.split(",")
         for name in [owner, *coupled[owner]]:
