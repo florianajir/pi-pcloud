@@ -64,6 +64,12 @@ Join `frontend` and add:
 Services with their own account system (Immich, Kavita) use `lan@docker` alone —
 do not stack forward-auth on top.
 
+`tls=true` is not optional: `websecure` sets `http.tls.certresolver=cloudflare`,
+which Traefik applies only to routers declaring no TLS config of their own. Omit
+the label and the router inherits the resolver and orders a certificate for its
+own domain instead of being served from the stack's wildcard.
+`tests/compose-invariants.py` fails the build if a public router has no `tls`.
+
 ## 3. OIDC (Authelia)
 
 If the service speaks OIDC/OAuth, wire it: see the "Adding OIDC (Authelia SSO) to a
