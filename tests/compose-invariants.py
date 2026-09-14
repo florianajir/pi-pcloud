@@ -205,7 +205,9 @@ def layout_drift(repo_dir):
         # Without it, the include reads <project_directory>/.env on its own,
         # whatever --env-file said: see the note in compose.yaml.
         if not re.search(r"^env_file:\s*/dev/null\s*$", entry, re.M):
-            messages.append(f"compose/{name} is included without `env_file: /dev/null`, so it reads .env behind --env-file")
+            messages.append(
+                f"compose/{name} is included without `env_file: /dev/null`, so it reads the real .env"
+            )
 
     present = {path.name for path in sorted(Path(repo_dir, "compose").glob("*.yaml"))}
     for name in sorted(present - included):
