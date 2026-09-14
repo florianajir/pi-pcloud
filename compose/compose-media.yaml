@@ -448,7 +448,7 @@ services:
 
   kapowarr:
     <<: *service-defaults
-    image: mrcas/kapowarr:v1.3.1
+    image: mrcas/kapowarr:v1.3.2
     container_name: pi-kapowarr
     profiles: ["kapowarr", "all"]
     # Same gluetun namespace as qBittorrent (localhost:8080) so torrent path mapping
