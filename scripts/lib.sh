@@ -247,6 +247,104 @@ generate_secret() {
     fi
 }
 
+# The whole of what a pre-start hook does when its service just needs one or
+# more generated secrets in an env file: keep the values already there, mint the
+# missing ones, write the file 0600 and hand it back to the project owner.
+#
+# Usage: ensure_env_secrets <file> <KEY> [KEY...]
+#
+# It owns the whole file - anything in it that is not a listed key is dropped -
+# which is what makes it safe to rewrite on every start. A service whose env
+# file also carries settings a human edits must keep its own hook.
+#
+# Dropping is not the same as losing: a file holding a key nobody asked for is
+# copied aside first, the way ensure_config_target_is_file moves a stray
+# directory. A secret cannot be regenerated from nothing, and "deterministic"
+# is not worth being destructive over the one case that says the caller's key
+# list is wrong.
+#
+# Per key, not all-or-nothing: an env file that lost one of its two keys gets
+# that one regenerated and keeps the other, rather than rotating both.
+#
+# Written once here because the sequence has an invisible failure in it.
+# fix_ownership is the last line for a reason - the systemd unit runs the hooks
+# as root, so without it the file lands root:root 0600, the next non-root
+# `make update` dies reading its own secret, and `docker compose up` cannot load
+# an env_file it just wrote. Three hooks shipped without it before
+# tests/stack-up-test.sh started checking for it; a hook that calls this cannot
+# get it wrong at all.
+ensure_env_secrets() {
+    local _file="$1"
+    local _generated=""
+    local _body=""
+    local _key=""
+    local _value=""
+
+    shift
+    [ "$#" -gt 0 ] || {
+        log "ERROR: ensure_env_secrets needs at least one key name"
+        return 1
+    }
+
+    # A bind mount whose source did not exist leaves a *directory* where the
+    # file belongs, and docker recreates it on every start until something moves
+    # it aside. write_secret_file would refuse; this repairs.
+    ensure_config_target_is_file "$_file" || return 1
+    mkdir -p "$(dirname "$_file")" || return 1
+
+    for _key in "$@"; do
+        _value="$(read_env_value_from_file "$_file" "$_key")"
+        if [ -z "$_value" ]; then
+            _value="$(generate_secret)" || return 1
+            [ -n "$_value" ] || {
+                log "ERROR: could not generate a value for $_key"
+                return 1
+            }
+            _generated="$_generated $_key"
+        fi
+        # A literal newline rather than $(printf): command substitution strips
+        # trailing newlines, so the last key would run into the one after it.
+        _body="$_body$_key=$_value
+"
+    done
+
+    # Anything present that no caller claims. The rewrite below would drop it, so
+    # it is kept where a human can find it and the log says where.
+    if [ -f "$_file" ]; then
+        local _unclaimed=""
+        local _present=""
+        for _present in $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$_file" 2>/dev/null | tr -d '='); do
+            for _key in "$@"; do
+                [ "$_present" = "$_key" ] && continue 2
+            done
+            _unclaimed="$_unclaimed $_present"
+        done
+        if [ -n "$_unclaimed" ]; then
+            local _aside=""
+            _aside="${_file}.bak.$(date +%Y%m%d-%H%M%S)"
+            cp -p "$_file" "$_aside" || return 1
+            safe_chmod 600 "$_aside"
+            fix_ownership "$_aside"
+            log "WARNING:${_unclaimed} in $_file is claimed by no caller; kept a copy at $_aside"
+        fi
+    fi
+
+    # `scripts/<name>`, the same string the hooks wrote before this existed, so
+    # `grep -rl "Managed by scripts/n8n-pre-start.sh"` still finds its file.
+    # %s for the body, so a value holding a % is not read as a format.
+    printf '# Managed by scripts/%s - do not edit, values here are generated\n%s' \
+        "$(basename "$0")" "$_body" | write_secret_file "$_file" || {
+        log "ERROR: could not write $_file"
+        return 1
+    }
+    safe_chmod 600 "$_file"
+    fix_ownership "$_file"
+
+    if [ -n "$_generated" ]; then
+        log "Generated${_generated} in $_file"
+    fi
+}
+
 # Hash a plaintext secret using PBKDF2-SHA512 (Authelia's default format).
 # Requires python3 with hashlib (stdlib).
 # Passed through the environment rather than argv: argv is world-readable in
