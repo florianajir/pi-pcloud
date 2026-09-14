@@ -19,10 +19,14 @@ use_default_settings:
 
 general:
   instance_name: "pi-pcloud"
-  # /stats and /metrics, per engine and per response time. Nothing consumes them
-  # here - Beszel and Uptime Kuma watch the container - and they are the only
-  # thing SearXNG keeps a per-query history for.
-  enable_metrics: false
+  # Already the upstream default, spelled out because it is the only way a
+  # failing engine ever surfaces: a suspended engine leaves the container
+  # healthy, so neither Beszel nor Uptime Kuma sees it, while /stats/errors
+  # names the engine and the exception and one WARNING per failure reaches
+  # journald. No Prometheus endpoint comes with it - /metrics stays 404 unless
+  # `open_metrics` also carries a password (webapp.py:1155). No query text is
+  # kept: error_recorder.py keeps the failing URL's netloc and drops the rest.
+  enable_metrics: true
 
 server:
   # No bind_address and no port here on purpose. SearXNG's own values are read
@@ -57,9 +61,67 @@ search:
   # Already the upstream default, pinned because Homepage's `suggestionUrl`
   # calls /autocompleter and an upstream change to "" would empty it silently.
   autocomplete: "duckduckgo"
+  # No `suspended_times` override, and this is the measured reason. The obvious
+  # one - lowering SearxEngineCaptcha from upstream's 3600 so a DuckDuckGo
+  # challenge does not cost an hour - would be dead config: duckduckgo.py raises
+  # SearxEngineCaptchaException(suspended_time=0) on both of its CAPTCHA paths,
+  # and SearxEngineAccessDeniedException reads the setting only when
+  # suspended_time is None. Four consecutive searches all report duckduckgo as
+  # "CAPTCHA", never "Suspended: CAPTCHA", while google cse - whose 429 carries
+  # no suspended_time - does show "Suspended". The setting reaches only engines
+  # that raise the exception bare (google, startpage, yandex, baidu, sogou, gmx,
+  # quark, google scholar), none of which is enabled here, so overriding it
+  # would only shorten the back-off for whichever one is enabled next.
 
-# No `ui.default_locale` and no `search.default_lang`: left empty, SearXNG takes
-# the interface language from the browser's Accept-Language and sends no
-# language filter upstream, which is what a household with mixed browsers wants.
-# Pinning either to DEFAULT_LANGUAGE would need a BCP-47 -> SearXNG locale map
-# that this file has no way to validate.
+# Upstream's 3.0 is too tight from this host: wikipedia and wikidata timed out on
+# 4 of 5 consecutive queries, and every timeout also costs a `ban_time_on_fail`
+# suspension for the searches after it. Not the link - wikidata answers in ~1 s
+# from inside the container, but the engine pays that twice (a search request
+# then a SPARQL query) and parses both on an ARM core. Partial on purpose:
+# pool_connections and enable_http2 keep their upstream values through the same
+# recursive merge. Not only the searches: autocomplete.py falls back to this
+# same value, so a stalled /autocompleter - Homepage's search box - now holds
+# for 6 s rather than 3 s.
+outgoing:
+  request_timeout: 6.0
+
+# Per-engine overrides. Each entry merges into the default engine of the same
+# name instead of replacing it, so only the changed key belongs here, and
+# declaring this list does not undo the `engines.remove` above.
+engines:
+  # Carries its own `timeout: 3.0`, which the `outgoing` default above cannot
+  # reach - raising that alone left this one still timing out. 6.0 and no more:
+  # search/__init__.py takes the max timeout over the selected engines as the
+  # whole-search ceiling, and lingva already sits at 6.0, so matching it leaves
+  # that ceiling exactly where it was. Enough in practice - 6 entity queries,
+  # 6 infoboxes.
+  - name: wikidata
+    timeout: 6.0
+
+  # The general category ships three engines that return web results - brave,
+  # google cse and duckduckgo - and two of them drop out under a burst of
+  # searches: duckduckgo on a CAPTCHA, google cse on a 429 (it queries Google
+  # through a hardcoded third-party CX id). google cse is then suspended for
+  # `suspended_times.SearxEngineTooManyRequests`; duckduckgo is not suspended at
+  # all, it simply fails again on the next query, so brave carries the whole
+  # result set alone. bing covers duckduckgo's index, which comes from Bing;
+  # yep is the one independent crawler among the candidates that answered every
+  # query here.
+  - name: bing
+    disabled: false
+  - name: yep
+    disabled: false
+
+# Measured and left off, so the next audit does not retry them: mojeek "access
+# denied", yahoo "parsing error", seznam timeout, qwant CAPTCHA after a single
+# query, mwmbl crawler noise then timeouts. google works but returns google
+# cse's index a second time, which would only score those URLs twice.
+
+# No `ui.default_locale` and no `search.default_lang`. Unset, default_lang is
+# upstream's "auto", which is not the same as no filter: webadapter.py resolves
+# `auto` to the language the client prefers and falls back to `all` only when the
+# client states none - and a browser always sends Accept-Language. So each
+# browser gets results filtered to its own language, which is what a household
+# with mixed browsers wants. Open WebUI is unaffected either way; it pins
+# SEARXNG_LANGUAGE=all. Pinning a value here to DEFAULT_LANGUAGE would need a
+# BCP-47 -> SearXNG locale map that this file has no way to validate.
