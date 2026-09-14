@@ -1,7 +1,11 @@
 ---
 # For configuration options and examples, please see:
 # https://gethomepage.dev/configs/bookmarks
-- Favorites:
+#
+# A single group, because `layout:` in settings.yaml gives this tab one entry.
+# Adding a second top-level group here without a matching layout key would
+# render it untabbed.
+- Bookmarks:
           - Google:
                     - abbr: GO
                       href: https://www.google.com
@@ -18,3 +22,28 @@
                     - abbr: GH
                       href: https://github.com/florianajir/pi-pcloud
                       icon: github
+          - Reddit:
+                    - abbr: RD
+                      href: https://www.reddit.com
+                      icon: si-reddit
+          - Wikipedia:
+                    - abbr: WP
+                      href: https://www.wikipedia.org
+                      icon: si-wikipedia
+          - LinkedIn:
+                    - abbr: IN
+                      href: https://www.linkedin.com
+                      icon: si-linkedin
+          - X:
+                    - abbr: X
+                      href: https://x.com
+                      icon: si-x
+          # The upstream tmux wiki page that lists the default key bindings.
+          - tmux keys:
+                    - abbr: TM
+                      href: https://github.com/tmux/tmux/wiki/Getting-Started
+                      icon: si-tmux
+          - oh-my-tmux:
+                    - abbr: OM
+                      href: https://github.com/gpakosz/.tmux
+                      icon: si-tmux

@@ -25,7 +25,7 @@ quicklaunch:
   url: https://search.{{HOMEPAGE_VAR_HOST_NAME}}/search?q=
   # Fetched by homepage's own server, not the browser - see widgets.yaml.
   suggestionUrl: http://searxng:8080/autocompleter?q=
-  target: _blank
+  target: _self
   searchDescriptions: true
   showSearchSuggestions: true
   hideInternetSearch: false
@@ -33,12 +33,6 @@ quicklaunch:
   mobileButtonPosition: bottom-right
 
 layout:
-  Favorites:
-    header: false
-    tab: Favorites
-    style: row
-    icon: mdi-star
-
   Services:
     header: false
     tab: Services
@@ -113,3 +107,9 @@ layout:
       columns: 2
       icon: mdi-domino-mask
     Dashboard:
+
+  Bookmarks:
+    header: false
+    tab: Bookmarks
+    style: row
+    icon: mdi-bookmark-multiple
