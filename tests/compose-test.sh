@@ -113,6 +113,13 @@ none "the rendered stack is the expected size" FLOOR
 # container - so this one reads the files instead.
 none "every compose/*.yaml is included and its anchors match compose.yaml" LAYOUT
 
+# Dependabot is what keeps every upstream image pin current, and the way it
+# stops is silent: it matches basenames against one regex and reads one
+# directory without descending, so a domain file renamed back to core.yaml, or
+# a .github/dependabot.yml that stops naming /compose, ends every image-bump PR
+# with no error raised anywhere.
+none "every image pin sits where Dependabot will look for it" DEPENDABOT
+
 # --- the checker must actually catch each of them ---------------------------
 #
 # Five green assertions above prove nothing on their own: a checker that looks
@@ -198,6 +205,42 @@ else
     fail=$((fail + 1))
     printf 'FAIL a preamble copy that drifted from compose.yaml (the checker reported nothing)\n'
 fi
+
+# DEPENDABOT reads the repository too, so it takes the same treatment: a tree
+# holding one image pin, broken once per way the fetcher can be blinded.
+blind() {
+    _label="$1"
+    _name="$2"
+    _drop="$3"
+    _tree="$(mktemp -d)"
+    mkdir -p "$_tree/compose" "$_tree/.github" "$_tree/config/postgres"
+    # The other categories read these two and would stop on a tree without them.
+    cp "$REPO_DIR/compose.yaml" "$_tree/compose.yaml"
+    cp "$REPO_DIR/config/postgres/init-databases.sh" "$_tree/config/postgres/"
+    # The root's own image pin, so the "/" half of `directories:` is exercised
+    # too - compose.yaml pins nothing, and without this the root could stop
+    # being listed with nothing here noticing.
+    cp "$REPO_DIR/compose.test.yaml" "$_tree/compose.test.yaml"
+    printf 'services:\n  x:\n    image: foo:1\n' > "$_tree/compose/$_name"
+    if [ -n "$_drop" ]; then
+        grep -vF -e "$_drop" "$REPO_DIR/.github/dependabot.yml" > "$_tree/.github/dependabot.yml"
+    else
+        cp "$REPO_DIR/.github/dependabot.yml" "$_tree/.github/dependabot.yml"
+    fi
+    _hits="$(printf '%s' '{"services": {"a": {"image": "x:1", "mem_limit": "64m"}}}' \
+        | python3 "$TESTS_DIR/compose-invariants.py" "$_tree" | grep -c '^DEPENDABOT ' || true)"
+    rm -rf "$_tree"
+    if [ "$_hits" -gt 0 ]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        printf 'FAIL %s (the checker reported nothing)\n' "$_label"
+    fi
+}
+
+blind "a domain file renamed to one Dependabot never fetches" core.yaml ''
+blind "a /compose that no docker-compose update names" compose-core.yaml '- "/compose"'
+blind "a / that no docker-compose update names" compose-core.yaml '- "/"'
 
 # --- and it must never echo a value it was handed ---------------------------
 #
