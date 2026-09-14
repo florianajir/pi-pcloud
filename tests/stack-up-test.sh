@@ -169,6 +169,12 @@ if [ "\$1" = compose ] && [ "\$2" = ps ]; then
     [ -f "$WORK/unhealthy" ] && cat "$WORK/unhealthy"
     exit 0
 fi
+# The selection the health report filters by. Announcing this call instead
+# would make every word of "DOCKER compose config --services" a service name.
+if [ "\$1" = compose ] && [ "\$2" = config ]; then
+    printf 'traefik\nkavita\nagentgateway\n'
+    exit 0
+fi
 echo "DOCKER \$*"
 if [ "\$1" = compose ] && [ "\$2" = up ] && [ -f "$WORK/fail-up" ]; then
     cat "$WORK/fail-up"
@@ -308,6 +314,15 @@ lacks    "a healthy one is not"                           "$warned" "traefik"
 contains "the bootstraps still run"                       "$out" "HOOK homepage-widgets-bootstrap.sh"
 rm -f "$WORK/unhealthy"
 
+# A service the current profiles do not select is not a service that is down.
+# Compose leaves its container behind when a profile stops selecting it, so it
+# sits `exited` and would otherwise be named on every single start - which is
+# what kapowarr, disabled for months, did on the first real deploy.
+printf 'kapowarr exited\n' >"$WORK/unhealthy"
+HEALTH_TIMEOUT=2 HEALTH_INTERVAL=1 run_rc all
+lacks    "a disabled service's stopped container is not reported" "$out" "still not healthy"
+rm -f "$WORK/unhealthy"
+
 # A container with no healthcheck counts as ready once it is running - the rule
 # `compose up --wait` applies too, and 5 of the 46 services declare none.
 printf 'agentgateway running \n' >"$WORK/unhealthy"
@@ -321,10 +336,12 @@ rm -f "$WORK/unhealthy"
 # answer, and doing so would add the whole HEALTH_TIMEOUT to every boot and every
 # `make update` for as long as a single service is down. The budget here is ten
 # minutes: the elapsed figure in the warning is what proves none of it was spent.
-printf 'kapowarr exited \n' >"$WORK/unhealthy"
+# kavita, not kapowarr: this is the *enabled* service that died, which must be
+# named. The stub's selection list is what separates the two cases.
+printf 'kavita exited \n' >"$WORK/unhealthy"
 HEALTH_TIMEOUT=600 HEALTH_INTERVAL=30 run_rc all
 warned="$(printf '%s\n' "$out" | grep 'still not healthy' || true)"
-contains "a container that died is named"                  "$warned" "kapowarr"
+contains "a container that died is named"                  "$warned" "kavita"
 contains "and is not waited on"                            "$warned" "after 0s"
 rm -f "$WORK/unhealthy"
 # An assignment prefixing a *function* call outlives the call, so the budget
