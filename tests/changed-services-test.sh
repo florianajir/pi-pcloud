@@ -125,17 +125,24 @@ answer "a config tree read under another name" \
 
 answer "host-side tooling touches no container"     "" scripts/lint.sh
 answer "a per-invocation backup hook neither"       "" scripts/db-backup.sh
-answer "nor a file install-system copies to /etc"   "" config/systemd/system/x.service
+answer "nor a file install-system copies to /etc"   "" config/completion/pi-pcloud.bash
+answer "nor the sysctl drop-in"                     "" config/sysctl.d/pi-pcloud.conf
 answer "nor a path outside config/ and scripts/"    "" docs/COMMANDS.md
 answer "nor a disabled service's own config"        "" config/freshrss/x.php
 
 # --- everything ---------------------------------------------------------------
+#
+# A systemd unit is copied to /etc like the two above, but install-system only
+# reloads the definition - it never restarts the unit - so a changed
+# ExecStartPre or Environment= would sit loaded and unapplied until the next
+# reboot. Only the restart applies it.
 #
 # The fallback is the whole safety argument: a config nothing recreates is a
 # config nothing reads, so a path the convention cannot attribute must answer
 # ALL rather than silently answer nothing.
 
 answer "the shared start path answers ALL"   "ALL" scripts/lib.sh
+answer "a systemd unit does too"             "ALL" config/systemd/system/pi-pcloud.service
 answer "an unowned config tree too"          "ALL" config/notaservice/settings.yaml
 answer "a loose file straight under config/" "ALL" config/settings.yaml
 answer "a script naming no service"          "ALL" scripts/nothing-owns-this.sh

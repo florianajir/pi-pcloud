@@ -390,14 +390,20 @@ update-apply:
 # are idempotent and configure through each service's own API, so what they
 # write survives the recreate.
 #
-# That also puts the recreate *after* stack-up.sh's health wait, so `--wait`
-# here is what keeps the success line below honest: without it an update whose
-# whole point was a new config prints ✅ over a container still crash-looping on
-# it. `--wait` is safe on this side - unlike inside stack-up.sh, nothing here is
-# a systemd ExecStart whose failure would be followed by `compose down` - but it
-# still only warns, because a slow healthcheck is not a failed update. One exit
-# status covers both a timed-out wait and a container compose could not create
-# at all, so the warning claims neither - `docker compose ps` says which.
+# That also puts the recreate *after* stack-up.sh's health wait, so the wait
+# below is what keeps the success line honest: without it an update whose whole
+# point was a new config prints ✅ over a container still crash-looping on it.
+# `--wait` is safe on this side - unlike inside stack-up.sh, nothing here is a
+# systemd ExecStart whose failure would be followed by `compose down`.
+#
+# Recreate and wait are two calls because one `--wait` invocation returns the
+# same status for a container compose could not create at all and one that is
+# merely slow. The first is a failed update and stops here; the second is a
+# warning, since a slow healthcheck is not a broken update. The second call
+# recreates nothing - the spec has not moved - it only waits.
+#
+# `|| exit 1` on $(apply_stack): it is no longer the recipe's last command, and
+# without it a stack-up.sh that died took the ✅ below with it, silently.
 #
 # `systemctl restart`, not `$(MAKE) restart`: make runs any recipe line
 # mentioning $(MAKE) even under `--dry-run`.
@@ -409,11 +415,12 @@ update-apply:
 		$(SUDO) systemctl restart $(UNIT); \
 	else \
 		echo "🚀 Applying changes (only what moved is recreated)..."; \
-		$(apply_stack); \
+		$(apply_stack) || exit 1; \
 		if [ -n "$$targets" ]; then \
 			echo "🔁 Re-reading changed config:" $$targets; \
-			$(SUDO) $(COMPOSE) up -d --no-deps --force-recreate --wait --wait-timeout 180 $$targets \
-				|| echo "  ⚠ did not come up healthy within 180s (or failed to recreate):" $$targets; \
+			$(SUDO) $(COMPOSE) up -d --no-deps --force-recreate $$targets || exit 1; \
+			$(SUDO) $(COMPOSE) up -d --no-deps --wait --wait-timeout 180 $$targets \
+				|| echo "  ⚠ recreated, but not healthy within 180s:" $$targets; \
 		fi; \
 	fi
 	@echo "🧹 Reclaiming space from the replaced images..."

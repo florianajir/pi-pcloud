@@ -141,6 +141,9 @@ def project(service):
         "image": service.get("image"),
         "has_build": bool(service.get("build")),
         "has_healthcheck": bool(service.get("healthcheck")),
+        # A service name, never a credential - and the one thing that says which
+        # containers a recreate cannot leave behind. See recreate_mapping_gaps.
+        "network_mode": service.get("network_mode"),
         "depends_on": {
             target: spec.get("condition")
             for target, spec in (service.get("depends_on") or {}).items()
@@ -469,8 +472,8 @@ def recreate_exceptions(repo_dir):
         # else; there is no convention to check there. Same shape as
         # tracked_files() returning None outside a checkout.
         return None
-    names = ("HOST_CONFIG_DIRS", "SHARED_START_PATH", "PER_INVOCATION", "HOST_ONLY",
-             "CONFIG_DIR_ALIASES", "ALSO_RECREATE")
+    names = ("HOST_CONFIG_DIRS", "ALWAYS_ALL_CONFIG_DIRS", "SHARED_START_PATH",
+             "PER_INVOCATION", "HOST_ONLY", "CONFIG_DIR_ALIASES", "ALSO_RECREATE")
     found = {}
     for name in names:
         match = re.search(rf"^{name}='([^']*)'", source, re.M | re.S)
@@ -530,6 +533,35 @@ def recreate_mapping_gaps(repo_dir, services):
             if name not in services:
                 messages.append(f"ALSO_RECREATE names {name}, but no such service is declared")
 
+    # Which containers each service drags along when it is recreated.
+    coupled = {}
+    for entry in sorted(lists["ALSO_RECREATE"]):
+        owner, _, others = entry.partition(":")
+        if not others:
+            messages.append(f"ALSO_RECREATE entry {entry} names nothing to recreate with it; the spelling is <service>:<service>[,<service>]")
+            continue
+        coupled[owner] = others.split(",")
+        for name in [owner, *coupled[owner]]:
+            if name not in services:
+                messages.append(f"ALSO_RECREATE names {name}, which is not a declared service")
+
+    # The check that matters: not that the table is well-formed, but that it is
+    # complete. `network_mode: service:X` is resolved to a container *id* when
+    # the container is created, so recreating X alone leaves every sharer
+    # running, healthy-looking, and with no network at all - the exact silent
+    # failure this table exists to prevent, and one a fourth sharer added later
+    # would reintroduce with CI green.
+    for name, service in sorted(services.items()):
+        mode = service.get("network_mode") or ""
+        if not mode.startswith("service:"):
+            continue
+        target = mode[len("service:"):]
+        if name not in coupled.get(target, []):
+            messages.append(
+                f"{name} runs in {target}'s network namespace but is not in ALSO_RECREATE under {target}, "
+                f"so recreating {target} alone would leave it running with no network"
+            )
+
     tracked = tracked_files(repo_dir)
     if tracked is None:
         return messages
@@ -539,17 +571,19 @@ def recreate_mapping_gaps(repo_dir, services):
     for directory in sorted(config_dirs):
         if directory in services or directory in aliased:
             continue
-        if directory in lists["HOST_CONFIG_DIRS"]:
+        if directory in lists["HOST_CONFIG_DIRS"] or directory in lists["ALWAYS_ALL_CONFIG_DIRS"]:
             continue
         messages.append(
             f"config/{directory} matches no service, so every change under it restarts the whole stack; "
             "rename it after the service that reads it, or add it to HOST_CONFIG_DIRS "
+            "(applied without a container), ALWAYS_ALL_CONFIG_DIRS (only a restart applies it) "
             "(host files) or CONFIG_DIR_ALIASES (read by a differently-named service) "
             "in scripts/changed-services.sh"
         )
-    for directory in sorted(lists["HOST_CONFIG_DIRS"]):
-        if directory not in config_dirs:
-            messages.append(f"HOST_CONFIG_DIRS names config/{directory}, which no longer exists")
+    for name in ("HOST_CONFIG_DIRS", "ALWAYS_ALL_CONFIG_DIRS"):
+        for directory in sorted(lists[name]):
+            if directory not in config_dirs:
+                messages.append(f"{name} names config/{directory}, which no longer exists")
 
     # The two shapes the convention has no name for at all, so neither the
     # checks above nor changed-services.sh's rules can classify them: they fall

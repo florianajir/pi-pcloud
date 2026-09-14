@@ -39,10 +39,22 @@ rev_b="$2"
 # --- deliberate exceptions, each with the reason it is not a bug -------------
 
 # config/ subdirectories `make install-system` copies to /etc rather than
-# mounting into a container: the systemd units, the sysctl drop-in and the shell
-# completions. install-system runs before this and owns the daemon-reload, so
-# there is no container to recreate for one.
-HOST_CONFIG_DIRS='completion sysctl.d systemd'
+# mounting into a container: the sysctl drop-in and the shell completions.
+# install-system runs before this and applies both, so there is no container to
+# recreate for either.
+#
+HOST_CONFIG_DIRS='completion sysctl.d'
+
+# config/ subdirectories that answer ALL on purpose. install-system copies the
+# units too, but all it does there is `daemon-reload` - it never restarts the
+# unit - so a changed ExecStartPre or Environment= is loaded and then not
+# applied to the instance already running, and would sit unused until the next
+# reboot. Only a restart applies it. Spelled out rather than left to the
+# fallback, so the answer reads as the decision it is, and so the invariant can
+# tell it from a directory nobody has classified yet. It over-restarts for a
+# nextcloud-cron.service edit; being one reboot late on how the stack itself
+# starts is the worse trade.
+ALWAYS_ALL_CONFIG_DIRS='systemd'
 
 # The machinery every hook is built on. A change to one of these can alter any
 # rendered config, and the path alone cannot say which - so all of them. lib.sh
@@ -54,6 +66,14 @@ SHARED_START_PATH='lib.sh pilib.py run-hooks.sh run-if-enabled.sh stack-up.sh'
 # process on every backup run, so a rewrite is picked up with nothing recreated.
 # Named here rather than skipped by a rule, because by path they are exactly as
 # ownerless as the SHARED_START_PATH ones above.
+#
+# These two are *single-file* binds, which pin an inode rather than a path, so
+# the exemption only holds if git rewrites the file in place. Measured on this
+# host, 2026-09-14: `git pull --ff-only` over a modified file preserves its
+# inode, so the running backrest does see the new script. If that ever stops
+# being true - git unlinks instead of truncating when the mode changes - the
+# symptom is backrest running a stale hook forever, and the fix is to map these
+# to backrest rather than exempt them.
 PER_INVOCATION='db-backup.sh sqlite-backup.sh'
 
 # Host-side tooling: operator commands, CI helpers, and the two install-system
@@ -208,6 +228,7 @@ for path in $changed; do
             _dir="${path#config/}"
             _dir="${_dir%%/*}"
             in_words "$_dir" "$HOST_CONFIG_DIRS" && continue
+            in_words "$_dir" "$ALWAYS_ALL_CONFIG_DIRS" && { echo ALL; exit 0; }
             owners="$(config_dir_readers "$_dir")"
             ;;
         scripts/*)

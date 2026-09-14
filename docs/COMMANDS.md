@@ -68,6 +68,7 @@ What the convention cannot express is a container that reads *another* service's
 Two cases still take the whole stack down:
 
 - **A change no single service owns** — `scripts/lib.sh`, `run-hooks.sh`, `stack-up.sh` and the like can alter any rendered config, and the path alone cannot say which. Host-side tooling (`lint.sh`, the `rotate-*` scripts, `pg-major-upgrade.sh`) is explicitly exempt: it is listed in `changed-services.sh` as reaching no running container. Anything the convention does not cover answers "everything", because a config nothing recreates is a config nothing reads.
+- **A systemd unit changed** — `make install-system` copies it and reloads the definition, but never restarts the unit, so a new `ExecStartPre` or `Environment=` would sit loaded and unapplied until the next reboot.
 - **A network or volume definition moved** — an upstream subnet or driver option. `up -d` refuses outright there; `stack-up.sh` recognises the error, takes the stack down once and brings it back, rather than aborting with the new images already pulled.
 
 `make restart` is still there to force a full restart at any time.
