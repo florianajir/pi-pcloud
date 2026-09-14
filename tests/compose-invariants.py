@@ -122,6 +122,28 @@ def bytes_of(value):
     return int(float(match.group(1)) * scale[match.group(2)])
 
 
+def bind_sources(service):
+    """The host paths a service reads: its env_file entries and its bind mounts.
+
+    Paths only, never a value. `docker compose config` inlines the *contents* of
+    every env_file, which is the whole reason project() is an allowlist - but the
+    path is the one part of an env_file that is safe to keep, and the only part
+    recreate_mapping_gaps needs to see who reads whose config tree.
+    """
+    found = set()
+    for entry in service.get("env_file") or []:
+        found.add(entry.get("path") if isinstance(entry, dict) else entry)
+    for volume in service.get("volumes") or []:
+        if isinstance(volume, dict):
+            if volume.get("type") == "bind":
+                found.add(volume.get("source"))
+        elif isinstance(volume, str):
+            # The short `source:target[:mode]` spelling, which compose normally
+            # expands - kept for a render that did not.
+            found.add(volume.split(":", 1)[0])
+    return {str(path) for path in found if path}
+
+
 def project(service):
     """Everything the invariants need, and deliberately nothing else.
 
@@ -144,6 +166,9 @@ def project(service):
         # A service name, never a credential - and the one thing that says which
         # containers a recreate cannot leave behind. See recreate_mapping_gaps.
         "network_mode": service.get("network_mode"),
+        # Paths, never values - see bind_sources. The other half of what says
+        # which containers a recreate cannot leave behind.
+        "bind_sources": sorted(bind_sources(service)),
         "depends_on": {
             target: spec.get("condition")
             for target, spec in (service.get("depends_on") or {}).items()
@@ -473,7 +498,8 @@ def recreate_exceptions(repo_dir):
         # tracked_files() returning None outside a checkout.
         return None
     names = ("HOST_CONFIG_DIRS", "ALWAYS_ALL_CONFIG_DIRS", "SHARED_START_PATH",
-             "PER_INVOCATION", "HOST_ONLY", "CONFIG_DIR_ALIASES", "ALSO_RECREATE")
+             "PER_INVOCATION", "HOST_ONLY", "FIRST_INIT_CONFIG", "CONFIG_DIR_ALIASES",
+             "ALSO_RECREATE")
     found = {}
     for name in names:
         match = re.search(rf"^{name}='([^']*)'", source, re.M | re.S)
@@ -557,6 +583,41 @@ def recreate_mapping_gaps(repo_dir, services):
                 f"so recreating {target} alone would leave it running with no network"
             )
 
+    # ALSO_RECREATE's *other* shape, and the quieter one: a service reading a
+    # config/ tree the convention gives to somebody else. changed-services.sh
+    # resolves such a change to the owner and recreates only that, so the reader
+    # keeps the file it replaced - and for an env_file, forever, because those
+    # values are frozen at container creation and even a `restart` keeps the old
+    # ones. Without this, a service added later with
+    # `env_file: ./config/ntfy/ntfy.env` ships that hole with CI green.
+    config_root = f"{Path(repo_dir).resolve()}/config/"
+    matched = 0
+    for name, service in sorted(services.items()):
+        for source in service.get("bind_sources") or []:
+            if not source.startswith(config_root):
+                continue
+            matched += 1
+            directory = source[len(config_root):].split("/")[0]
+            owners = aliased.get(directory, [directory])
+            if name == directory or name in owners:
+                continue
+            if any(name in coupled.get(owner, []) for owner in owners):
+                continue
+            messages.append(
+                f"{name} reads config/{directory}/, which the naming convention gives to "
+                f"{'/'.join(owners)}; add it to ALSO_RECREATE under {'/'.join(owners)} (or to "
+                f"CONFIG_DIR_ALIASES), or a pull rewriting that tree recreates {'/'.join(owners)} "
+                f"and leaves {name} on the file it replaced"
+            )
+    # A path shape this never recognises reads as "nobody shares a config tree",
+    # which is the same green as a stack that genuinely does not - so say when
+    # the render produced host paths and not one of them landed under config/.
+    if not matched and any(service.get("bind_sources") for service in services.values()):
+        messages.append(
+            f"no service binds anything under {config_root}, so the ALSO_RECREATE completeness "
+            "check above looked at nothing; the render's paths are not relative to this repo_dir"
+        )
+
     tracked = tracked_files(repo_dir)
     if tracked is None:
         return messages
@@ -579,6 +640,14 @@ def recreate_mapping_gaps(repo_dir, services):
         for directory in sorted(lists[name]):
             if directory not in config_dirs:
                 messages.append(f"{name} names config/{directory}, which no longer exists")
+
+    # FIRST_INIT_CONFIG is the one list that exempts a file rather than a
+    # directory, so a rename leaves it pointing at nothing and silently stops
+    # exempting anything - the failure direction here is an unneeded recreate,
+    # but a stale entry is also how the next file to move loses its exemption.
+    for relative in sorted(lists["FIRST_INIT_CONFIG"]):
+        if f"config/{relative}" not in tracked:
+            messages.append(f"FIRST_INIT_CONFIG names config/{relative}, which no longer exists")
 
     # The two shapes the convention has no name for at all, so neither the
     # checks above nor changed-services.sh's rules can classify them: they fall

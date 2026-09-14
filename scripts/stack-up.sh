@@ -41,6 +41,21 @@ case "$HEALTH_INTERVAL" in '' | *[!0-9]*) HEALTH_INTERVAL=5 ;; esac
 # In lib.sh, because changed-services.sh has to resolve the same selection.
 resolve_compose_profiles
 
+# The services this selection actually runs. `compose ps -a` below lists the
+# containers of *disabled* ones too: compose leaves them behind when a profile
+# stops selecting them - a profile-disabled service is not an orphan, so
+# --remove-orphans does not touch it - and they sit `exited` forever. A service
+# that is off is not a service that is unhealthy.
+#
+# Measured on the first deploy of the health report, 2026-09-15: kapowarr had
+# been disabled for months and its stopped container was named in the warning
+# on every single start.
+#
+# Empty means "could not ask", not "nothing runs", so the filter is skipped
+# rather than applied - reporting a container that turns out to be disabled is
+# noise, reporting none at all is the silence this whole report exists to end.
+SELECTED_SERVICES="$(compose config --services 2>/dev/null | tr '\n' ' ')"
+
 # `stremio` and `stremio-lan` are one server in two networking modes, sharing a
 # single data volume and the same Traefik host rules. Compose cannot express
 # mutual exclusion, so refuse the combination before anything starts. The pair
@@ -109,7 +124,10 @@ unready_services() {
         return 0
     fi
     printf '%s\n' "$_ps" |
-        awk '$2 != "running" || ($3 != "" && $3 != "healthy") { print $1, $2 }'
+        awk -v selected=" $SELECTED_SERVICES " '
+            selected != "  " && index(selected, " " $1 " ") == 0 { next }
+            $2 != "running" || ($3 != "" && $3 != "healthy") { print $1, $2 }
+        '
 }
 
 # Give the stack a bounded chance to settle, then say what did not.
