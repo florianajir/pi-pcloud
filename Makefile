@@ -120,6 +120,7 @@ test:
 	@sh tests/cli-test.sh
 	@sh tests/services-test.sh
 	@sh tests/stack-up-test.sh
+	@sh tests/changed-services-test.sh
 	@sh tests/compose-test.sh
 	@sh tests/trilium-api-contract.sh
 	@sh tests/routing-test.sh
@@ -389,6 +390,15 @@ update-apply:
 # are idempotent and configure through each service's own API, so what they
 # write survives the recreate.
 #
+# That also puts the recreate *after* stack-up.sh's health wait, so `--wait`
+# here is what keeps the success line below honest: without it an update whose
+# whole point was a new config prints ✅ over a container still crash-looping on
+# it. `--wait` is safe on this side - unlike inside stack-up.sh, nothing here is
+# a systemd ExecStart whose failure would be followed by `compose down` - but it
+# still only warns, because a slow healthcheck is not a failed update. One exit
+# status covers both a timed-out wait and a container compose could not create
+# at all, so the warning claims neither - `docker compose ps` says which.
+#
 # `systemctl restart`, not `$(MAKE) restart`: make runs any recipe line
 # mentioning $(MAKE) even under `--dry-run`.
 	@targets=$$(if [ -n "$(HEAD_BEFORE_PULL)" ]; then \
@@ -402,7 +412,8 @@ update-apply:
 		$(apply_stack); \
 		if [ -n "$$targets" ]; then \
 			echo "🔁 Re-reading changed config:" $$targets; \
-			$(SUDO) $(COMPOSE) up -d --no-deps --force-recreate $$targets; \
+			$(SUDO) $(COMPOSE) up -d --no-deps --force-recreate --wait --wait-timeout 180 $$targets \
+				|| echo "  ⚠ did not come up healthy within 180s (or failed to recreate):" $$targets; \
 		fi; \
 	fi
 	@echo "🧹 Reclaiming space from the replaced images..."

@@ -65,19 +65,53 @@ PER_INVOCATION='db-backup.sh sqlite-backup.sh'
 # their code changes nothing about a stack nobody has re-run them on.
 # wan-allowlist-sync.sh is the same shape, on a timer.
 #
+# authelia-ntfy-watch.sh carries a service's name but is not its config: it runs
+# on the host as pi-pcloud-authelia-ntfy.service, which `make update` restarts
+# itself two lines before calling this. Without the entry, the prefix rule reads
+# it as Authelia's and recreates the identity provider for a host watcher.
+#
+# changed-services.sh is this file. By the time it answers, the pull that
+# rewrote it has already happened and the new version is the one running.
+#
 # This list exists so those changes stop costing a full restart: without it they
 # fall to the ALL fallback below, which is correct but wasteful, and they are
 # common. Keeping it honest is tests/compose-invariants.py's job - it fails the
 # build on any scripts/ file that is neither owned by a service nor named here.
-HOST_ONLY='api-keys.sh configure-kernel-params.sh configure-swap.sh lint.sh
-pg-major-upgrade.sh pi-pcloud recovery-kit.sh rotate-password.sh rotate-secret.sh
-sarif-merge.py services.sh services-picker.py wan-allowlist-sync.sh'
+HOST_ONLY='api-keys.sh authelia-ntfy-watch.sh changed-services.sh
+configure-kernel-params.sh configure-swap.sh lint.sh pg-major-upgrade.sh
+pi-pcloud recovery-kit.sh rotate-password.sh rotate-secret.sh sarif-merge.py
+services.sh services-picker.py wan-allowlist-sync.sh'
 
 # config/<dir> trees read by services not named after the directory, spelled
 # <dir>:<service>[,<service>]. One tree, two containers: both immich services
 # mount config/immich. Kept in the same greppable shape as the lists above so
 # tests/compose-invariants.py can read every exception from one place.
 CONFIG_DIR_ALIASES='immich:immich-server,immich-machine-learning'
+
+# Containers a recreate has to drag along, spelled <service>:<also>[,<also>].
+# The name resolved above is the one that *owns* the file; these are the ones
+# that would be left reading the old one. Two shapes, both invisible to the
+# naming convention:
+#
+#   - a file one service's hook writes and another mounts. config/ntfy/ntfy.env
+#     is an env_file for backrest and uptime-kuma, and env_file values are
+#     frozen at container creation - `restart` keeps the old token, only a
+#     recreate picks it up. config/n8n/n8n.env is the same for n8n-runners.
+#     headplane mounts config/headscale and reads what headscale-pre-start.sh
+#     renders there; system-tools reads a secret out of config/homepage. Those
+#     two could be spelled as CONFIG_DIR_ALIASES, but the generated .env files
+#     are gitignored, so the only thing a pull ever shows is the *-pre-start.sh
+#     that writes them - and an alias keyed on config/ never sees it.
+#
+#   - a shared network namespace. qbittorrent, stremio and kapowarr run with
+#     network_mode: service:gluetun, which docker resolves to the container id
+#     at create time: recreating gluetun alone leaves all three running,
+#     healthy-looking and with no network at all.
+ALSO_RECREATE='ntfy:backrest,uptime-kuma
+n8n:n8n-runners
+headscale:headplane
+homepage:system-tools
+gluetun:qbittorrent,stremio,kapowarr'
 
 # --- helpers ----------------------------------------------------------------
 
@@ -126,6 +160,18 @@ script_owner() {
     printf '%s' "$_owner"
 }
 
+# A service plus everything ALSO_RECREATE couples to it. Applied to the owner
+# rather than to the path, so a coupling holds however the change arrived -
+# through the config tree or through the hook that renders into it.
+with_coupled() {
+    printf '%s' "$1"
+    for _entry in $ALSO_RECREATE; do
+        case "$_entry" in
+            "$1":*) printf ' %s' "$(printf '%s' "${_entry#*:}" | tr ',' ' ')" ;;
+        esac
+    done
+}
+
 # --- resolve ----------------------------------------------------------------
 
 resolve_compose_profiles
@@ -137,7 +183,14 @@ resolve_compose_profiles
 # stderr dropped: compose warns once per unset variable, and `make update` calls
 # this before check-env has necessarily been satisfied. An actual failure still
 # surfaces, as the empty list the guard below refuses.
-KNOWN="$(COMPOSE_PROFILES=all compose config --services 2>/dev/null | tr '\n' ' ')"
+#
+# `all,stremio-lan`, not `all`: stremio-lan's only profile is its own name, so
+# `all` renders 45 of the 46 services and script_owner would then read
+# stremio-lan-pre-start.sh as *stremio's* - a service the one host that runs
+# stremio-lan has disabled, so the change would be dropped in silence. Same
+# string tests/compose-invariants.py renders with, so the convention CI checks
+# is the convention this resolves.
+KNOWN="$(COMPOSE_PROFILES=all,stremio-lan compose config --services 2>/dev/null | tr '\n' ' ')"
 ENABLED="$(compose config --services 2>/dev/null | tr '\n' ' ')"
 
 [ -n "$KNOWN" ] || die "docker compose config --services listed nothing"
@@ -179,8 +232,10 @@ for path in $changed; do
     fi
 
     for _owner in $owners; do
-        in_words "$_owner" "$ENABLED" || continue
-        targets="$targets $_owner"
+        for _target in $(with_coupled "$_owner"); do
+            in_words "$_target" "$ENABLED" || continue
+            targets="$targets $_target"
+        done
     done
 done
 

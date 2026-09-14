@@ -299,8 +299,12 @@ printf 'kavita running starting\ntraefik running healthy\n' >"$WORK/unhealthy"
 HEALTH_TIMEOUT=2 HEALTH_INTERVAL=1 run_rc all
 ok       "an unhealthy container does not fail the start" "$rc" 0
 contains "and it is named"                                "$out" "still not healthy"
-contains "by service"                                     "$out" "kavita"
-lacks    "a healthy one is not"                           "$out" "traefik"
+# The warning line on its own, not the whole transcript: every hook stub
+# announces itself, so "kavita" is in $out through HOOK kavita-pre-start.sh
+# whether or not await_healthy ever named it.
+warned="$(printf '%s\n' "$out" | grep 'still not healthy' || true)"
+contains "by service"                                     "$warned" "kavita"
+lacks    "a healthy one is not"                           "$warned" "traefik"
 contains "the bootstraps still run"                       "$out" "HOOK homepage-widgets-bootstrap.sh"
 rm -f "$WORK/unhealthy"
 
@@ -309,6 +313,19 @@ rm -f "$WORK/unhealthy"
 printf 'agentgateway running \n' >"$WORK/unhealthy"
 HEALTH_TIMEOUT=2 HEALTH_INTERVAL=1 run_rc all
 lacks    "a running container with no healthcheck is ready" "$out" "still not healthy"
+rm -f "$WORK/unhealthy"
+
+# `-a` lists containers that started and died, and `exited` is where they stay -
+# Docker takes a crashing container through `restarting`, so one reported as
+# exited has been stopped by hand or given up on. Polling it cannot change the
+# answer, and doing so would add the whole HEALTH_TIMEOUT to every boot and every
+# `make update` for as long as a single service is down. The budget here is ten
+# minutes: the elapsed figure in the warning is what proves none of it was spent.
+printf 'kapowarr exited \n' >"$WORK/unhealthy"
+HEALTH_TIMEOUT=600 HEALTH_INTERVAL=30 run_rc all
+warned="$(printf '%s\n' "$out" | grep 'still not healthy' || true)"
+contains "a container that died is named"                  "$warned" "kapowarr"
+contains "and is not waited on"                            "$warned" "after 0s"
 rm -f "$WORK/unhealthy"
 # An assignment prefixing a *function* call outlives the call, so the budget
 # would otherwise stay at two seconds for every test written after this one.

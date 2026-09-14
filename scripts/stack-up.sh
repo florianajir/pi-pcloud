@@ -25,6 +25,18 @@ set -eu
 # target: the loop returns as soon as everything is healthy.
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-300}"
 HEALTH_INTERVAL="${HEALTH_INTERVAL:-5}"
+# Both reach $(( )) below, where dash reads a non-number as 0 and then treats
+# the division by zero as a fatal *shell* error, not a failed command: the
+# `await_healthy || true` at the call site cannot contain it, and a stack-up.sh
+# that exits non-zero is a failed ExecStart - which systemd follows with
+# ExecStop, `docker compose down`. A typo in an override must not do that.
+case "$HEALTH_TIMEOUT" in '' | *[!0-9]*) HEALTH_TIMEOUT=300 ;; esac
+case "$HEALTH_INTERVAL" in '' | *[!0-9]*) HEALTH_INTERVAL=5 ;; esac
+# `0` is not the only way to spell zero, and a glob cannot say "numerically
+# greater than zero": `00` passes the case above and divides just as fatally.
+# The redirection is for a value too large for the shell's integers, which is
+# an error here rather than a comparison.
+[ "$HEALTH_INTERVAL" -gt 0 ] 2>/dev/null || HEALTH_INTERVAL=5
 
 # In lib.sh, because changed-services.sh has to resolve the same selection.
 resolve_compose_profiles
@@ -74,12 +86,30 @@ start_containers() {
     compose up -d --remove-orphans
 }
 
-# Services compose reports as anything other than up-and-healthy. A container
-# with no healthcheck counts as ready once it is running, which is the rule
-# `compose up --wait` applies too.
+# `<service> <state>` for everything compose reports as other than
+# up-and-healthy. A container with no healthcheck counts as ready once it is
+# running, which is the rule `compose up --wait` applies too.
+#
+# `-a` is load-bearing: a bare `compose ps` lists only what is running, so a
+# container that started and died is not reported as unhealthy - it is not
+# reported at all, and the loop below would call the stack healthy. That is the
+# one failure this exists to name.
+#
+# The state comes out with the name because the loop needs it: `-a` also lists
+# containers that are never going to move again, and those must not be waited
+# on. See await_healthy.
+#
+# A compose that could not be answered is not a healthy stack either, so the
+# failure is named rather than dropped: an empty list here reads as "everything
+# is fine", and the bootstraps would then run into a daemon that is not
+# answering.
 unready_services() {
-    compose ps --format '{{.Service}} {{.State}} {{.Health}}' 2>/dev/null |
-        awk '$2 != "running" || ($3 != "" && $3 != "healthy") { print $1 }'
+    if ! _ps="$(compose ps -a --format '{{.Service}} {{.State}} {{.Health}}' 2>/dev/null)"; then
+        printf 'compose-ps-unavailable unknown\n'
+        return 0
+    fi
+    printf '%s\n' "$_ps" |
+        awk '$2 != "running" || ($3 != "" && $3 != "healthy") { print $1, $2 }'
 }
 
 # Give the stack a bounded chance to settle, then say what did not.
@@ -96,16 +126,26 @@ unready_services() {
 await_healthy() {
     _deadline_loops=$((HEALTH_TIMEOUT / HEALTH_INTERVAL))
     _i=0
-    while [ "$_i" -lt "$_deadline_loops" ]; do
+    while :; do
         _unready="$(unready_services)"
         [ -n "$_unready" ] || return 0
+
+        # Only a container that is still moving can be waited into health. `-a`
+        # also lists the ones that started and died, and `exited` is where they
+        # stay: Docker restarts a crashing container through `restarting`, so
+        # anything reported as exited here has either been stopped by hand or
+        # given up on. Polling those costs the whole budget - 300s added to
+        # every boot and every `make update`, with the bootstraps queued behind
+        # it - and cannot change the answer, so report and move on.
+        _settling="$(printf '%s\n' "$_unready" | awk '$2 != "exited" && $2 != "dead" { print $1 }')"
+        [ -n "$_settling" ] || break
+        [ "$_i" -lt "$_deadline_loops" ] || break
+
         sleep "$HEALTH_INTERVAL"
         _i=$((_i + 1))
     done
 
-    _unready="$(unready_services)"
-    [ -n "$_unready" ] || return 0
-    log "warning: still not healthy after ${HEALTH_TIMEOUT}s: $(printf '%s' "$_unready" | tr '\n' ' ')"
+    log "warning: still not healthy after $((_i * HEALTH_INTERVAL))s: $(printf '%s\n' "$_unready" | awk '{ print $1 }' | tr '\n' ' ')"
     return 1
 }
 

@@ -470,7 +470,7 @@ def recreate_exceptions(repo_dir):
         # tracked_files() returning None outside a checkout.
         return None
     names = ("HOST_CONFIG_DIRS", "SHARED_START_PATH", "PER_INVOCATION", "HOST_ONLY",
-             "CONFIG_DIR_ALIASES")
+             "CONFIG_DIR_ALIASES", "ALSO_RECREATE")
     found = {}
     for name in names:
         match = re.search(rf"^{name}='([^']*)'", source, re.M | re.S)
@@ -519,6 +519,17 @@ def recreate_mapping_gaps(repo_dir, services):
             if reader not in services:
                 messages.append(f"CONFIG_DIR_ALIASES says {reader} reads config/{directory}, but no such service is declared")
 
+    # Same treatment for the couplings: a name that stopped being a service is a
+    # recreate that silently stops happening, and nothing on the host says so.
+    for entry in sorted(lists["ALSO_RECREATE"]):
+        service, _, coupled = entry.partition(":")
+        if not coupled:
+            messages.append(f"ALSO_RECREATE entry {entry} names nothing to recreate with it; the spelling is <service>:<service>[,<service>]")
+            continue
+        for name in [service, *coupled.split(",")]:
+            if name not in services:
+                messages.append(f"ALSO_RECREATE names {name}, but no such service is declared")
+
     tracked = tracked_files(repo_dir)
     if tracked is None:
         return messages
@@ -539,6 +550,23 @@ def recreate_mapping_gaps(repo_dir, services):
     for directory in sorted(lists["HOST_CONFIG_DIRS"]):
         if directory not in config_dirs:
             messages.append(f"HOST_CONFIG_DIRS names config/{directory}, which no longer exists")
+
+    # The two shapes the convention has no name for at all, so neither the
+    # checks above nor changed-services.sh's rules can classify them: they fall
+    # to ALL forever, quietly, which is the cost this whole check exists to
+    # avoid paying.
+    for path in sorted(p for p in tracked
+                       if p.startswith("config/") and p.count("/") == 1):
+        messages.append(
+            f"{path} sits straight under config/, which names no service, so every change to it "
+            "restarts the whole stack; move it into config/<service>/"
+        )
+    for path in sorted(p for p in tracked
+                       if p.startswith("scripts/") and p.count("/") > 1):
+        messages.append(
+            f"{path} is below scripts/, where the <service>- prefix is not read, so every change "
+            "to it restarts the whole stack; keep it directly in scripts/"
+        )
 
     # Top level only: a script in a subdirectory of scripts/ is not a hook the
     # boot path runs, and the convention says nothing about its name.

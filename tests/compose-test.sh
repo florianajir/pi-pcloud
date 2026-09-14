@@ -236,8 +236,15 @@ cp "$REPO_DIR"/compose/*.yaml "$unowned/compose/"
 cp "$REPO_DIR/scripts/changed-services.sh" "$unowned/scripts/"
 cp "$REPO_DIR/config/postgres/init-databases.sh" "$unowned/config/postgres/"
 touch "$unowned/config/notaservice/settings.yaml"
+# A checkout, because the convention half of RECREATE reads `git ls-files`:
+# outside one, tracked_files() returns None and the check returns before it has
+# looked at a single path. The fixture would still "pass" - on the unrelated
+# CONFIG_DIR_ALIASES complaints a tree with no config/immich produces - which is
+# exactly the wrong reason, so the count below is narrowed to the added file.
+git -C "$unowned" init -q >/dev/null 2>&1
+git -C "$unowned" add -A >/dev/null 2>&1
 unowned_hits="$(printf '%s' '{"services": {"a": {"image": "x:1", "mem_limit": "64m"}}}' \
-    | python3 "$TESTS_DIR/compose-invariants.py" "$unowned" | grep -c '^RECREATE ' || true)"
+    | python3 "$TESTS_DIR/compose-invariants.py" "$unowned" | grep -c '^RECREATE .*notaservice' || true)"
 rm -rf "$unowned"
 if [ "$unowned_hits" -gt 0 ]; then
     pass=$((pass + 1))
