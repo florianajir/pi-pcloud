@@ -1,8 +1,13 @@
 # Homepage widget secrets
 
-Each file here is a single-line secret read by the Homepage container (via
-`{{HOMEPAGE_FILE_x}}` in `compose.yaml`) to authenticate a service widget on
-the dashboard. This whole directory is gitignored - nothing here is committed.
+Each file in `secrets/` is a single-line secret read by the Homepage container
+(via `{{HOMEPAGE_FILE_x}}` in `compose/monitoring.yaml`) to authenticate a
+service widget on the dashboard. That whole directory is gitignored - nothing
+in it is committed.
+
+This page sits beside the directory rather than inside it on purpose: the
+repository denies every read under a `secrets/` path, documentation included,
+so a README in there is one no tool can lint, audit or fix.
 
 Every widget secret lives here. Homepage has no `env_file`: one mechanism, one
 place to look.
@@ -22,8 +27,9 @@ rewritten when the value actually changed, and Homepage is restarted only then.
 
 **Adding a new secret here needs `make update`, not just the bootstrap.** The
 script ends with `docker restart pi-homepage`, which is enough for a changed
-*file* but not for the new `HOMEPAGE_FILE_*` variable in `compose.yaml` that
-points at it: environment is fixed when a container is created, so a restart
+*file* but not for the new `HOMEPAGE_FILE_*` variable in
+`compose/monitoring.yaml` that points at it: environment is fixed when a
+container is created, so a restart
 keeps the old set, `{{HOMEPAGE_FILE_...}}` never resolves and the widget shows
 a bare "API Error". `make update` runs `compose up -d`, which recreates the
 container first.
