@@ -13,7 +13,7 @@ description: Personal self-hosted services dashboard
 # but homepage only applies it after hydration, from SettingsProvider - the browser
 # has already taken its icon from the server-rendered <link>s by then. Setting it
 # made the tab flicker: the mark, then the browser's generic fallback once the
-# swapped icon failed to render. compose.yaml instead overrides the stock
+# swapped icon failed to render. compose/compose-monitoring.yaml instead overrides the stock
 # /favicon-*.png, /homepage.ico and /apple-touch-icon.png with the pi-pcloud mark,
 # so it is correct in the very first HTML and never replaced.
 

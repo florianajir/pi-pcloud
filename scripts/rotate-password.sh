@@ -18,7 +18,7 @@
 #     OLD password.
 #   - Authelia's real Postgres credential is the `db_password` SECRET FILE
 #     (referenced by configuration.yml.template), not the AUTHELIA_DB_PASSWORD
-#     env var in compose.yaml (that env var is effectively vestigial/unused by
+#     env var in compose/compose-identity.yaml (that env var is effectively vestigial/unused by
 #     Authelia itself). Writing it before the `authelia` Postgres role is
 #     actually rotated makes Authelia crash-loop on DB ping.
 #   - Nextcloud's DB password lives in config.php, written once at install.
@@ -64,7 +64,7 @@ for arg in "$@"; do
     esac
 done
 
-# Matches LLDAP_LDAP_BASE_DN in compose.yaml, which is not overridable via env.
+# Matches LLDAP_LDAP_BASE_DN in compose/compose-identity.yaml, which is not overridable via env.
 LLDAP_BASE_DN="dc=home,dc=ldap"
 LLDAP_ADMIN_USERNAME="admin"
 # The backrest image, not osixia/openldap (archived 2021, and a whole LDAP server

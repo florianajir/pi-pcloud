@@ -7,7 +7,7 @@ One set of SMTP credentials in `.env` serves every service that can read them. T
 **Two things that catch people out:**
 
 - Gmail, Office 365 and most large providers refuse your account password — generate an **app password** and use that.
-- Nextcloud's sender domain is always `HOST_NAME`, so the address is `${MAIL_FROM_ADDRESS}@${HOST_NAME}`. Vaultwarden pins `SMTP_SECURITY=starttls` in `compose.yaml`; change it to `force_tls` there if you move to port 465.
+- Nextcloud's sender domain is always `HOST_NAME`, so the address is `${MAIL_FROM_ADDRESS}@${HOST_NAME}`. Vaultwarden pins `SMTP_SECURITY=starttls` in `compose/compose-cloud.yaml`; change it to `force_tls` there if you move to port 465.
 
 **To run without email:** leave `SMTP_HOST` empty or set to `localhost`. The stack starts normally — Authelia has `disable_startup_check` enabled — and delivery simply fails silently.
 

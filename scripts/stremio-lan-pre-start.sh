@@ -3,7 +3,7 @@
 #
 # STREMIO_IP arrived with the stremio-lan profile, so an .env written by an
 # earlier install does not carry it and compose falls back to .env.dist's
-# 192.168.1.251 (compose.yaml, `ipv4_address: ${STREMIO_IP:-192.168.1.251}`).
+# 192.168.1.251 (compose/compose-media.yaml, `ipv4_address: ${STREMIO_IP:-192.168.1.251}`).
 # On any other LAN that address is outside the macvlan pool and `up` fails with
 # "Invalid address ... does not belong to any of this network's subnets", which
 # says nothing about which variable to set. install.sh derives the value for a

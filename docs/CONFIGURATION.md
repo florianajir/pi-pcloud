@@ -57,7 +57,7 @@ fault on this box; the model services load their weights, go idle, and have
 their cold pages evicted exactly once, which is what swap is *for*. But
 `parakeet`, `llama-cpp`, `open-webui` and `immich-machine-learning` filled a
 4096 MB file to 99.99% between them, and a swap file with 360 kB free has no
-room for the next spike. The `memswap_limit` ceilings in `compose.yaml` are
+room for the next spike. The `memswap_limit` ceilings in `compose/*.yaml` are
 sized against this number — see
 [Architecture](ARCHITECTURE.md#rationing-cpu-and-memory).
 
@@ -111,7 +111,7 @@ Used by Backrest (backups), Beszel (snapshots and file uploads) and optionally N
 | `BACKREST_S3_URI` | `s3:${S3_ENDPOINT}/${S3_BUCKET}/restic` | Set explicitly for non-S3 storage |
 | `BACKREST_S3_REPO_PASSWORD` | — | Repository encryption key. 32+ random characters. **Keep a copy off this machine** — see [Monitoring](MONITORING.md#the-env-file-twice) |
 | `BACKREST_LOCAL_REPO_PASSWORD` | *(generated)* | Encryption key for the `usb` repository, which holds the `.env` history on the data disk. Left unset, `backrest-pre-start.sh` generates one into `${DATA_LOCATION}/backrest/repos/env-repo-password` so the disk can restore itself — see [Monitoring](MONITORING.md#the-env-file-twice) |
-| `BACKREST_AUTH_USER` | — | **Not a knob**: `compose.yaml` pins the Backrest UI/API login to `${ADMIN_USER}`, so a `BACKREST_AUTH_USER` line in `.env` does nothing. Its password is not set here either — see below |
+| `BACKREST_AUTH_USER` | — | **Not a knob**: `compose/compose-monitoring.yaml` pins the Backrest UI/API login to `${ADMIN_USER}`, so a `BACKREST_AUTH_USER` line in `.env` does nothing. Its password is not set here either — see below |
 | `NEXTCLOUD_SQL_BACKUP_KEEP` | `7` in `.env.dist`, `30` if the line is absent | Nextcloud SQL dumps retained in `data/nextcloud-config/backups`, separate from the full backups |
 
 Without complete S3 credentials Backrest still starts, but its `s3` repository is unusable — the pre-start script warns and the nightly plan has nowhere to write. The `usb` repository is unaffected — it is local and needs no S3 credentials — but it only covers `.env`. For a local-only setup, add a second repository under `/repos` (bind-mounted from `${DATA_LOCATION}/backrest/repos`, where `/repos/env` is already taken) in the Backrest UI. See [Backup strategy](MONITORING.md#backup-strategy).
@@ -213,13 +213,13 @@ audiobook provider instead of moving the default they can still change.
 
 `BACKREST_AUTH_PASSWORD` is deliberately absent from this table: setting it in `.env` has no effect. `scripts/backrest-pre-start.sh` generates it into `config/backrest/backrest.env`, which the service loads as an `env_file`, and the image entrypoint hashes it into `config.json` on every start. Read it with `grep BACKREST_AUTH_PASSWORD config/backrest/backrest.env`; rotate it by deleting the line, then running `sudo sh scripts/backrest-pre-start.sh`, `docker compose up -d backrest` and `sudo sh scripts/homepage-widgets-bootstrap.sh` — that last step is not optional: Homepage authenticates to Backrest with its own copy at `config/homepage/secrets/backrest_password`, and without the sync its widget answers `401 Unauthorized`. The bootstrap restarts Homepage itself when the value changed. Backrest refuses to start if it ends up with no login at all.
 
-`N8N_RUNNERS_AUTH_TOKEN` is absent for the same reason, and setting it in `.env` has no effect either: `scripts/n8n-pre-start.sh` generates it into `config/n8n/n8n.env`, which both `n8n` and `n8n-runners` load as an `env_file`. It used to be a hard-coded default in `compose.yaml`, shared by every install — see [Security → Secrets](SECURITY.md#secrets). Rotate it by deleting the file and running `docker compose up -d n8n n8n-runners`; `env_file` values are frozen at container creation, so `restart` keeps the old one.
+`N8N_RUNNERS_AUTH_TOKEN` is absent for the same reason, and setting it in `.env` has no effect either: `scripts/n8n-pre-start.sh` generates it into `config/n8n/n8n.env`, which both `n8n` and `n8n-runners` load as an `env_file`. It used to be a hard-coded default in `compose/compose-cloud.yaml`, shared by every install — see [Security → Secrets](SECURITY.md#secrets). Rotate it by deleting the file and running `docker compose up -d n8n n8n-runners`; `env_file` values are frozen at container creation, so `restart` keeps the old one.
 
 These need no configuration and must not be edited by hand. `scripts/authelia-pre-start.sh` generates most of them on first start with mode `600` under `${DATA_LOCATION}/authelia-config/secrets/`, joined there by `scripts/vaultwarden-pre-start.sh` for the Vaultwarden `/admin` token; `scripts/headscale-init.sh` generates `config/headplane/headscale_api_key`. Full inventory: [Security → Secrets](SECURITY.md#secrets).
 
 ## Choosing which services run
 
-Every optional service in `compose.yaml` carries a [Compose profile](https://docs.docker.com/compose/how-tos/profiles/) named after itself (plus a catch-all `all`). `COMPOSE_PROFILES` selects them:
+Every optional service in `compose/*.yaml` carries a [Compose profile](https://docs.docker.com/compose/how-tos/profiles/) named after itself (plus a catch-all `all`). `COMPOSE_PROFILES` selects them:
 
 ```env
 COMPOSE_PROFILES=all                                          # everything (the default)
@@ -233,7 +233,7 @@ COMPOSE_PROFILES=                                             # core services on
 
 `stremio` and `stremio-lan` are the same server in two networking modes and are **mutually exclusive** — they share one data volume and the same Traefik host rules. `stremio` is the default (VPN); pick `stremio-lan` only to cast to a DLNA/UPnP renderer, and read the trade-off in [Networking → Casting](NETWORKING.md#casting-to-a-dlna-renderer) first. `stremio-lan` is not part of `all`.
 
-The exclusion is declared once, as `pi-pcloud.conflicts-with` on `stremio-lan` in `compose.yaml`, and enforced everywhere a selection is made: `make config` unticks one box when you tick the other, `make enable` refuses and names the service to disable first, and `stack-up.sh` refuses a hand-edited `.env` before anything starts. Switching modes is therefore two steps:
+The exclusion is declared once, as `pi-pcloud.conflicts-with` on `stremio-lan` in `compose/compose-media.yaml`, and enforced everywhere a selection is made: `make config` unticks one box when you tick the other, `make enable` refuses and names the service to disable first, and `stack-up.sh` refuses a hand-edited `.env` before anything starts. Switching modes is therefore two steps:
 
 ```bash
 make disable stremio
@@ -283,7 +283,7 @@ Choose which services run — applying starts and stops containers now
 
 Ticking propagates along both dependency relations — the hard ones in the table above, and the companion indent — transitively, so the screen always shows a set the stack can actually run: unticking `gluetun` unticks `qbittorrent`, `kapowarr`, `stremio` and — through `stremio` — `comet`. The footer names whatever moved.
 
-The whole layout is read out of `compose.yaml` (`homepage.group` for the section, `homepage.description` for the text, `pi-pcloud.companion-of` for the indent, `profiles:` for the hard dependencies), so the picker cannot drift from the stack. It is `scripts/services-picker.py`, standard-library `curses` only — nothing to install on Raspberry Pi OS, and on a host without `python3` you simply use `make enable` / `make disable` instead. All three targets wrap `scripts/services.sh`, which is what actually writes `.env` and runs the hooks.
+The whole layout is read out of `compose/*.yaml` (`homepage.group` for the section, `homepage.description` for the text, `pi-pcloud.companion-of` for the indent, `profiles:` for the hard dependencies), so the picker cannot drift from the stack. It is `scripts/services-picker.py`, standard-library `curses` only — nothing to install on Raspberry Pi OS, and on a host without `python3` you simply use `make enable` / `make disable` instead. All three targets wrap `scripts/services.sh`, which is what actually writes `.env` and runs the hooks.
 
 Enabling also runs the service's init hooks — `scripts/<service>-pre-start.sh` before the start, `scripts/<service>-bootstrap.sh` / `-oidc-bootstrap.sh` after — the same scripts the systemd unit runs. So no `make restart` is needed: the stack is immediately consistent, and the unit reads the same `.env` at next boot.
 
@@ -312,7 +312,7 @@ Every service holding a Postgres role must be rotated *and* recreated together, 
 
 A `compose.override.yaml` is not the way to switch services off — `profiles:` lists *merge* across compose files, so an override can only add activation profiles, never remove the built-in ones. Use `make enable` / `make disable`, and verify with `make services`.
 
-Non-secret behaviour lives in `config/<service>/` (Traefik is the exception: it is configured entirely by CLI flags and labels in `compose.yaml`). Secrets and anything a script reads belong in `.env`. Either way, apply with `make restart`.
+Non-secret behaviour lives in `config/<service>/` (Traefik is the exception: it is configured entirely by CLI flags and labels in `compose/compose-core.yaml`). Secrets and anything a script reads belong in `.env`. Either way, apply with `make restart`.
 
 To add a service to the stack, follow the [add-service checklist](../.agents/skills/add-service/SKILL.md) — it covers the Compose profile, Traefik labels, the Authelia OIDC client, shared Postgres/Redis, ntfy, Uptime Kuma, Backrest, Homepage labels and the systemd bootstrap hook.
 

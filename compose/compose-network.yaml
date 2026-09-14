@@ -1,0 +1,342 @@
+# Recursive DNS, the LAN-wide filter in front of it, and the private
+# tailnet's control plane, admin UI and client.
+#
+# Included by compose.yaml, which declares the networks and volumes named
+# below and supplies the .env this file interpolates. Not startable on its
+# own: `docker compose -f compose/compose-network.yaml` resolves every relative
+# path against compose/ instead of the project root.
+
+# --- shared preamble: identical in every compose/*.yaml ---
+#
+# YAML anchors are file-scoped and `include:` parses each file on its own, so
+# this block cannot be shared - it is copied. compose.yaml holds the canonical
+# copy, with the reasoning behind every tier; tests/compose-invariants.py fails
+# the build when a copy drifts from it. Change compose.yaml first, then here.
+
+x-service-defaults: &service-defaults
+  logging:
+    driver: "journald"
+    options:
+      tag: "{{.Name}}"
+  restart: unless-stopped
+
+x-cpu-prio-critical: &cpu-prio-critical 4096
+x-cpu-prio-normal: &cpu-prio-normal 1024
+x-cpu-prio-batch: &cpu-prio-batch 256
+x-cpu-prio-idle: &cpu-prio-idle 128
+
+x-oom-score-critical: &oom-score-critical -1000
+x-oom-score-important: &oom-score-important -500
+x-oom-score-deprioritize: &oom-score-deprioritize 500
+
+x-healthcheck-default: &healthcheck-default
+  interval: 60s
+  timeout: 10s
+  retries: 3
+  start_period: 20s
+x-healthcheck-light: &healthcheck-light
+  interval: 90s
+  timeout: 10s
+  retries: 2
+  start_period: 10s
+x-healthcheck-relaxed: &healthcheck-relaxed
+  interval: 120s
+  timeout: 10s
+  retries: 2
+  start_period: 10s
+x-healthcheck-fast: &healthcheck-fast
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 10s
+
+# --- end shared preamble ---
+
+services:
+  unbound:
+    <<: *service-defaults
+    image: mvance/unbound-rpi:1.22.0
+    container_name: pi-unbound
+    networks:
+      dns_internal:
+        ipv4_address: 172.30.53.53
+      egress_unbound: {}
+    expose:
+      - 5335
+    volumes:
+      - ./config/unbound/unbound.conf:/opt/unbound/etc/unbound/unbound.conf:ro
+      # The DNSSEC anchor path is image-specific; unbound.conf includes whatever
+      # is mounted here. compose.test.yaml mounts its own for the CI image.
+      - ./config/unbound/dnssec.conf:/etc/unbound/dnssec.d/dnssec.conf:ro
+    healthcheck:
+      <<: *healthcheck-default
+      test: ["CMD", "drill", "@127.0.0.1", "-p", "5335", "cloudflare.com"]
+      start_period: 10s
+      start_interval: 5s
+    cpu_shares: *cpu-prio-critical
+    mem_limit: 128m
+    mem_reservation: 32m
+    oom_score_adj: *oom-score-critical
+
+  pihole:
+    <<: *service-defaults
+    image: pihole/pihole:2026.07.2
+    container_name: pi-pihole
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    expose:
+      - 53
+      - 8082
+    ports:
+      # v4-only where traefik is dual-stack. listeningMode is "all", so FTL
+      # answers any source it can see, and IPv6 has no NAT in front of it: an
+      # open resolver as soon as the router's firewall is opened past :443. And
+      # no client could use it anyway - the router advertises itself as the IPv6
+      # resolver (RDNSS) and cannot be told otherwise. docs/NETWORKING.md#ipv6.
+      - "0.0.0.0:53:53/tcp"
+      - "0.0.0.0:53:53/udp"
+    environment:
+      TZ: ${TIMEZONE:-Europe/Paris}
+      FTLCONF_webserver_api_password: ${PASSWORD}
+      FTLCONF_dns_listeningMode: "all"
+      # dnsmasq spreads queries across all three and re-probes the ones it thinks
+      # are slower, so these are not failover: a share of household queries goes
+      # to Cloudflare and Quad9 in normal operation. Accepted deliberately -
+      # `strict-order` would make Unbound truly primary, but then a DNSSEC-bogus
+      # domain gets no answer at all instead of a prompt SERVFAIL, because dnsmasq
+      # walks all three upstreams and never replies. Both of those validate
+      # DNSSEC themselves, so the protection holds; what is lost is privacy.
+      FTLCONF_dns_upstreams: ${PIHOLE_DNS_UPSTREAMS:-172.30.53.53#5335;1.1.1.1;9.9.9.9}
+      FTLCONF_misc_dnsmasq_lines: "address=/${HOST_NAME:-pi.lan}/${HOST_LAN_IP:-192.168.1.30}"
+      # Never 0.0.0.0: pihole also sits on the `lan` macvlan, where publishing
+      # rules do not apply, so a wildcard bind serves the admin UI directly at
+      # PIHOLE_IP to the whole LAN and tailnet, bypassing lan@docker + Authelia.
+      # Loopback is for pihole-bootstrap.sh, which curls the API from inside the
+      # container; the frontend address is what Traefik dials and must match the
+      # ipv4_address below.
+      FTLCONF_webserver_port: "127.0.0.1:8082,172.30.11.241:8082"
+      FTLCONF_dns_domain_name: ${HOST_NAME:-pi.lan}
+      # Default true NXDOMAINs mask.icloud.com so Private Relay cannot bypass
+      # the filter. An iPhone reports that as "Private Relay is unavailable on
+      # this network", and chasing the warning is what put IPv6 back on at the
+      # router - which took the whole LAN off Pi-hole, split-horizon included.
+      # Trade-off in docs/SECURITY.md; the two sibling anti-bypass flags stay on.
+      FTLCONF_dns_specialDomains_iCloudPrivateRelay: "false"
+      # FTL compares the *host-wide* 15min loadavg (/proc/loadavg is not
+      # namespaced) against the core count it can see, which `cpuset: "0-1"`
+      # below caps at 2. On this 4-core Pi that warns at ~50% utilisation, so
+      # the check is structurally wrong here. Host load is monitored by Beszel.
+      FTLCONF_misc_check_load: "false"
+    volumes:
+      - pihole_data:/etc/pihole
+      - ./config/pihole/dnsmasq.d:/etc/dnsmasq.d
+    networks:
+      dns_internal: {}
+      frontend:
+        # Static so FTLCONF_webserver_port above can bind to it by address.
+        ipv4_address: 172.30.11.241
+      lan:
+        ipv4_address: ${PIHOLE_IP:-192.168.1.250}
+    depends_on:
+      unbound:
+        condition: service_healthy
+    labels:
+      - "homepage.group=Privacy"
+      - "homepage.name=Pi-hole"
+      - "homepage.icon=pi-hole.png"
+      - "homepage.href=https://pihole.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Network ad and tracker blocking"
+      - "homepage.widget.type=pihole"
+      - "homepage.widget.url=http://pi-pihole:8082"
+      - "homepage.widget.version=6"
+      - "homepage.widget.key={{HOMEPAGE_VAR_ADMIN_PASSWORD}}"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.pihole.rule=Host(`pihole.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.pihole.entrypoints=websecure"
+      - "traefik.http.routers.pihole.tls=true"
+      - "traefik.http.routers.pihole.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.services.pihole.loadbalancer.server.port=8082"
+    cpuset: "0-1"
+    cpu_shares: *cpu-prio-critical
+    mem_limit: 192m
+    mem_reservation: 64m
+    oom_score_adj: *oom-score-critical
+
+  # Network Stack
+  headscale:
+    <<: *service-defaults
+    image: headscale/headscale:v0.29.3
+    container_name: pi-headscale
+    command: serve
+    environment:
+      - HEADSCALE_SERVER_URL=https://headscale.${HOST_NAME:-pi.lan}
+      - HEADSCALE_LISTEN_ADDR=0.0.0.0:8080
+      - HEADSCALE_DNS_BASE_DOMAIN=tailnet.${HOST_NAME:-pi.lan}
+    networks:
+      - frontend
+    extra_hosts:
+      # Authelia's OIDC discovery endpoint, reached through Traefik internally.
+      # Headscale resolves the provider exactly once, at startup, and
+      # only_start_if_oidc_is_available now makes that call fatal - so it must
+      # not depend on public DNS answering and the router hairpinning its own
+      # WAN address back in.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 8080
+      - 9090
+      - 50443
+    ports:
+      # v4-only: headscale has no IPv6 address, so a [::] publish would fall
+      # back to docker-proxy and STUN would report a Docker gateway address to
+      # its own clients - worse than advertising none. docs/NETWORKING.md#ipv6.
+      - "0.0.0.0:3478:3478/udp"
+    volumes:
+      - ./config/headscale:/etc/headscale:ro
+      - headscale_data:/var/lib/headscale
+    depends_on:
+      authelia:
+        condition: service_healthy
+    tmpfs:
+      - /var/run/headscale
+    labels:
+      - "homepage.group=Network"
+      - "homepage.name=Headscale"
+      - "homepage.icon=tailscale.png"
+      - "homepage.href=https://headscale.${HOST_NAME:-pi.lan}"
+      - "homepage.description=VPN coordination server"
+      - "homepage.widget.type=headscale"
+      - "homepage.widget.url=http://pi-headscale:8080"
+      - "homepage.widget.nodeId={{HOMEPAGE_FILE_HEADSCALE_NODE_ID}}"
+      - "homepage.widget.key={{HOMEPAGE_FILE_HEADSCALE_API_KEY}}"
+      - "me.tale.headplane.target=headscale"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.headscale.rule=Host(`headscale.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.headscale.entrypoints=websecure"
+      - "traefik.http.routers.headscale.tls=true"
+      - "traefik.http.routers.headscale.tls.certresolver=cloudflare"
+      - "traefik.http.routers.headscale.tls.domains[0].main=${HOST_NAME:-pi.lan}"
+      - "traefik.http.routers.headscale.tls.domains[0].sans=*.${HOST_NAME:-pi.lan}"
+      - "traefik.http.routers.headscale.middlewares=frame-deny@docker,headscale-cors"
+      # A redirect, not an addprefix onto the headscale service (which has no
+      # /admin): it hands the browser to Headplane's router, gate included.
+      - "traefik.http.routers.headscale-root.rule=Host(`headscale.${HOST_NAME:-pi.lan}`) && Path(`/`)"
+      - "traefik.http.routers.headscale-root.entrypoints=websecure"
+      - "traefik.http.routers.headscale-root.tls=true"
+      - "traefik.http.routers.headscale-root.service=headscale"
+      - "traefik.http.routers.headscale-root.middlewares=frame-deny@docker,headscale-root-redirect"
+      - "traefik.http.services.headscale.loadbalancer.server.port=8080"
+      - "traefik.http.middlewares.headscale-root-redirect.redirectregex.regex=^https?://([^/]+)/$$"
+      - "traefik.http.middlewares.headscale-root-redirect.redirectregex.replacement=https://$${1}/admin"
+      - "traefik.http.middlewares.headscale-cors.headers.accesscontrolallowheaders=*"
+      - "traefik.http.middlewares.headscale-cors.headers.accesscontrolallowmethods=GET,POST,PUT"
+      - "traefik.http.middlewares.headscale-cors.headers.accesscontrolalloworiginlist=https://headscale.${HOST_NAME:-pi.lan}"
+      - "traefik.http.middlewares.headscale-cors.headers.accesscontrolmaxage=100"
+      - "traefik.http.middlewares.headscale-cors.headers.addvaryheader=true"
+    healthcheck:
+      <<: *healthcheck-default
+      test: ["CMD", "headscale", "health"]
+      start_period: 10s
+    cpuset: "0"
+    cpu_shares: *cpu-prio-critical
+    mem_limit: 128m
+    mem_reservation: 32m
+    oom_score_adj: *oom-score-critical
+
+  headplane:
+    <<: *service-defaults
+    image: ghcr.io/tale/headplane:0.7.1
+    container_name: pi-headplane
+    profiles: ["headplane", "all"]
+    networks:
+      - frontend
+    extra_hosts:
+      - "headscale.${HOST_NAME:-pi.lan}:172.30.11.1"
+    expose:
+      - 3000
+    volumes:
+      - ./config/headplane/config.yaml:/etc/headplane/config.yaml:ro
+      - ./config/headscale:/etc/headscale:ro
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_headplane_secret.txt:/run/secrets/oidc_headplane_secret:ro
+      - ./config/headplane/headscale_api_key:/run/secrets/headplane_headscale_api_key:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - headplane_data:/var/lib/headplane
+      - ./config/headplane/wasm/wasm_exec.js:/app/build/client/wasm_exec.js:ro
+      - ./config/headplane/wasm/hp_ssh.wasm:/app/build/client/hp_ssh.wasm:ro
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=160
+      - HEADPLANE_HEADSCALE__URL=https://headscale.${HOST_NAME:-pi.lan}
+      - HEADPLANE_OIDC__ISSUER=https://auth.${HOST_NAME:-pi.lan}
+      - HEADPLANE_OIDC__CLIENT_ID=headplane
+      - HEADPLANE_OIDC__CLIENT_SECRET_PATH=/run/secrets/oidc_headplane_secret
+      - HEADPLANE_OIDC__TOKEN_ENDPOINT_AUTH_METHOD=client_secret_basic
+      - HEADPLANE_OIDC__DISABLE_API_KEY_LOGIN=true
+      - HEADPLANE_OIDC__HEADSCALE_API_KEY_PATH=/run/secrets/headplane_headscale_api_key
+      - HEADPLANE_OIDC__SCOPE=openid email profile
+    depends_on:
+      - headscale
+    labels:
+      - "homepage.group=Network"
+      - "homepage.name=Headplane"
+      - "homepage.icon=headscale.png"
+      - "homepage.href=https://headscale.${HOST_NAME:-pi.lan}/admin"
+      - "homepage.description=Web admin interface for Headscale"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.headplane.rule=Host(`headscale.${HOST_NAME:-pi.lan}`) && PathPrefix(`/admin`)"
+      - "traefik.http.routers.headplane.entrypoints=websecure"
+      - "traefik.http.routers.headplane.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.headplane.tls=true"
+      - "traefik.http.routers.headplane.tls.certresolver=cloudflare"
+      - "traefik.http.services.headplane.loadbalancer.server.port=3000"
+      - "traefik.http.routers.headplane-wasm.rule=Host(`headscale.${HOST_NAME:-pi.lan}`) && (Path(`/wasm_exec.js`) || Path(`/hp_ssh.wasm`))"
+      - "traefik.http.routers.headplane-wasm.entrypoints=websecure"
+      - "traefik.http.routers.headplane-wasm.tls=true"
+      - "traefik.http.routers.headplane-wasm.tls.certresolver=cloudflare"
+      - "traefik.http.routers.headplane-wasm.service=headplane"
+      - "traefik.http.routers.headplane-wasm.middlewares=frame-deny@docker,wasm-path@docker"
+      - "traefik.http.middlewares.wasm-path.replacepathregex.regex=/(wasm_exec.js|hp_ssh.wasm)"
+      - "traefik.http.middlewares.wasm-path.replacepathregex.replacement=/admin/$$1"
+    healthcheck:
+      <<: *healthcheck-default
+      test: ["CMD", "/nodejs/bin/node", "-e", "const net=require('node:net');const s=net.connect({host:'127.0.0.1',port:3000},()=>{s.end();process.exit(0)});s.setTimeout(5000,()=>{s.destroy();process.exit(1)});s.on('error',()=>process.exit(1));"]
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 192m
+    oom_score_adj: *oom-score-deprioritize
+
+  tailscale:
+    <<: *service-defaults
+    image: tailscale/tailscale:v1.102.3@sha256:8c42c4574ab066384fcb72f69e086a2ff1dd3652eb6f56856cee34bcf0d2f680
+    container_name: pi-tailscale
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TS_EXTRA_ARGS=--login-server=https://headscale.${HOST_NAME:-pi.lan} --accept-dns=true --advertise-exit-node --advertise-routes=${HOST_LAN_SUBNET:-192.168.1.0/24} --accept-routes --ssh
+      - TS_TAILSCALED_EXTRA_ARGS=--port=41641
+      - TS_HOSTNAME=tailscale
+    extra_hosts:
+      - "headscale.${HOST_NAME:-pi.lan}:${HOST_LAN_IP:-192.168.1.30}"
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      - headscale
+    healthcheck:
+      <<: *healthcheck-default
+      test: ["CMD", "tailscale", "status", "--peers=false"]
+      start_period: 30s
+    labels:
+      - "homepage.group=Network"
+      - "homepage.name=Tailscale"
+      - "homepage.icon=tailscale.png"
+      - "homepage.description=VPN mesh client"
+    cpu_shares: *cpu-prio-critical
+    mem_limit: 128m
+    mem_reservation: 96m
+    oom_score_adj: *oom-score-critical

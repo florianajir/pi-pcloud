@@ -6,7 +6,7 @@ Usage: services-picker.py <rows-file> <out-file>
 The rows file holds one service per line, as
 "service:section:companion-of:needs:conflicts-with:state:description",
 as produced by scripts/services.sh (which owns everything else: reading
-compose.yaml, writing .env, running the per-service hooks). This script only
+compose/*.yaml, writing .env, running the per-service hooks). This script only
 lets the user choose, then writes the services that stay ticked to the out
 file, one per line. Exit status is 0 on confirm, 1 on cancel.
 
@@ -82,7 +82,7 @@ def need_met(rows, service):
 
     A conflicts-with pair is one service in two modes, so whatever needs one
     mode is served by the other: comet is a stremio addon and runs against
-    stremio or stremio-lan indifferently (compose.yaml gives stremio-lan its own
+    stremio or stremio-lan indifferently (compose/compose-media.yaml gives stremio-lan its own
     extra_hosts entry for exactly that). Without this, comet's companion-of
     would make it a hard dependant of the VPN mode alone, and the picker would
     be the one place unable to express a setup the rest of the stack supports.

@@ -266,7 +266,7 @@ warn_ip6tables() {
     log "  Traefik's [::] publishes then go through userland docker-proxy, which"
     log "  rewrites the client address to a Docker gateway one - so lan@docker sees"
     log "  a source it cannot judge. Add \"ip6tables\": true and restart Docker, or"
-    log "  drop the [::] entries from traefik's ports in compose.yaml."
+    log "  drop the [::] entries from traefik's ports in compose/compose-core.yaml."
 }
 
 ensure_docker_address_pool() {

@@ -1,0 +1,775 @@
+# The VPN namespace and the three containers sharing it, the indexers that
+# feed them, and the readers that serve what lands.
+#
+# Included by compose.yaml, which declares the networks and volumes named
+# below and supplies the .env this file interpolates. Not startable on its
+# own: `docker compose -f compose/compose-media.yaml` resolves every relative
+# path against compose/ instead of the project root.
+
+# --- shared preamble: identical in every compose/*.yaml ---
+#
+# YAML anchors are file-scoped and `include:` parses each file on its own, so
+# this block cannot be shared - it is copied. compose.yaml holds the canonical
+# copy, with the reasoning behind every tier; tests/compose-invariants.py fails
+# the build when a copy drifts from it. Change compose.yaml first, then here.
+
+x-service-defaults: &service-defaults
+  logging:
+    driver: "journald"
+    options:
+      tag: "{{.Name}}"
+  restart: unless-stopped
+
+x-cpu-prio-critical: &cpu-prio-critical 4096
+x-cpu-prio-normal: &cpu-prio-normal 1024
+x-cpu-prio-batch: &cpu-prio-batch 256
+x-cpu-prio-idle: &cpu-prio-idle 128
+
+x-oom-score-critical: &oom-score-critical -1000
+x-oom-score-important: &oom-score-important -500
+x-oom-score-deprioritize: &oom-score-deprioritize 500
+
+x-healthcheck-default: &healthcheck-default
+  interval: 60s
+  timeout: 10s
+  retries: 3
+  start_period: 20s
+x-healthcheck-light: &healthcheck-light
+  interval: 90s
+  timeout: 10s
+  retries: 2
+  start_period: 10s
+x-healthcheck-relaxed: &healthcheck-relaxed
+  interval: 120s
+  timeout: 10s
+  retries: 2
+  start_period: 10s
+x-healthcheck-fast: &healthcheck-fast
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 10s
+
+# --- end shared preamble ---
+
+# Stremio runs in one of two mutually exclusive modes (see docs/NETWORKING.md).
+# `network_mode` and `networks` cannot coexist and a merge key cannot remove a
+# key, so each mode is its own thin service over this shared body.
+x-stremio-common: &stremio-common
+  <<: *service-defaults
+  image: stremio/server:v4.21.1
+  environment:
+    - NO_CORS=1
+    - TZ=${TIMEZONE:-Europe/Paris}
+    # The image installs jellyfin-ffmpeg but ships these empty, and its install
+    # path is not on PATH, so the server finds no binary and cannot remux at all.
+    - FFMPEG_BIN=/usr/lib/jellyfin-ffmpeg/ffmpeg
+    - FFPROBE_BIN=/usr/lib/jellyfin-ffmpeg/ffprobe
+    # Only its truthiness is read, so "0" would still disable casting: it must
+    # be empty. Left at the image's default, /casting answers 404 to every client.
+    - CASTING_DISABLED=
+  volumes:
+    - stremio_data:/root/.stremio-server
+  healthcheck:
+    <<: *healthcheck-default
+    test: ["CMD", "curl", "-f", "http://localhost:11470/"]
+    start_period: 30s
+  cpu_shares: *cpu-prio-normal
+  mem_limit: 1024m
+  oom_score_adj: *oom-score-deprioritize
+
+services:
+  gluetun:
+    <<: *service-defaults
+    image: qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+    container_name: pi-gluetun
+    profiles: ["gluetun", "qbittorrent", "stremio", "kapowarr", "all"]
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      frontend:
+        # Shelfmark's bypasser hands this to SeleniumBase, whose proxy validation
+        # rejects a host with no dot and then fails to start the browser at all.
+        aliases:
+          - gluetun.docker
+    expose:
+      - 8080
+      - 11470
+      - 12470
+      - 5656
+      - 8000
+      - 8888
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      # Grants the Homepage widget unauthenticated read access to a couple of
+      # harmless routes (public IP, port-forward status) - see the file for details.
+      - HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH=/gluetun/custom/auth-config.toml
+      # Shelfmark's direct book downloads are plain HTTPS, not torrents, so they
+      # have no other way through the tunnel. It reaches this at gluetun:8888;
+      # gluetun's firewall already accepts input from the Docker network, and
+      # forwards only over the VPN interface.
+      - HTTPPROXY=on
+    env_file:
+      - path: ./config/gluetun/gluetun.env
+        required: false
+    volumes:
+      - ${DATA_LOCATION:-./data}/gluetun:/gluetun
+      - ./config/gluetun:/gluetun/custom:ro
+    labels:
+      - "homepage.group=Privacy"
+      - "homepage.name=Gluetun"
+      - "homepage.icon=gluetun.png"
+      - "homepage.href=https://gluetun.${HOST_NAME:-pi.lan}"
+      - "homepage.description=VPN tunnel for downloads and streaming"
+      - "homepage.widget.type=gluetun"
+      - "homepage.widget.url=http://pi-gluetun:8000"
+      - "homepage.widget.version=2"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.qbittorrent.rule=Host(`qbittorrent.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.qbittorrent.entrypoints=websecure"
+      - "traefik.http.routers.qbittorrent.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.qbittorrent.tls=true"
+      - "traefik.http.routers.qbittorrent.service=qbittorrent"
+      - "traefik.http.services.qbittorrent.loadbalancer.server.port=8080"
+      - "traefik.http.routers.kapowarr.rule=Host(`kapowarr.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.kapowarr.entrypoints=websecure"
+      - "traefik.http.routers.kapowarr.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.kapowarr.tls=true"
+      - "traefik.http.routers.kapowarr.service=kapowarr"
+      - "traefik.http.services.kapowarr.loadbalancer.server.port=5656"
+      - "traefik.http.routers.stremio-root.rule=Host(`stremio.${HOST_NAME:-pi.lan}`) && Path(`/`)"
+      - "traefik.http.routers.stremio-root.entrypoints=websecure"
+      - "traefik.http.routers.stremio-root.middlewares=frame-deny@docker,lan@docker,stremio-webui-redirect@docker"
+      - "traefik.http.routers.stremio-root.priority=30"
+      - "traefik.http.routers.stremio-root.tls=true"
+      - "traefik.http.routers.stremio-root.service=noop@internal"
+      # No authelia, same reason as comet below: a cast receiver fetches the stream
+      # itself and cannot pass an interactive SSO login. It was also denying every client
+      # including the LAN, since stremio.<HOST_NAME> has no access_control rule and
+      # Authelia's default_policy is deny.
+      - "traefik.http.routers.stremio.rule=Host(`stremio.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.stremio.entrypoints=websecure"
+      - "traefik.http.routers.stremio.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.stremio.priority=10"
+      - "traefik.http.routers.stremio.tls=true"
+      - "traefik.http.routers.stremio.service=stremio"
+      - "traefik.http.services.stremio.loadbalancer.server.port=11470"
+      - "traefik.http.middlewares.stremio-webui-redirect.redirectregex.regex=^https?://([^/]+)/?$"
+      - "traefik.http.middlewares.stremio-webui-redirect.redirectregex.replacement=https://app.strem.io/shell-v4.4/?streamingServer=https%3A%2F%2F$${1}"
+      - "traefik.http.middlewares.stremio-webui-redirect.redirectregex.permanent=false"
+    healthcheck:
+      <<: *healthcheck-default
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      start_period: 30s
+      start_interval: 5s
+    cpu_shares: *cpu-prio-critical
+    mem_limit: 256m
+    mem_reservation: 64m
+    oom_score_adj: *oom-score-deprioritize
+
+  qbittorrent:
+    <<: *service-defaults
+    image: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls474@sha256:a00b6a597a3832a1814cde0ef60abc55c94644f3f80902c3432f6af6de8d4a96
+    container_name: pi-qbittorrent
+    profiles: ["qbittorrent", "all"]
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.qbittorrent.rule=Host(`qbittorrent.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.qbittorrent.entrypoints=websecure"
+      - "traefik.http.routers.qbittorrent.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.qbittorrent.tls=true"
+      - "traefik.http.routers.qbittorrent.service=qbittorrent"
+      - "traefik.http.services.qbittorrent.loadbalancer.server.port=8080"
+      - "homepage.group=Download"
+      - "homepage.name=qBittorrent"
+      - "homepage.icon=qbittorrent.png"
+      - "homepage.href=https://qbittorrent.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Torrent client (VPN protected)"
+      - "homepage.widget.type=qbittorrent"
+      - "homepage.widget.url=http://pi-gluetun:8080"
+      - "homepage.widget.username={{HOMEPAGE_VAR_ADMIN_USER}}"
+      - "homepage.widget.password={{HOMEPAGE_VAR_ADMIN_PASSWORD}}"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - WEBUI_PORT=8080
+      - TORRENTING_PORT=6881
+    volumes:
+      - ${DATA_LOCATION:-./data}/qbittorrent:/config
+      - ${DATA_LOCATION:-./data}/download:/downloads
+    healthcheck:
+      <<: *healthcheck-default
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      start_period: 30s
+    cpu_shares: *cpu-prio-batch
+    # 512m, not 256m: at 256m the cgroup hit memory.max 98842 times, which is
+    # the write cache of an active torrent being reclaimed over and over, not a
+    # process wanting more heap (24 MB anonymous, 135 MB page cache, 0 OOM kills).
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize
+
+  stremio:
+    <<: *stremio-common
+    container_name: pi-stremio
+    profiles: ["stremio", "all"]
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    labels:
+      # Routed by gluetun's labels: sharing its namespace leaves this container
+      # with no address of its own for Traefik's docker provider to target.
+      - "traefik.enable=false"
+      - "homepage.group=Video"
+      - "homepage.name=Stremio"
+      - "homepage.icon=stremio.png"
+      - "homepage.href=https://stremio.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Movie and TV streaming (VPN protected)"
+
+  # Casting alternative to `stremio` above, never both: the conflicts-with label
+  # below is what services.sh, the picker and stack-up.sh all read to refuse it.
+  # Discovery is SSDP/mDNS multicast, which reaches no renderer from a Docker
+  # bridge and which gluetun's firewall rejects outright (EPERM on 239.255.255.250),
+  # so a cast-capable server needs its own address on the physical LAN. That
+  # address is off the VPN: torrent pieces Stremio fetches itself then leave on
+  # the residential IP, which is a real trade-off when not using a debrid addon.
+  stremio-lan:
+    <<: *stremio-common
+    container_name: pi-stremio-lan
+    profiles: ["stremio-lan"]
+    networks:
+      frontend: {}
+      lan:
+        ipv4_address: ${STREMIO_IP:-192.168.1.251}
+    # A macvlan child cannot reach its own parent host, so the public records
+    # pointing these names at HOST_LAN_IP are unusable here: reach Traefik on
+    # the frontend network instead, or upstream fetches fail with EHOSTUNREACH.
+    extra_hosts:
+      - "stremio.${HOST_NAME:-pi.lan}:172.30.11.250"
+      - "comet.${HOST_NAME:-pi.lan}:172.30.11.250"
+    labels:
+      - "homepage.group=Video"
+      - "homepage.name=Stremio"
+      - "homepage.icon=stremio.png"
+      - "homepage.href=https://stremio.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Movie and TV streaming (LAN, casting)"
+      - "pi-pcloud.conflicts-with=stremio"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # Same host rules as gluetun's routers but higher priority, so that if
+      # gluetun is up for qbittorrent its now-dead stremio routers lose.
+      - "traefik.http.routers.stremio-lan-root.rule=Host(`stremio.${HOST_NAME:-pi.lan}`) && Path(`/`)"
+      - "traefik.http.routers.stremio-lan-root.entrypoints=websecure"
+      - "traefik.http.routers.stremio-lan-root.middlewares=frame-deny@docker,lan@docker,stremio-lan-webui-redirect@docker"
+      - "traefik.http.routers.stremio-lan-root.priority=80"
+      - "traefik.http.routers.stremio-lan-root.tls=true"
+      - "traefik.http.routers.stremio-lan-root.service=noop@internal"
+      # No authelia, same reason as the gluetun-hosted router and as comet.
+      - "traefik.http.routers.stremio-lan.rule=Host(`stremio.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.stremio-lan.entrypoints=websecure"
+      - "traefik.http.routers.stremio-lan.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.stremio-lan.priority=60"
+      - "traefik.http.routers.stremio-lan.tls=true"
+      - "traefik.http.routers.stremio-lan.service=stremio-lan"
+      - "traefik.http.services.stremio-lan.loadbalancer.server.port=11470"
+      # Its own copy: the gluetun-hosted middleware is gone when gluetun is not selected.
+      - "traefik.http.middlewares.stremio-lan-webui-redirect.redirectregex.regex=^https?://([^/]+)/?$"
+      - "traefik.http.middlewares.stremio-lan-webui-redirect.redirectregex.replacement=https://app.strem.io/shell-v4.4/?streamingServer=https%3A%2F%2F$${1}"
+      - "traefik.http.middlewares.stremio-lan-webui-redirect.redirectregex.permanent=false"
+
+  comet:
+    <<: *service-defaults
+    # No semver image tags are published; pin latest (currently v2.54.1) by digest.
+    image: ghcr.io/g0ldyy/comet:latest@sha256:dca62133336e02784d02aaad861381820674d1c8e3e98a03797610b81ee4defe
+    container_name: pi-comet
+    profiles: ["comet", "all"]
+    networks:
+      - frontend
+    expose:
+      - 8000
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - FASTAPI_HOST=0.0.0.0
+      - FASTAPI_PORT=8000
+      - FASTAPI_WORKERS=1
+      # Single uvicorn process keeps the footprint small on the Pi (gunicorn preloads extra workers).
+      - USE_GUNICORN=False
+      - DATABASE_TYPE=sqlite
+      - DATABASE_PATH=/data/comet.db
+      # CONFIGURE_PAGE_PASSWORD prefixes addon URLs with /s/<PUBLIC_API_TOKEN>/, so the
+      # token must outlive recreates - the default /app/data is ephemeral and every
+      # recreate would mint a new one, breaking already-installed addons.
+      - PUBLIC_API_TOKEN_FILE=/data/public_api_token.txt
+      # TorBox is only the debrid — it checks and streams hashes, it does not find
+      # torrents. With no scraper enabled Comet returns zero results.
+      - SCRAPE_TORRENTIO=True
+      - SCRAPE_MEDIAFUSION=True
+      - SCRAPE_ZILEAN=True
+    # TorBox itself is configured per-user in the /configure web UI (paste the TorBox
+    # API key there); ADMIN_DASHBOARD_PASSWORD and CONFIGURE_PAGE_PASSWORD gate Comet's
+    # own admin dashboard and configuration page, and are generated once by
+    # scripts/comet-pre-start.sh. Deliberately not in `environment:` above: Compose lets
+    # `environment:` win over `env_file:`, so a ${PASSWORD} fallback there would silently
+    # shadow the generated secrets. env_file values are frozen at container creation -
+    # after a rotation use `up -d`, never `restart`.
+    env_file:
+      - path: ./config/comet/comet.env
+        required: false
+    volumes:
+      - comet_data:/data
+    labels:
+      - "homepage.group=Video"
+      - "pi-pcloud.companion-of=stremio"
+      - "homepage.name=Comet"
+      - "homepage.href=https://comet.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Stream source addon for Stremio"
+      - "homepage.icon=stremio.png"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # Two routers on one host. This one is the catch-all: LAN/tailnet only (lan@docker
+      # covers the tailscale ranges), no authelia, because Stremio clients fetch the
+      # manifest/stream endpoints programmatically and cannot pass an interactive login.
+      - "traefik.http.routers.comet.rule=Host(`comet.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.comet.entrypoints=websecure"
+      - "traefik.http.routers.comet.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.comet.tls=true"
+      - "traefik.http.routers.comet.priority=10"
+      # The public half, so an addon installed on a Stremio account keeps resolving
+      # off-tailnet - a TV or a phone on mobile data cannot join it. CONFIGURE_PAGE_PASSWORD
+      # mounts every Stremio endpoint under /s/<PUBLIC_API_TOKEN>/, so that unguessable
+      # prefix - and nothing else - is what goes out: /, /health, /admin and /admin/api/*
+      # (logs, connections, scraper control) stay behind lan@docker on the router above.
+      # /configure is carved back out because config.router is mounted under the token
+      # prefix too, and it is the only password form Comet serves; excluding it leaves no
+      # login at all on the public surface. The cost is that Stremio's Configure button
+      # 403s off-tailnet - streaming does not, and the addon URL is unchanged.
+      # Fails closed: a typo in the rule 403s from outside while still working from the
+      # LAN, so any change here has to be validated off-tailnet.
+      - "traefik.http.routers.comet-public.rule=Host(`comet.${HOST_NAME:-pi.lan}`) && PathPrefix(`/s/`) && !PathRegexp(`/configure(/login)?$$`)"
+      - "traefik.http.routers.comet-public.entrypoints=websecure"
+      # rate-limit-auth is not about auth here: every Comet request fans out to
+      # Torrentio/MediaFusion/Zilean from the Pi's own WAN IP (comet is on frontend, not
+      # behind gluetun), so an unmetered public endpoint is an outbound amplifier.
+      - "traefik.http.routers.comet-public.middlewares=frame-deny@docker,rate-limit-auth@docker"
+      - "traefik.http.routers.comet-public.tls=true"
+      - "traefik.http.routers.comet-public.priority=20"
+      - "traefik.http.routers.comet-public.service=comet"
+      - "traefik.http.services.comet.loadbalancer.server.port=8000"
+    healthcheck:
+      <<: *healthcheck-default
+      # The image left its Alpine base and ships neither wget nor curl.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      # First boot blocks ~2-3 min downloading anime mappings before the API serves.
+      start_period: 180s
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize
+
+  prowlarr:
+    <<: *service-defaults
+    image: lscr.io/linuxserver/prowlarr:2.5.2
+    container_name: pi-prowlarr
+    profiles: ["prowlarr", "all"]
+    networks:
+      - frontend
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    expose:
+      - 9696
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.prowlarr.rule=Host(`prowlarr.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.prowlarr.entrypoints=websecure"
+      - "traefik.http.routers.prowlarr.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.prowlarr.tls=true"
+      - "traefik.http.services.prowlarr.loadbalancer.server.port=9696"
+      - "homepage.group=Download"
+      - "homepage.name=Prowlarr"
+      - "homepage.icon=prowlarr.png"
+      - "homepage.href=https://prowlarr.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Torrent search aggregator"
+      - "homepage.widget.type=prowlarr"
+      - "homepage.widget.url=http://pi-prowlarr:9696"
+      - "homepage.widget.key={{HOMEPAGE_FILE_PROWLARR_API_KEY}}"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIMEZONE:-Europe/Paris}
+    volumes:
+      - ${DATA_LOCATION:-./data}/prowlarr:/config
+    healthcheck:
+      <<: *healthcheck-default
+      # linuxserver base ships curl; Prowlarr's /ping needs no auth.
+      test: ["CMD", "curl", "-fsS", "http://localhost:9696/ping"]
+      start_period: 45s
+    cpu_shares: *cpu-prio-batch
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize
+
+  flaresolverr:
+    <<: *service-defaults
+    image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
+    container_name: pi-flaresolverr
+    profiles: ["flaresolverr", "prowlarr", "all"]
+    labels:
+      - "homepage.description=Cloudflare challenge solver for Prowlarr"
+      - "pi-pcloud.companion-of=prowlarr"
+    networks:
+      - frontend
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    expose:
+      - 8191
+    environment:
+      - LOG_LEVEL=info
+      - TZ=${TIMEZONE:-Europe/Paris}
+    # Chrome crashes with the default 64MB /dev/shm; give it room to render pages.
+    shm_size: "256m"
+    healthcheck:
+      <<: *healthcheck-default
+      test: ["CMD", "curl", "-fsS", "http://localhost:8191/health"]
+      start_period: 45s
+    cpu_shares: *cpu-prio-batch
+    mem_limit: 768m
+    oom_score_adj: *oom-score-deprioritize
+
+  kapowarr:
+    <<: *service-defaults
+    image: mrcas/kapowarr:v1.3.1
+    container_name: pi-kapowarr
+    profiles: ["kapowarr", "all"]
+    # Same gluetun namespace as qBittorrent (localhost:8080) so torrent path mapping
+    # is an identity mapping; GetComics direct downloads also go through the VPN.
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.kapowarr.rule=Host(`kapowarr.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.kapowarr.entrypoints=websecure"
+      - "traefik.http.routers.kapowarr.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.kapowarr.tls=true"
+      - "traefik.http.routers.kapowarr.service=kapowarr"
+      - "traefik.http.services.kapowarr.loadbalancer.server.port=5656"
+      - "homepage.group=Download"
+      - "homepage.name=Kapowarr"
+      - "homepage.icon=kapowarr.png"
+      - "homepage.href=https://kapowarr.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Automated comic downloader"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIMEZONE:-Europe/Paris}
+    volumes:
+      - ${DATA_LOCATION:-./data}/kapowarr/db:/app/db
+      # Own temp dir for GetComics direct downloads (entrypoint chowns it to PUID).
+      - ${DATA_LOCATION:-./data}/kapowarr/downloads:/app/temp_downloads
+      # Shared download folder mounted at the SAME path qBittorrent uses, so torrents
+      # grabbed via the qBittorrent client import with an identity path mapping.
+      - ${DATA_LOCATION:-./data}/download:/downloads
+      - ${DATA_LOCATION:-./data}/comics:/comics
+      # Second root folder: manga volumes live here so Kavita can serve them from a
+      # Manga-type library instead of the comic parser.
+      - ${DATA_LOCATION:-./data}/manga:/manga
+    healthcheck:
+      <<: *healthcheck-default
+      # python-slim base — no curl/wget; probe the UI with the bundled interpreter.
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5656/').status==200 else 1)"]
+      start_period: 45s
+    cpu_shares: *cpu-prio-batch
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize
+
+  kavita:
+    <<: *service-defaults
+    image: lscr.io/linuxserver/kavita:0.9.1
+    container_name: pi-kavita
+    profiles: ["kavita", "all"]
+    networks:
+      - frontend
+    extra_hosts:
+      # Let Kavita reach Authelia's OIDC discovery endpoint via Traefik internally.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 5000
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIMEZONE:-Europe/Paris}
+    volumes:
+      - kavita_config:/config
+      # One read-only mount per Kavita library, so each gets its own library type
+      # (ComicVine for comics, Manga for right-to-left, Book for epub/pdf).
+      # Kapowarr owns comics/ and manga/; the download/* folders are the save paths
+      # of the matching qBittorrent categories. Never the download root: Kavita walks
+      # every subfolder, so a software torrent's installer tree turns into series
+      # named after its internals.
+      - ${DATA_LOCATION:-./data}/comics:/comics:ro
+      - ${DATA_LOCATION:-./data}/manga:/manga:ro
+      - ${DATA_LOCATION:-./data}/download/manga:/manga-downloads:ro
+      # Second folder of the Comics library, for issues grabbed by hand when
+      # Kapowarr cannot find them. Kept out of comics/ deliberately: Kapowarr owns
+      # that tree and moves files inside it with copy-then-delete, which races a
+      # torrent seeding from there. Same split as manga/ + download/manga/.
+      - ${DATA_LOCATION:-./data}/download/comics:/comics-downloads:ro
+      - ${DATA_LOCATION:-./data}/download/books:/books:ro
+      # Read as a Comic library despite holding PDFs; see kavita-library-bootstrap.sh
+      # for why, and for the naming an issue has to follow to join its series.
+      - ${DATA_LOCATION:-./data}/download/magazines:/magazines:ro
+    labels:
+      - "homepage.group=Books"
+      - "homepage.name=Kavita"
+      - "homepage.icon=kavita.png"
+      - "homepage.href=https://kavita.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Comic, manga and ebook reader"
+      - "homepage.widget.type=kavita"
+      - "homepage.widget.url=http://pi-kavita:5000"
+      # An API key, not username/password: Kavita's OIDC config sets
+      # DisablePasswordAuthentication, so /api/Account/login rejects every password
+      # ("password authentication disabled"). It exempts apiKey logins from that
+      # check, and Homepage only sends the key when no username/password is set.
+      - "homepage.widget.key={{HOMEPAGE_FILE_KAVITA_API_KEY}}"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # Kavita has its own account system (and OPDS clients cannot pass interactive SSO),
+      # so lan@docker only — no authelia in front (same rationale as Immich).
+      - "traefik.http.routers.kavita.rule=Host(`kavita.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.kavita.entrypoints=websecure"
+      - "traefik.http.routers.kavita.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.kavita.tls=true"
+      - "traefik.http.services.kavita.loadbalancer.server.port=5000"
+    healthcheck:
+      <<: *healthcheck-default
+      # linuxserver base ships curl; Kavita exposes /api/health.
+      test: ["CMD", "curl", "-fsS", "http://localhost:5000/api/health"]
+      start_period: 45s
+    cpu_shares: *cpu-prio-normal
+    # Idle RSS is ~210 MB; the headroom is for cover generation, where libvips
+    # decodes a whole page and 512m was OOM-killed on files over 100 MB.
+    mem_limit: 1g
+    oom_score_adj: *oom-score-deprioritize
+
+  shelfmark:
+    <<: *service-defaults
+    # The full image, for its bundled bypasser (SeleniumBase undetected CDP).
+    # "lite" reuses Prowlarr's FlareSolverr instead, which is cheaper but only
+    # handles Cloudflare: Anna's Archive is behind DDoS-Guard, which FlareSolverr
+    # reports as solved while returning the interstitial. Costs a second Chromium,
+    # hence the mem_limit and shm_size below.
+    image: ghcr.io/calibrain/shelfmark:v1.3.15@sha256:9602290324993c801b319d3166b202b96bd9039af2416f0916dae03a5bdca815
+    container_name: pi-shelfmark
+    profiles: ["shelfmark", "all"]
+    networks:
+      - frontend
+    # Pi-hole's blocklists cover several of the metadata and release sources
+    # Shelfmark queries; same reason prowlarr and flaresolverr resolve directly.
+    # Container names still resolve: Docker keeps 127.0.0.11 and forwards here.
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    extra_hosts:
+      # Authelia's OIDC discovery endpoint, reached through Traefik internally.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 8084
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIMEZONE:-Europe/Paris}
+      # Everything the onboarding wizard asks for is set here or in
+      # config/shelfmark/shelfmark.env, so there is nothing left to answer.
+      - ONBOARDING=false
+      - SEARCH_MODE=universal
+      # universal mode needs a metadata provider; all three default to off and
+      # the skipped wizard is what would enable one. Open Library is the only one
+      # needing no API key, and is already METADATA_PROVIDER's default.
+      - OPENLIBRARY_ENABLED=true
+      - SESSION_COOKIE_SECURE=true
+      # Read before the settings system exists, so it cannot live in
+      # security.json with the rest of the OIDC configuration. It drops the
+      # local-admin account Shelfmark otherwise demands before OIDC may be
+      # enabled — an account no unattended install can create — and hides the
+      # password form that would then have no valid login behind it.
+      - DISABLE_LOCAL_AUTH=true
+      # Already the default, but set here to override the true that the lite
+      # deployment persisted in /config/plugins/cloudflare_bypass.json.
+      - USING_EXTERNAL_BYPASSER=false
+      - DIRECT_DOWNLOAD_ENABLED=true
+      # Anna's Archive often has no language metadata, and libgen records carry
+      # none at all. Without this those results are filtered out before anything
+      # can look at the file path, which with BOOK_LANGUAGE=fr drops most of the
+      # French catalogue; on, the '[BD FR]'-style tag in the path is read instead.
+      - DIRECT_DOWNLOAD_LANGUAGE_FROM_PATH=true
+      # Shelfmark asks Prowlarr for one category per content type - [3030] for an
+      # audiobook, [7000] for everything else - and skips any indexer whose capabilities
+      # do not declare it. 7000 is a parent, so it expands over the whole Books range and
+      # ebook searches are broad; 3030 is a leaf, and 5 of the 12 enabled indexers here
+      # (YggReborn and Torrent9 among them) never declare it, so they are not queried for
+      # an audiobook at all. This reruns a query variant with no category filter when
+      # that variant returned nothing and no indexer errored, which is the only way those
+      # indexers are reached from inside Shelfmark. Costs a second round of queries, and
+      # only on a variant that already came back empty.
+      #
+      # It does NOT rescue a release that a queried indexer tagged 7000 rather than 3030
+      # - category follows the tracker section the uploader picked, so this happens even
+      # on indexers that mostly use 3030 - because the search then has results and never
+      # expands. Those need Prowlarr's UI and the `audiobooks` qBittorrent category; see
+      # docs/TROUBLESHOOTING.md.
+      - PROWLARR_AUTO_EXPAND=true
+      # Kavita's Book library, not its comic ones: cbz/cbr are Kapowarr's job and
+      # land in a library with a different parser, so they are dropped here and
+      # pdf (which the default list omits) is added.
+      - SUPPORTED_FORMATS=epub,pdf,mobi,azw3,fb2,djvu
+      - INGEST_DIR=/downloads/books
+      - DESTINATION_AUDIOBOOK=/downloads/audiobooks
+      # Audiobookshelf calls a book either a subfolder of the library or a single
+      # loose file at its root - it never groups root-level files, not even ones
+      # sharing an `album` tag. The default here is "rename", which renames
+      # single-file grabs and leaves multi-file ones with their original names, so
+      # a 59-track Odyssee landed as 59 flat mp3s and Audiobookshelf made 59
+      # one-track books out of them. "organize" applies
+      # TEMPLATE_AUDIOBOOK_ORGANIZE ({Author}/{Title}/{Title}), which is the
+      # layout Audiobookshelf expects; upstream labels it "Recommended for
+      # Audiobookshelf". Safe here because DESTINATION_AUDIOBOOK is a library
+      # Audiobookshelf reads, not an ingest folder that consumes what it finds.
+      - FILE_ORGANIZATION_AUDIOBOOK=organize
+      # qBittorrent saves Shelfmark's grabs outside /downloads/books so a raw
+      # torrent tree never reaches Kavita; only the processed file is filed there.
+      # The same reasoning keeps audiobooks out of /downloads/audiobooks while they
+      # download: Audiobookshelf reads that folder, so a raw release tree there
+      # would be indexed alongside the organised copy Shelfmark then writes.
+      - QBITTORRENT_DOWNLOAD_DIR=/downloads/shelfmark
+      - QBITTORRENT_CATEGORY=shelfmark
+      # Same staging folder as QBITTORRENT_CATEGORY (both categories pin savePath
+      # to /downloads/shelfmark in scripts/qbittorrent-bootstrap.sh) - the split is
+      # for legibility only. Shelfmark routes by the task's content type, not by
+      # category, so mixing them was harmless but left no way to tell an ebook
+      # grab from an audiobook one in qBittorrent's list.
+      - QBITTORRENT_CATEGORY_AUDIOBOOK=shelfmark-audiobooks
+      - CALIBRE_WEB_URL=https://kavita.${HOST_NAME:-pi.lan}
+    env_file:
+      - path: ./config/shelfmark/shelfmark.env
+        required: false
+    volumes:
+      - ${DATA_LOCATION:-./data}/shelfmark:/config
+      # One mount at the path qBittorrent uses, so a completed torrent is at the
+      # same path in both containers and needs no remote path mapping. It also
+      # carries the two destinations: books/ is the folder Kavita indexes as its
+      # Book library, audiobooks/ is served through Nextcloud.
+      - ${DATA_LOCATION:-./data}/download:/downloads
+    labels:
+      - "homepage.group=Download"
+      - "homepage.name=Shelfmark"
+      - "homepage.icon=shelfmark.png"
+      - "homepage.href=https://shelfmark.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Book and audiobook search"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # Shelfmark has its own account system, fed by Authelia over OIDC, so
+      # lan@docker only — no forward-auth on top (same rationale as Kavita).
+      - "traefik.http.routers.shelfmark.rule=Host(`shelfmark.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.shelfmark.entrypoints=websecure"
+      - "traefik.http.routers.shelfmark.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.shelfmark.tls=true"
+      - "traefik.http.services.shelfmark.loadbalancer.server.port=8084"
+    healthcheck:
+      <<: *healthcheck-default
+      # python-slim base with curl installed; /api/health needs no auth.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8084/api/health"]
+      start_period: 90s
+    cpu_shares: *cpu-prio-normal
+    # Chromium crashes rendering a page with the default 64MB /dev/shm, and needs
+    # the headroom - the same two settings flaresolverr carries.
+    shm_size: "256m"
+    mem_limit: 2g
+    memswap_limit: 2560m
+    oom_score_adj: *oom-score-deprioritize
+
+  audiobookshelf:
+    <<: *service-defaults
+    image: ghcr.io/advplyr/audiobookshelf:2.36.0@sha256:180acad33d69c99ed208676465d8edcb268fa46967735579a7810859885b1a8e
+    container_name: pi-audiobookshelf
+    profiles: ["audiobookshelf", "all"]
+    networks:
+      - frontend
+    extra_hosts:
+      # Authelia's OIDC discovery endpoint, reached through Traefik internally.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 80
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      # ROUTER_BASE_PATH is deliberately NOT set. Unset does not mean "no
+      # subfolder": both the server and the client read it as
+      # `?? '/audiobookshelf'`, and the published image builds its Nuxt client
+      # with that default baked into every asset URL. Setting it to the empty
+      # string makes the server stop serving that prefix while the client keeps
+      # asking for it, so every /audiobookshelf/_nuxt/*.js 404s and the page
+      # hangs on its spinner. The app is meant to live under that path; the
+      # server's rewrite of prefix-less URLs is a convenience on top.
+    volumes:
+      # Root-owned, like every other container here: the image has no PUID/PGID
+      # and pinning `user:` would only move the problem, since a bind source the
+      # daemon creates is root-owned anyway. It costs nothing because these two
+      # directories are the only things Audiobookshelf writes - the library
+      # below is read-only, so the shared download tree is never touched.
+      - ${DATA_LOCATION:-./data}/audiobookshelf/config:/config
+      # Covers, cached cover art and the app's own backups. Split from /config on
+      # purpose: /config is the small unrecoverable half (the SQLite database)
+      # that Backrest mounts, and this one is regenerable from the audio files.
+      - ${DATA_LOCATION:-./data}/audiobookshelf/metadata:/metadata
+      # Shelfmark's DESTINATION_AUDIOBOOK, which until now only reached Nextcloud
+      # as storage. Read-only for the same reason Kavita's libraries are: with the
+      # default settings Audiobookshelf keeps every scan artefact under /metadata,
+      # so a library it only reads is never written back to.
+      - ${DATA_LOCATION:-./data}/download/audiobooks:/audiobooks:ro
+    labels:
+      - "homepage.group=Books"
+      - "homepage.name=Audiobookshelf"
+      - "homepage.icon=audiobookshelf.png"
+      - "homepage.href=https://audiobooks.${HOST_NAME:-pi.lan}"
+      # Not "and podcast player": Audiobookshelf downloads podcast episodes into
+      # the library folder, and the only media mount here is :ro, so a podcast
+      # library would fail with EROFS. Adding one means adding a writable mount.
+      - "homepage.description=Audiobook library and player"
+      - "homepage.widget.type=audiobookshelf"
+      - "homepage.widget.url=http://pi-audiobookshelf"
+      # An API key minted by scripts/homepage-widgets-bootstrap.sh. Audiobookshelf
+      # returns the key once, at creation, so the secret file is the only copy.
+      - "homepage.widget.key={{HOMEPAGE_FILE_AUDIOBOOKSHELF_API_KEY}}"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # Audiobookshelf has its own account system, fed by Authelia over OIDC, and
+      # its mobile apps cannot complete an interactive portal - so lan@docker
+      # only, no forward-auth on top (same rationale as Kavita and Shelfmark).
+      - "traefik.http.routers.audiobookshelf.rule=Host(`audiobooks.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.audiobookshelf.entrypoints=websecure"
+      - "traefik.http.routers.audiobookshelf.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.audiobookshelf.tls=true"
+      - "traefik.http.services.audiobookshelf.loadbalancer.server.port=80"
+    healthcheck:
+      <<: *healthcheck-default
+      # node:20-alpine ships no curl; busybox provides wget. /healthcheck is
+      # unauthenticated and answers 200 as soon as the server is listening.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/healthcheck"]
+      start_period: 45s
+    cpu_shares: *cpu-prio-normal
+    # Idle RSS is ~150 MB; the headroom is for the scanner, which probes every
+    # file with ffprobe, and for the ffmpeg transcode a non-m4b stream triggers.
+    mem_limit: 1g
+    oom_score_adj: *oom-score-deprioritize

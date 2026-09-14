@@ -17,7 +17,7 @@ set -u
 OCC="php /var/www/html/occ"
 MOUNT_GROUP="admin"
 # "<mount point>:<path inside this container>". The paths are read-only bind mounts
-# declared on the nextcloud service in compose.yaml; keep the two lists in step.
+# declared on the nextcloud service in compose/compose-cloud.yaml; keep the two lists in step.
 MOUNTS="Downloads:/mnt/qbittorrent-downloads
 Comics:/mnt/library-comics
 Manga:/mnt/library-manga

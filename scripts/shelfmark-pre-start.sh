@@ -2,7 +2,7 @@
 # Render config/shelfmark/shelfmark.env, the half of Shelfmark's configuration
 # that has to be discovered from other services: the Prowlarr API key, the
 # qBittorrent login, the ntfy route and SMTP. The rest is plain `environment:`
-# on the service in compose.yaml, and the OIDC client is
+# on the service in compose/compose-media.yaml, and the OIDC client is
 # shelfmark-settings-bootstrap.sh (its secret must not travel in an env var).
 #
 # Shelfmark resolves every setting from its environment first and only then from

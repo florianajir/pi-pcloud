@@ -16,7 +16,7 @@ set -eu
 
 . "$(dirname "$0")/lib.sh"
 
-# Only used to borrow its `crypto hash` CLI; keep in step with compose.yaml.
+# Only used to borrow its `crypto hash` CLI; keep in step with compose/compose-cloud.yaml.
 AUTHELIA_IMAGE="${AUTHELIA_IMAGE:-authelia/authelia:4.39.20}"
 
 DATA_DIR="$(resolve_data_location_path)"

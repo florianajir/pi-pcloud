@@ -41,7 +41,7 @@ scrape_configs:
     static_configs:
       - targets: ["headscale:9090"]
 
-  # NTFY_METRICS_LISTEN_HTTP, not NTFY_ENABLE_METRICS - see compose.yaml.
+  # NTFY_METRICS_LISTEN_HTTP, not NTFY_ENABLE_METRICS - see compose/compose-monitoring.yaml.
   - job_name: ntfy
     static_configs:
       - targets: ["ntfy:9090"]
@@ -67,7 +67,7 @@ scrape_configs:
     static_configs:
       - targets: ["agentgateway:15020"]
 
-  # LLAMA_ARG_ENDPOINT_METRICS in compose.yaml, on the same 8080 as the API.
+  # LLAMA_ARG_ENDPOINT_METRICS in compose/compose-ai.yaml, on the same 8080 as the API.
   - job_name: llama-cpp
     static_configs:
       - targets: ["llama-cpp:8080"]

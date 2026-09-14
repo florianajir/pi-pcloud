@@ -1,0 +1,559 @@
+# The services that hold user data - files, photos, secrets, automations -
+# and the notification bus the rest of the stack publishes to.
+#
+# Included by compose.yaml, which declares the networks and volumes named
+# below and supplies the .env this file interpolates. Not startable on its
+# own: `docker compose -f compose/compose-cloud.yaml` resolves every relative
+# path against compose/ instead of the project root.
+
+# --- shared preamble: identical in every compose/*.yaml ---
+#
+# YAML anchors are file-scoped and `include:` parses each file on its own, so
+# this block cannot be shared - it is copied. compose.yaml holds the canonical
+# copy, with the reasoning behind every tier; tests/compose-invariants.py fails
+# the build when a copy drifts from it. Change compose.yaml first, then here.
+
+x-service-defaults: &service-defaults
+  logging:
+    driver: "journald"
+    options:
+      tag: "{{.Name}}"
+  restart: unless-stopped
+
+x-cpu-prio-critical: &cpu-prio-critical 4096
+x-cpu-prio-normal: &cpu-prio-normal 1024
+x-cpu-prio-batch: &cpu-prio-batch 256
+x-cpu-prio-idle: &cpu-prio-idle 128
+
+x-oom-score-critical: &oom-score-critical -1000
+x-oom-score-important: &oom-score-important -500
+x-oom-score-deprioritize: &oom-score-deprioritize 500
+
+x-healthcheck-default: &healthcheck-default
+  interval: 60s
+  timeout: 10s
+  retries: 3
+  start_period: 20s
+x-healthcheck-light: &healthcheck-light
+  interval: 90s
+  timeout: 10s
+  retries: 2
+  start_period: 10s
+x-healthcheck-relaxed: &healthcheck-relaxed
+  interval: 120s
+  timeout: 10s
+  retries: 2
+  start_period: 10s
+x-healthcheck-fast: &healthcheck-fast
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 10s
+
+# --- end shared preamble ---
+
+services:
+  nextcloud:
+    <<: *service-defaults
+    image: nextcloud:34.0.4-apache
+    container_name: pi-nextcloud
+    profiles: ["nextcloud", "all"]
+    environment:
+      - NEXTCLOUD_ADMIN_USER=${ADMIN_USER:-admin}
+      - NEXTCLOUD_ADMIN_PASSWORD=${PASSWORD}
+      - NEXTCLOUD_ADMIN_EMAIL=${EMAIL}
+      - NEXTCLOUD_TRUSTED_DOMAINS=nextcloud.${HOST_NAME:-pi.lan} localhost 127.0.0.1
+      - NEXTCLOUD_DATA_DIR=/var/www/html/data
+      - OVERWRITEHOST=nextcloud.${HOST_NAME:-pi.lan}
+      - OVERWRITEPROTOCOL=https
+      - OVERWRITECLIURL=https://nextcloud.${HOST_NAME:-pi.lan}
+      - TRUSTED_PROXIES=172.30.11.250/32
+      - ALLOW_IP_RANGES=${ALLOW_IP_RANGES:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd7a:115c:a1e0::/48}
+      - FORWARDED_FOR_HEADERS=HTTP_X_FORWARDED_FOR
+      - NEXTCLOUD_MAINTENANCE_WINDOW_START=${NEXTCLOUD_MAINTENANCE_WINDOW_START:-2}
+      - NEXTCLOUD_DEFAULT_PHONE_REGION=${NEXTCLOUD_DEFAULT_PHONE_REGION:-FR}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=nextcloud
+      - POSTGRES_USER=nextcloud
+      - POSTGRES_PASSWORD=${PASSWORD}
+      - REDIS_HOST=redis
+      # The file variant, so the password is not in docker inspect - and it has
+      # to stay a path every UID in the container can read, because
+      # `docker exec -u www-data` re-resolves it. See the mount below.
+      - REDIS_HOST_PASSWORD_FILE=/run/secrets/redis_password
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - SMTP_HOST=${SMTP_HOST:-localhost}
+      - SMTP_SECURE=${SMTP_SECURE:-tls}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_AUTHTYPE=${SMTP_AUTHTYPE:-LOGIN}
+      - SMTP_NAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-nextcloud}
+      - MAIL_DOMAIN=${HOST_NAME:-pi.lan}
+    volumes:
+      - nextcloud_html:/var/www/html
+      - ${DATA_LOCATION:-./data}/nextcloud:/var/www/html/data
+      - ${DATA_LOCATION:-./data}/nextcloud-config:/var/www/html/config
+      - ${DATA_LOCATION:-./data}/nextcloud-themes:/var/www/html/themes
+      # The download tree and the reading libraries, read-write, so Nextcloud is
+      # also where they get organised - renamed, moved, deleted - and not only
+      # where a file gets a public share link.
+      #
+      # Read-write here is necessary but not sufficient: Nextcloud's PHP runs as
+      # uid 33 and everything below belongs to uid/gid 1000 in mode 0755, so it
+      # would still only get r-x. scripts/nextcloud-pre-start.sh grants uid 33
+      # write access with an ACL. Note `group_add: 1000` does NOT work here,
+      # tempting as it looks: Apache calls initgroups() when it drops to
+      # www-data, which rebuilds the group list from the container's /etc/group
+      # and discards the supplementary gid compose added.
+      #
+      # config/nextcloud/hooks/post-installation/20-external-storage.sh turns
+      # these into files_external mounts; keep the two lists in step.
+      - ${DATA_LOCATION:-./data}/download:/mnt/qbittorrent-downloads
+      - ${DATA_LOCATION:-./data}/comics:/mnt/library-comics
+      - ${DATA_LOCATION:-./data}/manga:/mnt/library-manga
+      - ${DATA_LOCATION:-./data}/download/books:/mnt/library-books
+      - ${DATA_LOCATION:-./data}/download/audiobooks:/mnt/library-audiobooks
+      - ./config/nextcloud/custom.config.php:/var/www/html/config/custom.config.php:ro
+      - ./config/nextcloud/security-headers.conf:/etc/apache2/conf-enabled/security-headers.conf:ro
+      - ./config/nextcloud/zz-opcache-jit.ini:/usr/local/etc/php/conf.d/zz-opcache-jit.ini:ro
+      - ./config/nextcloud/hooks/post-installation:/docker-entrypoint-hooks.d/post-installation:ro
+      # The 0644 copy, not the 0600 original: redis.config.php keeps the
+      # `_FILE` branch and re-reads it per request, so www-data needs it too.
+      - ${DATA_LOCATION:-./data}/redis/redis-password:/run/secrets/redis_password:ro
+    extra_hosts:
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    networks:
+      - frontend
+      - nextcloud
+    labels:
+      - "homepage.group=Storage"
+      - "homepage.name=Nextcloud"
+      - "homepage.icon=nextcloud.png"
+      - "homepage.href=https://nextcloud.${HOST_NAME:-pi.lan}"
+      - "homepage.description=File sync and collaboration"
+      - "homepage.widget.type=nextcloud"
+      - "homepage.widget.url=https://nextcloud.${HOST_NAME:-pi.lan}"
+      - "homepage.widget.username={{HOMEPAGE_VAR_NEXTCLOUD_USER}}"
+      - "homepage.widget.password={{HOMEPAGE_VAR_ADMIN_PASSWORD}}"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # frame-deny@docker sends DENY, but Nextcloud's own check wants SAMEORIGIN
+      # exactly - same fix as Vaultwarden's vaultwarden-frame below.
+      - "traefik.http.middlewares.nextcloud-frame.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN"
+      - "traefik.http.routers.nextcloud.rule=Host(`nextcloud.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.nextcloud.middlewares=nextcloud-frame@docker,lan@docker"
+      - "traefik.http.routers.nextcloud.entrypoints=websecure"
+      - "traefik.http.routers.nextcloud.tls=true"
+      - "traefik.http.routers.nextcloud.priority=10"
+      # Same caveat as immich-public: no lan@docker, so this rule is the public
+      # surface. Two prefixes were wider than any share needs.
+      # `/avatar/` was an account-enumeration oracle - /avatar/<known-mail>/64/dark
+      # answers 200 where an unknown one answers 201, unauthenticated. Shares only
+      # ever request /avatar/guest/, so the prefix is narrowed to that.
+      # `/apps/` also exposed /apps/files/api/v1/*; the negation keeps the app
+      # assets (js, css, l10n, img, theming) that a share page genuinely loads
+      # while dropping every app's REST surface. /ocs/ and /remote.php/ were
+      # already absent from here, so the OCS API stays behind lan@docker.
+      # `/custom_apps/` is where store-installed apps serve their assets, and it
+      # was never in this rule - which quietly broke public calendar sharing:
+      # /apps/calendar/p/<token> is reachable, but the page it returns pulls
+      # /custom_apps/calendar/js/calendar-main.js, so the calendar never rendered
+      # for anyone outside the LAN. Mirrors the /apps/ negation above so the
+      # store apps' REST surfaces stay private.
+      # Assets only under /apps, /custom_apps and /core, never the whole tree:
+      # anything broader publishes /apps/user_oidc/login and with it a way to
+      # reach /apps/files/ and /core/preview from off-LAN. The subdirectory list
+      # is what a real public share page requests, plus l10n/fonts/vendor. LAN
+      # and tailnet clients match the `lan` router instead and are unaffected.
+      - "traefik.http.routers.nextcloud-public.rule=Host(`nextcloud.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/s/`) || PathPrefix(`/public.php`) || PathPrefix(`/avatar/guest/`) || PathPrefix(`/dist/`) || PathPrefix(`/js/`) || PathPrefix(`/themes/`) || PathPrefix(`/apps/files_sharing/publicpreview`) || PathRegexp(`^/core/(css|js|img|fonts|l10n|vendor)/`) || PathRegexp(`^/(apps|custom_apps)/[^/]+/(css|js|img|fonts|l10n|vendor|theme|favicon|icon|manifest)/`) || PathPrefix(`/remote.php/dav/calendars/`) || PathPrefix(`/remote.php/dav/public-calendars/`))"
+      - "traefik.http.routers.nextcloud-public.entrypoints=websecure"
+      - "traefik.http.routers.nextcloud-public.middlewares=nextcloud-frame@docker"
+      - "traefik.http.routers.nextcloud-public.tls=true"
+      - "traefik.http.routers.nextcloud-public.priority=20"
+      - "traefik.http.services.nextcloud.loadbalancer.server.port=80"
+    healthcheck:
+      <<: *healthcheck-default
+      test: ["CMD", "curl", "-f", "http://localhost/status.php"]
+      start_period: 60s
+      start_interval: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    cpuset: "1-3"
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 768m
+    oom_score_adj: *oom-score-deprioritize
+
+  immich-server:
+    <<: *service-defaults
+    container_name: pi-immich
+    profiles: ["immich-server", "all"]
+    image: ghcr.io/immich-app/immich-server:v3.2.0
+    volumes:
+      - ${DATA_LOCATION:-./data}/immich:/data
+      - ${DATA_LOCATION:-./data}/authelia-config/immich-oauth-config.yaml:/immich-oauth-config.yaml:ro
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/redis_password:/run/secrets/redis_password:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      DB_HOSTNAME: postgres
+      DB_DATABASE_NAME: immich
+      DB_USERNAME: immich
+      DB_PASSWORD: ${PASSWORD}
+      REDIS_HOSTNAME: redis
+      # The file variant, so the password is not in docker inspect.
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      IMMICH_CONFIG_FILE: /immich-oauth-config.yaml
+      IMMICH_TRUSTED_PROXIES: 172.30.11.250/32
+      # The whole enum. `repo` and `io` are the expensive halves - a histogram
+      # per repository method and per filesystem op - so set
+      # IMMICH_TELEMETRY_EXCLUDE=repo,io if the TSDB size cap starts biting.
+      IMMICH_TELEMETRY_INCLUDE: all
+      CPU_CORES: 3
+      TZ: ${TIMEZONE:-Europe/Paris}
+    networks:
+      - frontend
+      - immich
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - 2283
+      # IMMICH_API_METRICS_PORT and IMMICH_MICROSERVICES_METRICS_PORT at their
+      # defaults: one container, two workers, two listeners.
+      - 8081
+      - 8082
+    labels:
+      - "homepage.group=Storage"
+      - "homepage.name=Immich"
+      - "homepage.icon=immich.png"
+      - "homepage.href=https://immich.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Photo and video library"
+      - "homepage.widget.type=immich"
+      - "homepage.widget.url=http://pi-immich:2283"
+      - "homepage.widget.key={{HOMEPAGE_FILE_IMMICH_API_KEY}}"
+      - "homepage.widget.version=2"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.immich.rule=Host(`immich.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.immich.entrypoints=websecure"
+      - "traefik.http.routers.immich.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.immich.tls=true"
+      - "traefik.http.routers.immich.priority=10"
+      # This router carries no lan@docker, so its rule *is* the public surface.
+      # A blanket PathPrefix(`/api`) put the whole authenticated API on the
+      # internet - /api/users/me, /api/albums, /api/faces, /api/sync/stream -
+      # none of which a share link touches. Worse, `immich@` then only ever saw
+      # the HTML shell: every API call from the logged-in app was routed here.
+      # Measured against a real share by splitting the access log per TCP
+      # connection, every anonymous request carries `key` or `slug`, without
+      # exception. So /api/assets - which a share and the app request at the
+      # same paths - is gated on that parameter rather than on the path.
+      # Fails closed: a missing path 403s from outside while still working from
+      # the LAN, so any change here must be validated off-tailnet.
+      # The three loose files are not decoration: /service-worker.js was 403ing
+      # in a retry loop on every share view (32 times over one off-tailnet test),
+      # and none of them ever matched the old rule either - they sit at the root,
+      # outside /share, /s/, /_app and /api.
+      - "traefik.http.routers.immich-public.rule=Host(`immich.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/share`) || PathPrefix(`/s/`) || PathPrefix(`/_app`) || Path(`/service-worker.js`) || Path(`/custom.css`) || Path(`/dark_skeleton.png`) || Path(`/api/shared-links/me`) || Path(`/api/shared-links/login`) || Path(`/api/server/config`) || Path(`/api/server/features`) || Path(`/api/server/media-types`) || ((PathPrefix(`/api/assets`) || PathPrefix(`/api/download`) || PathPrefix(`/api/timeline`) || PathPrefix(`/api/albums`)) && (QueryRegexp(`key`, `.+`) || QueryRegexp(`slug`, `.+`))))"
+      - "traefik.http.routers.immich-public.entrypoints=websecure"
+      - "traefik.http.routers.immich-public.middlewares=frame-deny@docker"
+      - "traefik.http.routers.immich-public.tls=true"
+      - "traefik.http.routers.immich-public.priority=20"
+      - "traefik.http.services.immich.loadbalancer.server.port=2283"
+    cpuset: "1-3"
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 3072m
+    memswap_limit: 3584m
+    oom_score_adj: *oom-score-deprioritize
+
+  immich-machine-learning:
+    <<: *service-defaults
+    container_name: pi-immich-machine-learning
+    profiles: ["immich-machine-learning", "all"]
+    labels:
+      - "homepage.description=Face and object recognition for Immich"
+      - "pi-pcloud.companion-of=immich-server"
+    image: ghcr.io/immich-app/immich-machine-learning:v3.2.0
+    networks:
+      - egress_immich
+      - immich
+    environment:
+      TZ: ${TIMEZONE:-Europe/Paris}
+      MACHINE_LEARNING_WORKERS: 2
+      MACHINE_LEARNING_REQUEST_THREADS: 2
+      MACHINE_LEARNING_MODEL_INTER_OP_THREADS: 1
+      MACHINE_LEARNING_MODEL_INTRA_OP_THREADS: 2
+      MACHINE_LEARNING_MODEL_TTL: 180
+      MACHINE_LEARNING_WORKER_TIMEOUT: 300
+      MACHINE_LEARNING_ANN: "false"
+      MACHINE_LEARNING_RKNN: "false"
+    volumes:
+      - immich_model_cache:/cache
+    cpuset: "2-3"
+    cpu_shares: *cpu-prio-idle
+    mem_limit: 2g
+    memswap_limit: 2560m
+    oom_score_adj: *oom-score-deprioritize
+
+  vaultwarden:
+    <<: *service-defaults
+    image: vaultwarden/server:1.37.3
+    container_name: pi-vaultwarden
+    profiles: ["vaultwarden", "all"]
+    # Not frontend: no east-west consumer at all. See `vaultwarden_web` below.
+    networks:
+      - vaultwarden_web
+      - vault
+    expose:
+      - 80
+    # So the SSO_AUTHORITY discovery call resolves to Traefik, reached on
+    # vaultwarden_web since this container moved off frontend.
+    extra_hosts:
+      - "auth.${HOST_NAME:-pi.lan}:172.30.14.250"
+    # Neither SSO_CLIENT_SECRET nor ADMIN_TOKEN has a *_FILE variant, so the mounted
+    # secrets are exported before handing over to the image's own /start.sh. Same
+    # trick as open-webui. Both values are hex/PHC, so they need no quoting.
+    entrypoint: ["sh", "-c", "export SSO_CLIENT_SECRET=$(cat /run/secrets/oidc_vaultwarden_secret) ADMIN_TOKEN=$(cat /run/secrets/admin_token_hash) && exec /start.sh"]
+    environment:
+      - DOMAIN=https://vault.${HOST_NAME:-pi.lan}
+      - DATABASE_URL=postgresql://vaultwarden:${PASSWORD}@postgres/vaultwarden
+      # This router is only behind the LAN allowlist, so open registration would
+      # let anyone on the tailnet create a vault. Invite from /admin instead.
+      - SIGNUPS_ALLOWED=false
+      - INVITATIONS_ALLOWED=true
+      # ADMIN_TOKEN is exported by the entrypoint from an Argon2id digest generated
+      # by scripts/vaultwarden-pre-start.sh - deliberately not derived from PASSWORD.
+      # This does NOT remove the master password: that key encrypts the vault
+      # itself and never reaches the identity provider.
+      - SSO_ENABLED=true
+      - SSO_AUTHORITY=https://auth.${HOST_NAME:-pi.lan}
+      - SSO_CLIENT_ID=vaultwarden
+      - SSO_SCOPES=profile email offline_access
+      # Native email+password login is off, so everyone who signs in - including
+      # an emergency-access contact - must exist in LLDAP. An invitation only
+      # creates a stub account, claimed by signing in through Authelia.
+      - SSO_ONLY=true
+      # Authelia rotates refresh tokens single-use with no grace period, and the
+      # Bitwarden clients refresh even while their access token is still valid.
+      # Any refresh response that fails to reach the client (a restart mid-flight,
+      # a transient 500) therefore burns the only token it holds and locks it out
+      # for good. Authelia stays the sole way *in*; the session it opens is ours.
+      - SSO_AUTH_ONLY_NOT_SESSION=true
+      # Deliberate, not just the default: needs the SMTP below to deliver its
+      # invite, grant and takeover-notification mails.
+      - EMERGENCY_ACCESS_ALLOWED=true
+      # starttls suits the default port 587; use force_tls on 465.
+      - SMTP_HOST=${SMTP_HOST:-localhost}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURITY=starttls
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${EMAIL:-noreply@localhost}
+      - SMTP_FROM_NAME=Vaultwarden
+      - TZ=${TIMEZONE:-Europe/Paris}
+    volumes:
+      - ${DATA_LOCATION:-./data}/vaultwarden:/data
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_vaultwarden_secret.txt:/run/secrets/oidc_vaultwarden_secret:ro
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/vaultwarden_admin_token_hash:/run/secrets/admin_token_hash:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # The bundled /healthcheck.sh already handles ROCKET_PORT and base paths.
+      <<: *healthcheck-light
+      test: ["CMD", "/healthcheck.sh"]
+    labels:
+      - "homepage.group=Security"
+      - "homepage.name=Vaultwarden"
+      - "homepage.icon=vaultwarden.png"
+      - "homepage.href=https://vault.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Bitwarden-compatible password manager"
+      - "traefik.enable=true"
+      - "traefik.docker.network=vaultwarden_web"
+      # Deliberately no authelia@docker: forward-auth breaks the browser extension
+      # and mobile clients, which cannot complete the interactive portal. They are
+      # authenticated through OIDC instead (see SSO_* above).
+      # The websecure entrypoint's security-headers sets X-Frame-Options: DENY on
+      # every response, which Vaultwarden's own diagnostics flag: it replaces the
+      # SAMEORIGIN the API needs, and adds the header to the *-connector.html pages
+      # that must have none - those are framed by the browser extension from a
+      # chrome-extension:// origin, which any X-Frame-Options value would block.
+      # Restoring per-router requires re-emitting the header after the entrypoint.
+      - "traefik.http.middlewares.vaultwarden-frame.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN"
+      - "traefik.http.routers.vaultwarden.rule=Host(`vault.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.vaultwarden.entrypoints=websecure"
+      - "traefik.http.routers.vaultwarden.middlewares=vaultwarden-frame@docker,lan@docker"
+      - "traefik.http.routers.vaultwarden.tls=true"
+      # Longer rule than the catch-all above, so Traefik's rule-length priority
+      # picks it for the connector pages without an explicit priority.
+      - "traefik.http.routers.vaultwarden-connector.rule=Host(`vault.${HOST_NAME:-pi.lan}`) && (Path(`/webauthn-connector.html`) || Path(`/sso-connector.html`))"
+      - "traefik.http.routers.vaultwarden-connector.entrypoints=websecure"
+      - "traefik.http.routers.vaultwarden-connector.middlewares=lan@docker"
+      - "traefik.http.routers.vaultwarden-connector.tls=true"
+      - "traefik.http.routers.vaultwarden-connector.service=vaultwarden"
+      - "traefik.http.services.vaultwarden.loadbalancer.server.port=80"
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 256m
+    mem_reservation: 32m
+    oom_score_adj: *oom-score-important
+
+  n8n:
+    <<: *service-defaults
+    image: n8nio/n8n:2.38.7
+    container_name: pi-n8n
+    profiles: ["n8n", "n8n-runners", "all"]
+    expose:
+      - 5678
+    labels:
+      - "homepage.group=Automation"
+      - "homepage.name=n8n"
+      - "homepage.icon=n8n.png"
+      - "homepage.href=https://n8n.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Workflow automation"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.n8n.rule=Host(`n8n.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls=true"
+      - "traefik.http.routers.n8n.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+    environment:
+      - N8N_HOST=n8n.${HOST_NAME:-pi.lan}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://n8n.${HOST_NAME:-pi.lan}/
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-${TIMEZONE:-Europe/Paris}}
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=${N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS:-true}
+      - DB_TYPE=sqlite
+      - DB_SQLITE_POOL_SIZE=2
+      - N8N_EMAIL_MODE=smtp
+      - N8N_SMTP_HOST=${SMTP_HOST:-localhost}
+      - N8N_SMTP_PORT=${SMTP_PORT:-587}
+      - N8N_SMTP_USER=${SMTP_USERNAME:-}
+      - N8N_SMTP_PASS=${SMTP_PASSWORD:-}
+      - N8N_SMTP_SENDER=${EMAIL:-noreply@localhost}
+      - N8N_SMTP_SSL=${SMTP_SSL:-false}
+      - N8N_RUNNERS_MODE=external
+      - N8N_RUNNERS_BROKER_LISTEN_ADDRESS=0.0.0.0
+      # n8n has no separate telemetry listener and does not gate the endpoint,
+      # so this also makes n8n.$HOST_NAME/metrics readable by anything past
+      # lan@docker. N8N_METRICS_INCLUDE_* stay off, so no workflow names are in
+      # it. See docs/MONITORING.md#what-enabling-metrics-exposes.
+      - N8N_METRICS=true
+      - NODE_OPTIONS=--max-old-space-size=512
+    # N8N_RUNNERS_AUTH_TOKEN, generated by scripts/n8n-pre-start.sh. The broker
+    # listens on 0.0.0.0 inside `frontend`, so this gates ~25 containers out of
+    # registering as a task runner - it must never fall back to a default.
+    env_file:
+      - path: ./config/n8n/n8n.env
+        required: false
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ${DATA_LOCATION:-./data}/n8n:/files
+    networks:
+      - frontend
+      - n8n_runners
+    depends_on:
+      - traefik
+    healthcheck:
+      <<: *healthcheck-default
+      # Explicit IPv4 loopback: localhost resolves to ::1 here and the dial fails.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5678/healthz"]
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 768m
+    oom_score_adj: *oom-score-deprioritize
+
+  n8n-runners:
+    <<: *service-defaults
+    image: n8nio/runners:2.38.7
+    container_name: pi-n8n-runners
+    profiles: ["n8n-runners", "all"]
+    labels:
+      - "homepage.description=Sandboxed task runner for n8n"
+      - "pi-pcloud.companion-of=n8n"
+    environment:
+      - N8N_RUNNERS_TASK_BROKER_URI=http://n8n:5679
+    # Same generated secret as the broker above; see scripts/n8n-pre-start.sh.
+    env_file:
+      - path: ./config/n8n/n8n.env
+        required: false
+    networks:
+      - n8n_runners
+    depends_on:
+      - n8n
+    healthcheck:
+      <<: *healthcheck-fast
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5680/healthz && nc -z -w 2 n8n 5679"]
+      start_period: 5s
+      start_interval: 3s
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 256m
+    oom_score_adj: *oom-score-deprioritize
+
+  ntfy:
+    <<: *service-defaults
+    image: binwiederhier/ntfy:v2.28.0
+    container_name: pi-ntfy
+    command: serve
+    networks:
+      - frontend
+      - ntfy
+    expose:
+      - 80
+      - 9090
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      # Deliberately not NTFY_ENABLE_METRICS, which would add /metrics to the
+      # routed :80. Here and not in ntfy.env, which ntfy-pre-start.sh rewrites
+      # whole.
+      - NTFY_METRICS_LISTEN_HTTP=:9090
+      - NTFY_BASE_URL=https://ntfy.${HOST_NAME:-pi.lan}
+      - NTFY_BEHIND_PROXY=true
+      - NTFY_CACHE_FILE=/var/cache/ntfy/cache.db
+      - NTFY_AUTH_FILE=/var/lib/ntfy/user.db
+      - NTFY_ENABLE_LOGIN=true
+      - NTFY_AUTH_DEFAULT_ACCESS=deny-all
+      - NTFY_SMTP_SENDER_ADDR=${SMTP_HOST:-localhost}:${SMTP_PORT:-587}
+      - NTFY_SMTP_SENDER_USER=${SMTP_USERNAME:-}
+      - NTFY_SMTP_SENDER_PASS=${SMTP_PASSWORD:-}
+      - NTFY_SMTP_SENDER_FROM=${EMAIL:-noreply@localhost}
+    env_file:
+      - path: ./config/ntfy/ntfy.env
+        required: false
+    volumes:
+      - ntfy_cache:/var/cache/ntfy
+      - ntfy_data:/var/lib/ntfy
+    labels:
+      - "homepage.group=Notifications"
+      - "homepage.name=ntfy"
+      - "homepage.icon=ntfy.png"
+      - "homepage.href=https://ntfy.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Push notifications"
+      - "homepage.widget.type=ntfy"
+      - "homepage.widget.url=http://pi-ntfy"
+      # The widget reads a single topic; monitoring is the one worth a glance on
+      # the dashboard. downloads and security are phone-only topics.
+      - "homepage.widget.topic=monitoring"
+      - "homepage.widget.username={{HOMEPAGE_VAR_ADMIN_USER}}"
+      - "homepage.widget.password={{HOMEPAGE_VAR_ADMIN_PASSWORD}}"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.ntfy.rule=Host(`ntfy.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.ntfy.entrypoints=websecure"
+      - "traefik.http.routers.ntfy.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.ntfy.tls=true"
+      - "traefik.http.services.ntfy.loadbalancer.server.port=80"
+    healthcheck:
+      <<: *healthcheck-light
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/v1/health"]
+    cpu_shares: *cpu-prio-critical
+    mem_limit: 128m
+    mem_reservation: 32m
+    oom_score_adj: *oom-score-important

@@ -6,7 +6,7 @@
 # and no env_file for Homepage at all. That directory is already
 # visible inside the homepage container at /app/config/secrets (it's a
 # subpath of the existing ./config/homepage:/app/config mount), and is
-# referenced from compose.yaml via HOMEPAGE_FILE_* env vars, which Homepage
+# referenced from compose/compose-monitoring.yaml via HOMEPAGE_FILE_* env vars, which Homepage
 # substitutes as {{HOMEPAGE_FILE_x}} in widget labels.
 #
 # Runs last in the post-start chain (after Prowlarr/Headscale are already

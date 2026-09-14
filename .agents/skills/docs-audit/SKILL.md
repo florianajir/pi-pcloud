@@ -15,15 +15,15 @@ Read the source, then the doc — not the other way around.
 
 | Doc | Verify against |
 |-----|---------------|
-| `README.md` | `compose.yaml` service list, `Makefile` targets |
+| `README.md` | `compose/*.yaml` service list, `Makefile` targets |
 | `docs/README.md` | the set of files actually in `docs/` |
 | `docs/COMMANDS.md` | `Makefile` (targets, args, what each recipe actually runs) |
-| `docs/ARCHITECTURE.md` | `compose.yaml` (services, networks, volumes vs bind mounts), `${DATA_LOCATION}` layout |
+| `docs/ARCHITECTURE.md` | `compose/*.yaml` (services) and `compose.yaml` (networks, volumes vs bind mounts), `${DATA_LOCATION}` layout |
 | `docs/INSTALLATION.md` | `.env.dist`, `Makefile` `REQUIRED_ENV_VARS` + `install` recipe, first-run bootstrap scripts |
 | `docs/CONFIGURATION.md` | `.env.dist`, compose `environment:` defaults (`${VAR:-default}`), the scripts a variable claims to drive |
 | `docs/AI.md` | `llama-cpp`/`piper`/`parakeet`/`system-tools`/`open-webui` compose stanzas, `config/system-tools/app.py`, `config/piper/Dockerfile`, `scripts/open-webui-bootstrap.sh`, `scripts/llama-cpp-pre-start.sh` |
 | `docs/TROUBLESHOOTING.md` | the command in each block actually runs as written, against the container/host it names |
-| `docs/SECURITY.md` | Traefik labels in `compose.yaml` (middlewares per router, headers values), `config/authelia/configuration.yml.template` (access_control, session, OIDC clients), `scripts/authelia-pre-start.sh` (secrets) |
+| `docs/SECURITY.md` | Traefik labels in `compose/*.yaml` (middlewares per router, headers values), `config/authelia/configuration.yml.template` (access_control, session, OIDC clients), `scripts/authelia-pre-start.sh` (secrets) |
 | `docs/NETWORKING.md` | compose `networks:` (subnets, static IPs, internal flags), published `ports:`, Pi-hole/Unbound config, `config/headscale/config.yaml` DNS block |
 | `docs/MONITORING.md` | `scripts/uptime-kuma-bootstrap.py` (GROUPS), `scripts/beszel-agent-bootstrap.py` (thresholds), `scripts/ntfy-pre-start.sh` (topics, accounts), `scripts/authelia-ntfy-watch.sh`, `config/backrest/config.json.template` (schedule, retention, hooks) |
 | `docs/EMAIL.md` | compose SMTP env per service, `config/authelia/configuration.yml.template` notifier block |

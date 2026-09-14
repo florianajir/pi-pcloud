@@ -26,7 +26,6 @@
 /config/gluetun/openvpn.ovpn
 /config/homepage/secrets/*
 !/config/homepage/secrets/.gitkeep
-!/config/homepage/secrets/README.md
 /config/homepage/homepage.env
 
 # Bytecode from importing the Python scripts (test harnesses, py_compile);

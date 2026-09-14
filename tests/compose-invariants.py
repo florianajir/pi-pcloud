@@ -1,4 +1,4 @@
-"""Invariants compose.yaml must hold, checked against the rendered config.
+"""Invariants the compose files must hold, checked against the rendered config.
 
 Reads `docker compose config --format json` on stdin and prints one line per
 finding, prefixed by category, for tests/compose-test.sh to assert on.
@@ -68,6 +68,26 @@ MIN_ROUTERS = 28
 MIN_HEALTH_DEPS = 18
 MIN_MEM_RESERVATIONS = 12
 
+# The basename pattern Dependabot's docker-compose fetcher matches, copied from
+# dependabot-core docker/lib/dependabot/docker_compose/file_fetcher.rb. Ruby's
+# atomic group (?>...) has no Python spelling and changes nothing here, so a
+# plain group stands in for it. The match is unanchored there too, hence search.
+DEPENDABOT_COMPOSE_NAME = re.compile(r"(docker-)?compose(-[\w]+)?(\.[\w-]+)?\.ya?ml", re.I)
+
+# Where a compose file may live. The fetcher lists one directory and does not
+# descend, so each of these has to be named in .github/dependabot.yml on its own.
+COMPOSE_DIRS = ("", "compose")
+
+
+def yaml_files(base):
+    """Every YAML file directly in one directory, both spellings of the suffix.
+
+    `.yml` is included because the fetcher's own pattern ends in `\\.ya?ml`: a
+    compose/foo.yml would otherwise be a file no check here ever opens, which
+    is the blind spot rather than the fix for it.
+    """
+    return sorted([*base.glob("*.yaml"), *base.glob("*.yml")])
+
 
 def labels_of(service):
     labels = service.get("labels") or {}
@@ -132,6 +152,180 @@ def routers_of(services):
     return routers
 
 
+def anchor_nodes(text):
+    """The top-level `x-*:` nodes of a compose file, comments stripped.
+
+    Textual on purpose: two blocks that render the same mapping but spell it
+    differently are still a copy someone will have to reconcile by hand, and
+    this is the check that says so.
+    """
+    nodes = {}
+    name = None
+    for line in text.split("\n"):
+        if re.match(r"^x-[A-Za-z0-9_.-]+:", line):
+            name = line.split(":", 1)[0]
+            nodes[name] = [line.strip()]
+            continue
+        if name is None:
+            continue
+        if line.startswith("  "):
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                nodes[name].append(stripped)
+            continue
+        name = None
+    return {key: tuple(value) for key, value in nodes.items()}
+
+
+def include_entries(text):
+    """The `include:` list of a compose file, one dedented entry per element.
+
+    Comment lines are dropped rather than folded into the entry they sit in, so
+    that no check downstream has to reason about whether what it matched was
+    commented out.
+    """
+    block = []
+    inside = False
+    for line in text.split("\n"):
+        if re.match(r"^include:\s*$", line):
+            inside = True
+            continue
+        if inside and line.lstrip().startswith("#"):
+            continue
+        if inside and line and not line.startswith((" ", "\t")):
+            break
+        if inside:
+            block.append(line)
+    entries = re.split(r"^[ \t]*-[ \t]+", "\n".join(block), flags=re.M)[1:]
+    return [re.sub(r"^[ \t]+", "", entry, flags=re.M).strip() for entry in entries if entry.strip()]
+
+
+def layout_drift(repo_dir):
+    """compose.yaml includes every domain file, and every copied anchor matches.
+
+    YAML anchors are file-scoped and `include:` parses each file on its own, so
+    the tier definitions cannot be shared - each compose/*.yaml carries a copy.
+    compose.yaml holds the canonical one and starts no service of its own; this
+    is what keeps the copies from drifting apart silently.
+    """
+    root_path = Path(repo_dir, "compose.yaml")
+    root = root_path.read_text()
+    messages = []
+
+    if re.search(r"^services:", root, re.M):
+        messages.append("compose.yaml declares services of its own; they belong in compose/compose-<domain>.yaml")
+
+    # Entry by entry, not two totals: a count check passes just as happily on an
+    # include carrying both keys twice beside one carrying neither.
+    # The compose- prefix is matched here, not merely described: it is what
+    # makes the file one Dependabot's fetcher opens, and this is the check that
+    # owns what compose.yaml may include. dependabot_blind_spots below catches
+    # the same rename from the other side, by the image pins it hides.
+    included = set()
+    for entry in include_entries(root):
+        name = re.search(r"^path:\s*\./compose/(compose-[A-Za-z0-9_-]+\.ya?ml)\s*$", entry, re.M)
+        if not name:
+            messages.append(f"an include names no ./compose/compose-<domain>.yaml path: {entry.splitlines()[0]}")
+            continue
+        name = name.group(1)
+        included.add(name)
+        # Without it, compose resolves that file's ./config and ./data binds
+        # against compose/ - paths that do not exist.
+        if not re.search(r"^project_directory:\s*\.\s*$", entry, re.M):
+            messages.append(f"compose/{name} is included without `project_directory: .`, so its bind paths move")
+        # Without it, the include reads <project_directory>/.env on its own,
+        # whatever --env-file said: see the note in compose.yaml.
+        if not re.search(r"^env_file:\s*/dev/null\s*$", entry, re.M):
+            messages.append(
+                f"compose/{name} is included without `env_file: /dev/null`, so it reads the real .env"
+            )
+
+    present = {path.name for path in yaml_files(Path(repo_dir, "compose"))}
+    for name in sorted(present - included):
+        messages.append(f"compose/{name} exists but compose.yaml never includes it, so nothing it declares runs")
+    for name in sorted(included - present):
+        messages.append(f"compose.yaml includes compose/{name}, which does not exist")
+
+    canonical = anchor_nodes(root)
+    if not canonical:
+        messages.append("compose.yaml defines no x- anchors, so nothing here checks the copies")
+    for name in sorted(present & included):
+        copy = anchor_nodes(Path(repo_dir, "compose", name).read_text())
+        for key, body in sorted(canonical.items()):
+            if key not in copy:
+                messages.append(f"compose/{name} is missing {key}, which compose.yaml defines")
+            elif copy[key] != body:
+                messages.append(f"compose/{name}'s {key} no longer matches compose.yaml's")
+    return messages
+
+
+def dependabot_blind_spots(repo_dir):
+    """Every image pin sits in a file Dependabot's fetcher will actually open.
+
+    It matches basenames against one regex, lists a single directory without
+    descending, and does not follow compose `include:`. So a domain file called
+    core.yaml is invisible to it, and so is a compose/ that no `directories:`
+    entry names - either way the daily image-bump PRs simply stop arriving, with
+    nothing anywhere reporting that they have.
+    """
+    messages = []
+    needed = set()
+    for directory in COMPOSE_DIRS:
+        for path in yaml_files(Path(repo_dir, directory)):
+            text = path.read_text()
+            # A compose file, not merely a YAML one carrying an `image:` key:
+            # .hadolint.yaml sits in the root too, and telling someone to rename
+            # a manifest Dependabot was never going to fetch is wrong advice.
+            if not re.search(r"^services:", text, re.M):
+                continue
+            if not re.search(r"^\s+image:\s*\S", text, re.M):
+                continue
+            where = f"{directory}/{path.name}" if directory else path.name
+            if not DEPENDABOT_COMPOSE_NAME.search(path.name):
+                messages.append(
+                    f"{where} pins images under a name Dependabot never fetches; "
+                    f"call it compose-{path.name}"
+                )
+                continue
+            needed.add("/" + directory)
+
+    config_path = Path(repo_dir, ".github/dependabot.yml")
+    if not config_path.exists():
+        return messages
+
+    # Read loosely on purpose: indentation, key order and flow-vs-block style
+    # are all free in YAML, and a reformat that Dependabot reads identically
+    # must not come back here as "no update names that directory". An entry is
+    # split on `- <key>:` because that is the one shape a nested sequence item
+    # here does not take - `directories:` and `labels:` hold bare scalars.
+    covered = set()
+    for block in re.split(r"^[ \t]*-[ \t]+(?=[A-Za-z_-]+:)", config_path.read_text(), flags=re.M)[1:]:
+        if not re.search(r'^\s*package-ecosystem:\s*"?docker-compose"?', block, re.M):
+            continue
+        covered.update(re.findall(r'^\s*directory:\s*"?([^"\s]+)"?\s*$', block, re.M))
+        for inline in re.findall(r"^\s*directories:\s*\[([^\]]*)\]\s*$", block, re.M):
+            covered.update(item.strip().strip("\"'") for item in inline.split(",") if item.strip())
+        listing = False
+        for line in block.split("\n"):
+            if re.match(r"^\s*directories:\s*$", line):
+                listing = True
+                continue
+            if not listing:
+                continue
+            item = re.match(r'^\s*-\s*"?([^"\s]+)"?\s*$', line)
+            if item:
+                covered.add(item.group(1))
+            elif line.strip() and not line.lstrip().startswith("#"):
+                listing = False
+
+    for directory in sorted(needed - covered):
+        messages.append(
+            f"images are pinned under {directory} but no docker-compose update names that "
+            f"directory, so nothing bumps them"
+        )
+    return messages
+
+
 def postgres_roles(repo_dir):
     """The one list that creates a role and a database per service."""
     source = Path(repo_dir, "config/postgres/init-databases.sh").read_text()
@@ -149,6 +343,12 @@ def main():
 
     def report(category, message):
         findings.append(f"{category} {message}")
+
+    for message in layout_drift(repo_dir):
+        report("LAYOUT", message)
+
+    for message in dependabot_blind_spots(repo_dir):
+        report("DEPENDABOT", message)
 
     if len(services) < MIN_SERVICES:
         report("FLOOR", f"rendered only {len(services)} services, expected at least {MIN_SERVICES}")

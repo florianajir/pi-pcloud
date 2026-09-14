@@ -108,7 +108,24 @@ READERS="$READER_LEAD"'(cat|bat|tac|nl|less|more|head|tail|strings|xxd|od|base64
 # the rendering scripts get understood.
 SECRETS='(\.env([ \t"'"'"';&|)]|$)|/[A-Za-z0-9_.-]+\.env([ \t"'"'"';&|)]|$)|authelia-config/secrets|homepage/secrets|/config/secrets/|appsettings\.json|immich-oauth-config|configuration\.yml([ \t"'"'"';&|)]|$)|config\.php([ \t"'"'"';&|)]|$)|oidc_[a-z-]+_secret|_secret\.txt|/secrets/|\.pem([ \t"'"'"';&|)]|$)|\.key([ \t"'"'"';&|)]|$)|id_rsa|credentials)'
 
-if printf '%s' "$cmd" | grep -qE "$READERS" && printf '%s' "$cmd" | grep -qE "$SECRETS"; then
+# Documentation is not a secret. config/homepage/SECRETS.md used to live inside
+# the directory it documents, where this rule made it unreadable and
+# unwritable - which is how a stale compose.yaml reference survived a
+# repository-wide sweep: the guard, not the sweep, was the reason. That page
+# has since moved out, and the deny rules in .claude/settings.json still cover
+# the whole directory, so a doc under a secrets/ path stays unreachable through
+# the Read and Edit tools whatever this says. This is the Bash half only.
+#
+# Markdown paths are REMOVED before the secret test rather than exempted after
+# it, so a command naming a .md *and* a real secret is still denied on the
+# secret: `cat .../README.md .../immich.key` keeps the .key and is refused.
+# The reader test still runs against the original command.
+strip_doc_paths() {
+    sed -E 's#[^[:space:];&|()"'"'"']*\.(md|markdown)([[:space:];&|)"'"'"']|$)#\2#g'
+}
+
+if printf '%s' "$cmd" | grep -qE "$READERS" \
+    && printf '%s\n' "$cmd" | strip_doc_paths | grep -qE "$SECRETS"; then
     deny 'This command reads a file that holds real secrets.'
 fi
 

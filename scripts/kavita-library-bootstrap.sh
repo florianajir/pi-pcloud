@@ -2,7 +2,7 @@
 # Bootstrap Kavita's libraries: one per kind of content, because the library type
 # decides how Kavita parses filenames and how it reads (right-to-left for manga, the
 # comic parser for issues, the text reader for epub/pdf). Each reads its own
-# read-only mount, declared on the kavita service in compose.yaml.
+# read-only mount, declared on the kavita service in compose/compose-media.yaml.
 #
 # Also adds every library to the OIDC default set, so accounts auto-provisioned
 # through Authelia can see a library added after they first logged in.

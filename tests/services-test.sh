@@ -43,9 +43,10 @@ lacks() {
 
 cp -r "$REPO_DIR/scripts" "$WORK/scripts"
 cp "$REPO_DIR/compose.yaml" "$WORK/compose.yaml"
+cp -r "$REPO_DIR/compose" "$WORK/compose"
 
 # Enough of `docker compose config` for services.sh, answered from the same
-# compose.yaml the script reads: the declared profiles, and the services a
+# compose/*.yaml the script reads: the declared profiles, and the services a
 # selection enables (a service runs when it declares no profile at all, or when
 # one of its profiles is selected — which is how gluetun follows qbittorrent).
 mkdir -p "$WORK/bin"
@@ -89,7 +90,7 @@ awk -v mode="${1:-}" -v selection="${COMPOSE_PROFILES-all}" '
         next
     }
     END { flush() }
-' "$PROJECT_DIR/compose.yaml" | sort -u
+' "$PROJECT_DIR"/compose/*.yaml | sort -u
 STUB
 chmod +x "$WORK/bin/docker"
 
@@ -117,11 +118,11 @@ written() {
 
 # --- the exclusive pair is declared, not assumed -----------------------------
 #
-# The whole rule hangs off one label; a rename in compose.yaml would otherwise
+# The whole rule hangs off one label; a rename in compose/compose-media.yaml would otherwise
 # turn every guard below into a no-op that still passes.
 
-ok "compose.yaml declares the conflict" \
-    "$(grep -c 'pi-pcloud.conflicts-with=stremio' "$WORK/compose.yaml")" 1
+ok "compose/compose-media.yaml declares the conflict" \
+    "$(grep -c 'pi-pcloud.conflicts-with=stremio' "$WORK/compose/compose-media.yaml")" 1
 
 # --- "all" is expanded to what it actually covers ----------------------------
 #

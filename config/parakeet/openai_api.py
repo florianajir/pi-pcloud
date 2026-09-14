@@ -36,7 +36,7 @@ log = logging.getLogger("parakeet-openai")
 MODEL_NAME = os.environ.get("PARAKEET_MODEL", "nemo-parakeet-tdt-0.6b-v3")
 # Empty string means fp32; see the build arg of the same name in the Dockerfile.
 QUANTIZATION = os.environ.get("PARAKEET_QUANTIZATION", "int8") or None
-# Matches the cpuset in compose.yaml. Left to onnxruntime it would size the pool
+# Matches the cpuset in compose/compose-ai.yaml. Left to onnxruntime it would size the pool
 # from the host's core count and oversubscribe the cgroup.
 THREADS = int(os.environ.get("PARAKEET_THREADS", "3"))
 SAMPLE_RATE = 16000

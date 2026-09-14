@@ -1,15 +1,24 @@
 ---
 name: add-service
-description: Add a new service to the pi-pcloud docker compose stack, wiring the standard integrations (Traefik, Authelia OIDC, Postgres, Redis, ntfy, Uptime Kuma, Backrest, Homepage, systemd bootstrap). Use whenever a new container is added to compose.yaml, or when auditing an existing service for missing integrations.
+description: Add a new service to the pi-pcloud docker compose stack, wiring the standard integrations (Traefik, Authelia OIDC, Postgres, Redis, ntfy, Uptime Kuma, Backrest, Homepage, systemd bootstrap). Use whenever a new container is added to compose/, or when auditing an existing service for missing integrations.
 ---
 
 # Adding a service to the stack
 
-Copy the closest existing service in `compose.yaml` as a template, then work through
+Copy the closest existing service in `compose/` as a template, then work through
 every integration below and skip only the ones that genuinely do not apply. Say
 explicitly which ones you skipped and why.
 
 ## 1. Compose basics
+
+- put it in the `compose/compose-<domain>.yaml` it belongs to — `core`, `identity`,
+  `network`, `cloud`, `media`, `knowledge`, `ai`, `monitoring`. The root
+  `compose.yaml` declares no service; it holds `include:`, the networks, the
+  volumes and the canonical `x-` tier anchors, and a new *network* or *volume*
+  goes there, not in the domain file. A new domain file needs an `include:`
+  entry carrying both `project_directory: .` and `env_file: /dev/null`, and the
+  `compose-` prefix is mandatory: Dependabot's fetcher never opens a basename
+  without it, so a `core.yaml` silently stops every image-bump PR.
 
 - `<<: *service-defaults` (journald logging + `restart: unless-stopped`)
 - pinned image tag — look up the newest **stable** release upstream before writing it
@@ -92,9 +101,9 @@ Add the container name to the right group in `GROUPS` in
 ## 8. Backrest
 
 If the service holds state worth keeping, mount its data read-only into backrest as
-`/userdata/<service>` in `compose.yaml`. Databases are dumped instead, via a
-`db-backup.sh` hook in `config/backrest/config.json.template`. Add large regenerable
-data (thumbnails, transcodes, model caches) to the plan `excludes`.
+`/userdata/<service>` in `compose/compose-monitoring.yaml`. Databases are dumped
+instead, via a `db-backup.sh` hook in `config/backrest/config.json.template`. Add
+large regenerable data (thumbnails, transcodes, model caches) to the plan `excludes`.
 
 ## 9. Homepage
 

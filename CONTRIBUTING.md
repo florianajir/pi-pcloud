@@ -19,8 +19,8 @@ make lint          # every static check CI runs: shell, YAML, Python, Dockerfile
 
 All of these leave the running stack alone. One is not purely static, though:
 `tests/trilium-api-contract.sh` starts a throwaway Trilium from the image
-`compose.yaml` pins — its own container, its own network, no volumes and no
-published ports — and pulls that image if it is not already local.
+`compose/compose-knowledge.yaml` pins — its own container, its own network, no
+volumes and no published ports — and pulls that image if it is not already local.
 
 It exists because `scripts/trilium-bootstrap.sh` drives Trilium's *private*
 endpoints (the setup wizard, a password sign-in, the CSRF handshake,
@@ -59,7 +59,7 @@ stack.
 
 These are the ones that get changes sent back. [AGENTS.md](AGENTS.md) has the full set.
 
-- **Everything through Docker Compose.** Change `compose.yaml`, `config/` or `scripts/` — never the state of a running container. A fresh install must reach the same result.
+- **Everything through Docker Compose.** Change `compose/compose-<domain>.yaml` (services), `compose.yaml` (networks, volumes, the `x-` tier anchors), `config/` or `scripts/` — never the state of a running container. A fresh install must reach the same result.
 - **Scripts are POSIX `sh`**, run by dash with `set -eu`. No bashisms. `make lint` is the gate: `shellcheck -s dash` reports every bashism as an `SC3xxx` error over every tracked shell file, `config/**` and the extensionless `scripts/pi-pcloud` included.
 - **Never source `.env`** — read keys through `scripts/lib.sh` `get_env_value`. Never log a secret.
 - **Pin every image version** explicitly, after checking upstream for the newest stable release. No `latest`.
