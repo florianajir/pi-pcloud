@@ -98,7 +98,7 @@ label_has_member() {
 
 # Rewrite one .env key, or die having changed nothing. Through a copy,
 # not in place: a sed that dies midway leaves a truncated .env, and every
-# interpolated value in compose.yaml with it. .env.tmp* is gitignored, and
+# interpolated value in the compose files with it. .env.tmp* is gitignored, and
 # `cp -p` carries the 0600 mode and owner across so the mv cannot widen them.
 write_env_key() {
     local key="$1"

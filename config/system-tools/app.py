@@ -40,7 +40,7 @@ DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 # The socket is the host's: unfiltered, the list covers containers that have
 # nothing to do with this stack, and a stray Exited one reads as a fault.
 COMPOSE_PROJECT = os.environ.get("COMPOSE_PROJECT", "pi-web")
-# Backrest's data directory is bind-mounted straight in (see compose.yaml); this
+# Backrest's data directory is bind-mounted straight in (see compose/monitoring.yaml); this
 # is not a host path resolved under HOSTFS, because DATA_LOCATION is relative to
 # the project directory by default and would land somewhere else entirely.
 OPLOG = Path(os.environ.get("BACKREST_OPLOG", "/run/backrest/oplog.sqlite"))

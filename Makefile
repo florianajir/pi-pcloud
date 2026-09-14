@@ -264,7 +264,7 @@ uninstall:
 # POSTGRES_DATA_LOCATION can put the cluster on another disk entirely, which the
 # ./data glob above would then miss - and a surviving PGDATA is exactly the
 # failure that comment describes. Resolved through lib.sh so this cannot drift
-# from what compose.yaml mounts; skipped, loudly, if it resolves to nothing or
+# from what compose/core.yaml mounts; skipped, loudly, if it resolves to nothing or
 # to "/" rather than expanding into `rm -rf /postgres*`.
 	-@$(LIB_SH); \
 	command -v resolve_postgres_data_location_path >/dev/null 2>&1 \
@@ -443,7 +443,7 @@ doctor:
 
 # Postgres major upgrades are dump/restore: the immich-app/postgres image ships
 # one major's binaries, so pg_upgrade is not available. The old data directory
-# is left untouched, so rollback is reverting compose.yaml *and rebuilding
+# is left untouched, so rollback is reverting compose/core.yaml *and rebuilding
 # backrest* — its pinned pgNN-client moved with the server, and a client newer
 # than the server writes dumps that server cannot replay.
 #   make pg-upgrade to=ghcr.io/immich-app/postgres:18-vectorchord1.1.1@sha256:...

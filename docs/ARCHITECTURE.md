@@ -139,14 +139,17 @@ The effect: a compromised app container cannot query Unbound directly, cannot re
 ```
 pi-pcloud/
 ├── .env                # your configuration and secrets
-├── compose.yaml        # every service, network and volume
+├── compose.yaml        # include:, plus every network and volume
+├── compose/            # the services, one file per domain
 ├── Makefile            # the commands
 ├── scripts/            # pre-start, bootstrap and OIDC-wiring hooks
 ├── config/             # per-service configuration templates
 └── docs/
 ```
 
-Traefik is the exception to `config/` — it has no config directory, being driven entirely by CLI flags and Docker labels in `compose.yaml`.
+`compose.yaml` declares no service of its own: it `include:`s the eight files under `compose/` — `core`, `identity`, `network`, `cloud`, `media`, `knowledge`, `ai`, `monitoring` — and every command still runs against the project root, not against one of them. Networks and volumes stay in the root file because they are one shared namespace, and the `x-cpu-prio-*` / `x-oom-score-*` / `x-healthcheck-*` tiers are defined there too as the canonical copy: YAML anchors are file-scoped and `include:` parses each file on its own, so each domain file repeats the block and `tests/compose-invariants.py` fails the build if a copy drifts. Every include carries `project_directory: .`, without which compose would resolve an included file's `./config` and `./data` binds against `compose/`, and `env_file: /dev/null`, without which the include reads `.env` a second time on its own — behind `--env-file`, which is how a render meant to see no `.env` saw one anyway. Interpolation is unaffected: the CLI merges `.env` into the environment it hands every included file.
+
+Traefik is the exception to `config/` — it has no config directory, being driven entirely by CLI flags and Docker labels in `compose/core.yaml`.
 
 Persistent state is split deliberately:
 
@@ -158,7 +161,7 @@ Persistent state is split deliberately:
 
 `DATA_LOCATION` is usually the largest disk available, which on a Pi is usually an external USB one. That is the right home for originals and downloads and the wrong home for a database: a rotational disk serves random reads at tens of IOPS, and consumer USB-SATA bridges commonly acknowledge a flush before the data reaches the platter, which is a corrupt cluster after a power cut rather than a slow one. `POSTGRES_DATA_LOCATION` exists so the cluster can sit on the root NVMe while the media stays on the big disk. Postgres writes ~350 MB/day here, so the flash wear it adds is immaterial.
 
-The `ghcr.io/immich-app/postgres` image also ships two tuning profiles selected by `DB_STORAGE_TYPE`, and it **defaults to `SSD`** — which sets `effective_io_concurrency=200` and `random_page_cost=1.2`. If you leave the cluster on a rotational `DATA_LOCATION`, set `DB_STORAGE_TYPE: HDD` on the postgres service in `compose.yaml`; the defaults model a random read as ~90x cheaper than that disk can deliver.
+The `ghcr.io/immich-app/postgres` image also ships two tuning profiles selected by `DB_STORAGE_TYPE`, and it **defaults to `SSD`** — which sets `effective_io_concurrency=200` and `random_page_cost=1.2`. If you leave the cluster on a rotational `DATA_LOCATION`, set `DB_STORAGE_TYPE: HDD` on the postgres service in `compose/core.yaml`; the defaults model a random read as ~90x cheaper than that disk can deliver.
 
 ### The reading libraries
 
@@ -300,7 +303,7 @@ That is also why an ambiguous comic still lands in `manga` — 1337x `100039`, C
 **identically for Batman and for Naruto**. Not a preference, just the only id available.
 
 Seven places must agree on these paths, and all seven are provisioned: the `kavita`
-volumes in `compose.yaml`, `DESIRED_LIBRARIES` in
+volumes in `compose/media.yaml`, `DESIRED_LIBRARIES` in
 `scripts/kavita-library-bootstrap.sh`, `LIBRARY_CATEGORIES` in
 `scripts/qbittorrent-bootstrap.sh`, `QB_CATEGORY_MAP` in
 `scripts/prowlarr-bootstrap.sh`, `ROOT_FOLDERS` in
@@ -334,7 +337,7 @@ which is the release-source and download path. So Anna's Archive traffic is on t
 while the Prowlarr API, the OIDC token exchange and the metadata providers stay direct —
 and a gluetun outage costs you direct downloads, not search or login.
 
-The proxy is addressed as `gluetun.docker`, an alias compose.yaml adds for exactly this:
+The proxy is addressed as `gluetun.docker`, an alias compose/media.yaml adds for exactly this:
 the bundled bypasser hands the string to SeleniumBase, whose proxy validation rejects a
 host with no dot in it and then fails to start the browser at all.
 
@@ -479,7 +482,7 @@ Postgres is deliberately unpinned. It was on `1-3`, which is exactly the three c
 llama.cpp and Parakeet saturate, and left it the one core it could not use — for a
 service every other service waits on.
 
-`cpu_shares` (`x-cpu-prio-*` in `compose.yaml`) has four tiers — 4096 critical, 1024
+`cpu_shares` (`x-cpu-prio-*` in `compose.yaml`, copied into every `compose/*.yaml`) has four tiers — 4096 critical, 1024
 normal, 256 batch, 128 idle — and orders them by **who waits on whom**, not by
 appetite. The model services want the most CPU and get the least: a DNS answer or a
 healthcheck blocked behind an inference is what actually breaks the stack, and an

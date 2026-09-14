@@ -177,7 +177,7 @@
       "type": "timeseries",
       "id": 201,
       "title": "Requests per second, by router",
-      "description": "Router labels are off in Traefik by default; --metrics.prometheus.addRoutersLabels in compose.yaml is what makes this per-site rather than per-entrypoint.",
+      "description": "Router labels are off in Traefik by default; --metrics.prometheus.addRoutersLabels in compose/core.yaml is what makes this per-site rather than per-entrypoint.",
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 9 },
       "datasource": { "type": "prometheus", "uid": "pi-prometheus" },
       "fieldConfig": {

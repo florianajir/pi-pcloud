@@ -1,6 +1,6 @@
 #!/bin/sh
 # Bootstrap Uptime Kuma: auto-configures admin account, ntfy notifications,
-# Docker host, and container monitors for all services in compose.yaml.
+# Docker host, and container monitors for all services in compose/*.yaml.
 # Runs the Python bootstrap script inside a temporary container on the
 # same Docker network as Uptime Kuma (no local venv required).
 
@@ -73,7 +73,7 @@ main() {
         --name pi-uptime-kuma-bootstrap \
         --network frontend \
         -v "$PYTHON_SCRIPT:/bootstrap.py:ro" \
-        -v "$PROJECT_DIR/compose.yaml:/project/compose.yaml:ro" \
+        -v "$PROJECT_DIR/compose:/project/compose:ro" \
         -v "$PROJECT_DIR/config/ntfy/ntfy.env:/project/config/ntfy/ntfy.env:ro" \
         -e PROJECT_DIR=/project \
         -e UPTIME_KUMA_URL=http://pi-uptime-kuma:3001 \

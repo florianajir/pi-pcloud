@@ -540,7 +540,7 @@ __OIDC_PRIVATE_KEY__
         # is `generic_oauth` whatever GF_AUTH_GENERIC_OAUTH_NAME says.
         redirect_uris:
           - 'https://grafana.__HOST_NAME__/login/generic_oauth'
-        # GF_AUTH_GENERIC_OAUTH_USE_PKCE=true in compose.yaml.
+        # GF_AUTH_GENERIC_OAUTH_USE_PKCE=true in compose/monitoring.yaml.
         require_pkce: true
         pkce_challenge_method: 'S256'
         # `groups` is read, unlike most clients here: Grafana's

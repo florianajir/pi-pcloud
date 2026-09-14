@@ -27,7 +27,7 @@ From Postgres 18 the upstream image keeps `PGDATA` at `/var/lib/postgresql/<majo
 
 `POSTGRES_DATA_LOCATION` is empty on a default install, so unless you have set it the paths below are the ones under `DATA_LOCATION` — that is what the `:-` fallback means, and it is written out in full everywhere a command here would otherwise expand an unset variable to nothing.
 
-That is not just a compatibility detail — it is the rollback. The old cluster at `${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres` is **never written to** by the upgrade, so reverting two lines in `compose.yaml` puts you back exactly where you started.
+That is not just a compatibility detail — it is the rollback. The old cluster at `${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres` is **never written to** by the upgrade, so reverting two lines in `compose/core.yaml` puts you back exactly where you started.
 
 ## Pre-flight
 
@@ -69,11 +69,11 @@ docker exec pi-postgres psql -U postgres -Atc \
   "SELECT rolname, rolsuper FROM pg_roles WHERE rolcanlogin ORDER BY rolname;"
 docker exec pi-postgres psql -U postgres -Atc 'SHOW server_version;'
 
-# 4. The migration. Takes the image from compose.yaml, so the two cannot drift.
-make pg-upgrade to=$(grep -m1 'image: ghcr.io/immich-app/postgres:' compose.yaml | awk '{print $2}')
+# 4. The migration. Takes the image from compose/core.yaml, so the two cannot drift.
+make pg-upgrade to=$(grep -m1 'image: ghcr.io/immich-app/postgres:' compose/core.yaml | awk '{print $2}')
 ```
 
-`make pg-upgrade` then, in order: pulls the target image, **stops only the Postgres-backed services** (immich, nextcloud, authelia, lldap, open-webui, vaultwarden, freshrss, plus backrest so no scheduled dump fires mid-window), dumps roles and all seven databases, counts every row in every table, stops Postgres, starts a throwaway container on the new data directory, restores into it, runs `ANALYZE` per database so the new cluster starts with planner statistics, **re-counts every table and compares the two lists whole**, and refuses to touch `compose.yaml` if they differ at all. On a mismatch it stops with the old cluster untouched and the new one left in place for inspection.
+`make pg-upgrade` then, in order: pulls the target image, **stops only the Postgres-backed services** (immich, nextcloud, authelia, lldap, open-webui, vaultwarden, freshrss, plus backrest so no scheduled dump fires mid-window), dumps roles and all seven databases, counts every row in every table, stops Postgres, starts a throwaway container on the new data directory, restores into it, runs `ANALYZE` per database so the new cluster starts with planner statistics, **re-counts every table and compares the two lists whole**, and refuses to touch `compose/core.yaml` if they differ at all. On a mismatch it stops with the old cluster untouched and the new one left in place for inspection.
 
 **The DNS/VPN path never stops.** Pi-hole, unbound, headscale and tailscale use no Postgres (headscale is SQLite), so devices on the tailnet keep resolving and routing through the whole cutover. What the window does cost: the stopped services themselves are unreachable, and SSO logins fail while Authelia is down — established Tailscale connections and plain internet access are unaffected. The writers stop *before* the dump on purpose: anything written between the dump and the switch would otherwise be silently absent from the new cluster.
 
@@ -122,7 +122,7 @@ Do these in order — each one exercises a different failure mode, and the first
 
 | # | Check | How | What a failure means |
 |---|-------|-----|----------------------|
-| 1 | Server version and extensions | `docker exec pi-postgres psql -U postgres -Atc 'SHOW server_version;'` | The container came up on the old cluster; check the mount path in `compose.yaml` |
+| 1 | Server version and extensions | `docker exec pi-postgres psql -U postgres -Atc 'SHOW server_version;'` | The container came up on the old cluster; check the mount path in `compose/core.yaml` |
 | 2 | Every container healthy | `docker compose ps` — nothing restarting | A service could not authenticate or found an empty schema |
 | 3 | **Authelia + lldap login** | Log in at `https://auth.<HOST_NAME>` | Both roles' data restored; do this first, everything else is behind it |
 | 4 | **Immich: upload a photo** | Upload from the app or web, then confirm the thumbnail and that search returns it | Write path, and the vchord index — a broken `clip_index` shows up as search returning nothing, not as an error |
@@ -151,7 +151,7 @@ The old cluster was never written to, so this is complete and takes a minute:
 
 ```sh
 make stop
-git checkout main            # or revert the compose.yaml image + volume lines
+git checkout main            # or revert the compose/core.yaml image + volume lines
 docker compose build backrest # back to the old client major
 make start
 ```
@@ -208,5 +208,5 @@ not part of the move. While it exists, rollback is emptying
 `POSTGRES_DATA_LOCATION` in `.env` and running `make start`.
 
 If the destination is rotational, set `DB_STORAGE_TYPE: HDD` on the postgres
-service in `compose.yaml` — the image defaults to `SSD` and tunes
+service in `compose/core.yaml` — the image defaults to `SSD` and tunes
 `effective_io_concurrency` and `random_page_cost` for flash.

@@ -63,7 +63,7 @@ sh scripts/llama-cpp-pre-start.sh
 
 ### Changing the model
 
-Edit the `DOWNLOADS` list in `config/llama-cpp/fetch-models.sh`, then point `LLAMA_ARG_MODEL` (and `LLAMA_ARG_MMPROJ` / `LLAMA_ARG_SPEC_DRAFT_MODEL`, or drop them) at the new files in `compose.yaml`. Prefer `Q4_0` quantisations: llama.cpp repacks those into the ARM i8mm/dotprod kernels the Pi 5 has. Anything much past ~4B parameters is too slow to chat with on CPU.
+Edit the `DOWNLOADS` list in `config/llama-cpp/fetch-models.sh`, then point `LLAMA_ARG_MODEL` (and `LLAMA_ARG_MMPROJ` / `LLAMA_ARG_SPEC_DRAFT_MODEL`, or drop them) at the new files in `compose/ai.yaml`. Prefer `Q4_0` quantisations: llama.cpp repacks those into the ARM i8mm/dotprod kernels the Pi 5 has. Anything much past ~4B parameters is too slow to chat with on CPU.
 
 ## The gateway (Agentgateway)
 
@@ -505,7 +505,7 @@ Rebuild in fp32 — 4.5% WER, still three times faster than realtime, but ~2.3 G
 docker compose build --build-arg PARAKEET_QUANTIZATION= parakeet
 ```
 
-Then set `PARAKEET_QUANTIZATION=` (empty) on the service in `compose.yaml` so the weights loaded are the weights baked in, and raise `mem_limit` to `3584m`.
+Then set `PARAKEET_QUANTIZATION=` (empty) on the service in `compose/ai.yaml` so the weights loaded are the weights baked in, and raise `mem_limit` to `3584m`.
 
 ### Long recordings are chunked
 

@@ -10,7 +10,7 @@
 # (shelfmark/core/settings_registry.py) and resolves a setting from the
 # environment first, then from that file. It has no unauthenticated API to set
 # them, which is the chicken-and-egg this script exists to break. Everything
-# that can safely be an env var already is one, on the service in compose.yaml;
+# that can safely be an env var already is one, on the service in compose/media.yaml;
 # what lands here does so for a reason, noted per section below.
 
 set -eu
@@ -266,7 +266,7 @@ configure_hardcover() {
 # DEFAULT_LANGUAGE later does not reach back and overwrite a language somebody
 # chose. SEARCH_MODE, DESTINATION and DESTINATION_AUDIOBOOK stay environment
 # values on purpose - the first is a deployment mode, the other two are
-# container paths tied to the mounts in compose.yaml, and a per-account
+# container paths tied to the mounts in compose/media.yaml, and a per-account
 # override of those would write outside them.
 seed_book_language() {
     local lang=""

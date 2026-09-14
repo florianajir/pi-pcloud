@@ -1,4 +1,4 @@
-"""Invariants compose.yaml must hold, checked against the rendered config.
+"""Invariants the compose files must hold, checked against the rendered config.
 
 Reads `docker compose config --format json` on stdin and prints one line per
 finding, prefixed by category, for tests/compose-test.sh to assert on.
@@ -132,6 +132,100 @@ def routers_of(services):
     return routers
 
 
+def anchor_nodes(text):
+    """The top-level `x-*:` nodes of a compose file, comments stripped.
+
+    Textual on purpose: two blocks that render the same mapping but spell it
+    differently are still a copy someone will have to reconcile by hand, and
+    this is the check that says so.
+    """
+    nodes = {}
+    name = None
+    for line in text.split("\n"):
+        if re.match(r"^x-[A-Za-z0-9_.-]+:", line):
+            name = line.split(":", 1)[0]
+            nodes[name] = [line.strip()]
+            continue
+        if name is None:
+            continue
+        if line.startswith("  "):
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                nodes[name].append(stripped)
+            continue
+        name = None
+    return {key: tuple(value) for key, value in nodes.items()}
+
+
+def include_entries(text):
+    """The `include:` list of a compose file, one dedented entry per element."""
+    block = []
+    inside = False
+    for line in text.split("\n"):
+        if re.match(r"^include:\s*$", line):
+            inside = True
+            continue
+        if inside and line and not line.startswith((" ", "\t", "#")):
+            break
+        if inside:
+            block.append(line)
+    entries = re.split(r"^[ \t]*-[ \t]+", "\n".join(block), flags=re.M)[1:]
+    return [re.sub(r"^[ \t]+", "", entry, flags=re.M).strip() for entry in entries if entry.strip()]
+
+
+def layout_drift(repo_dir):
+    """compose.yaml includes every domain file, and every copied anchor matches.
+
+    YAML anchors are file-scoped and `include:` parses each file on its own, so
+    the tier definitions cannot be shared - each compose/*.yaml carries a copy.
+    compose.yaml holds the canonical one and starts no service of its own; this
+    is what keeps the copies from drifting apart silently.
+    """
+    root_path = Path(repo_dir, "compose.yaml")
+    root = root_path.read_text()
+    messages = []
+
+    if re.search(r"^services:", root, re.M):
+        messages.append("compose.yaml declares services of its own; they belong in compose/<domain>.yaml")
+
+    # Entry by entry, not two totals: a count check passes just as happily on an
+    # include carrying both keys twice beside one carrying neither.
+    included = set()
+    for entry in include_entries(root):
+        name = re.search(r"^path:\s*\./compose/([A-Za-z0-9_-]+\.yaml)\s*$", entry, re.M)
+        if not name:
+            messages.append(f"an include names no ./compose/<domain>.yaml path: {entry.splitlines()[0]}")
+            continue
+        name = name.group(1)
+        included.add(name)
+        # Without it, compose resolves that file's ./config and ./data binds
+        # against compose/ - paths that do not exist.
+        if not re.search(r"^project_directory:\s*\.\s*$", entry, re.M):
+            messages.append(f"compose/{name} is included without `project_directory: .`, so its bind paths move")
+        # Without it, the include reads <project_directory>/.env on its own,
+        # whatever --env-file said: see the note in compose.yaml.
+        if not re.search(r"^env_file:\s*/dev/null\s*$", entry, re.M):
+            messages.append(f"compose/{name} is included without `env_file: /dev/null`, so it reads .env behind --env-file")
+
+    present = {path.name for path in sorted(Path(repo_dir, "compose").glob("*.yaml"))}
+    for name in sorted(present - included):
+        messages.append(f"compose/{name} exists but compose.yaml never includes it, so nothing it declares runs")
+    for name in sorted(included - present):
+        messages.append(f"compose.yaml includes compose/{name}, which does not exist")
+
+    canonical = anchor_nodes(root)
+    if not canonical:
+        messages.append("compose.yaml defines no x- anchors, so nothing here checks the copies")
+    for name in sorted(present & included):
+        copy = anchor_nodes(Path(repo_dir, "compose", name).read_text())
+        for key, body in sorted(canonical.items()):
+            if key not in copy:
+                messages.append(f"compose/{name} is missing {key}, which compose.yaml defines")
+            elif copy[key] != body:
+                messages.append(f"compose/{name}'s {key} no longer matches compose.yaml's")
+    return messages
+
+
 def postgres_roles(repo_dir):
     """The one list that creates a role and a database per service."""
     source = Path(repo_dir, "config/postgres/init-databases.sh").read_text()
@@ -149,6 +243,9 @@ def main():
 
     def report(category, message):
         findings.append(f"{category} {message}")
+
+    for message in layout_drift(repo_dir):
+        report("LAYOUT", message)
 
     if len(services) < MIN_SERVICES:
         report("FLOOR", f"rendered only {len(services)} services, expected at least {MIN_SERVICES}")

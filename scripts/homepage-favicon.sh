@@ -5,7 +5,7 @@
 # after client-side hydration (it reads from SettingsProvider, see src/pages/_app.jsx),
 # so the server-rendered HTML still points at the stock /favicon-*.png, /homepage.ico
 # and /apple-touch-icon.png. Browsers latch onto those first and frequently never
-# re-read the swapped <link>. compose.yaml bind-mounts the files generated here over
+# re-read the swapped <link>. compose/monitoring.yaml bind-mounts the files generated here over
 # the stock ones in /app/public so the mark is correct from the first byte.
 #
 # Only needs re-running when docs/assets/logo.png changes.
@@ -36,7 +36,7 @@ render 32 favicon-32x32.png
 render 192 android-chrome-192x192.png
 render 512 android-chrome-512x512.png
 
-# Also served as /icons/logo.png, which compose.yaml points homepage's own tile at.
+# Also served as /icons/logo.png, which compose/monitoring.yaml points homepage's own tile at.
 cp "$ICONS/android-chrome-512x512.png" "$ICONS/logo.png"
 echo "  logo.png"
 

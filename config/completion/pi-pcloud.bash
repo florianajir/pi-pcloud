@@ -1,7 +1,7 @@
 # bash completion for pi-pcloud.
 #
 # Both lists come from the command itself (--list-commands reads the Makefile,
-# --list-services reads compose.yaml), so nothing here has to be updated when a
+# --list-services reads compose/*.yaml), so nothing here has to be updated when a
 # command or a service is added.
 _pi_pcloud() {
     local cur prev

@@ -37,6 +37,7 @@ Uses direct Socket.IO calls for Uptime Kuma 2.x compatibility.
 """
 
 import contextlib
+import glob
 import json
 import os
 import re
@@ -160,7 +161,7 @@ GROUPS = [
             "pi-prometheus",
             "pi-grafana",
         ],
-        # Any container found in compose.yaml but absent from every list above
+        # Any container found in compose/*.yaml but absent from every list above
         # lands here, so a newly added service is still monitored (quietly).
         "fallback": True,
     },
@@ -273,18 +274,28 @@ def read_env_file(path):
     return values
 
 
+def compose_service_files(project_dir):
+    """The per-domain compose files, sorted. Empty means the mount is missing.
+
+    compose.yaml itself declares no service: it is `include:` plus the networks
+    and volumes, so nothing here would find a container_name in it.
+    """
+    return sorted(glob.glob(os.path.join(project_dir, "compose", "*.yaml")))
+
+
 def get_container_names_from_compose(project_dir):
-    """Extract container names from compose.yaml."""
-    compose_path = os.path.join(project_dir, "compose.yaml")
-    if not os.path.isfile(compose_path):
-        log(f"ERROR: compose.yaml not found at {compose_path}")
+    """Extract container names from compose/*.yaml."""
+    paths = compose_service_files(project_dir)
+    if not paths:
+        log(f"ERROR: no compose/*.yaml under {project_dir}")
         return []
     containers = []
-    with open(compose_path) as f:
-        for line in f:
-            match = re.search(r"container_name:\s*(\S+)", line)
-            if match:
-                containers.append(match.group(1))
+    for compose_path in paths:
+        with open(compose_path) as f:
+            for line in f:
+                match = re.search(r"container_name:\s*(\S+)", line)
+                if match:
+                    containers.append(match.group(1))
     return containers
 
 
@@ -298,33 +309,34 @@ def get_service_containers_from_compose(project_dir):
     volumes, networks) are skipped so their two-space keys cannot be mistaken
     for services.
     """
-    compose_path = os.path.join(project_dir, "compose.yaml")
-    if not os.path.isfile(compose_path):
-        log(f"ERROR: compose.yaml not found at {compose_path}")
+    paths = compose_service_files(project_dir)
+    if not paths:
+        log(f"ERROR: no compose/*.yaml under {project_dir}")
         return {}
     services = {}
-    in_services = False
-    current = None
-    with open(compose_path) as f:
-        for line in f:
-            if re.match(r"^services:\s*$", line):
-                in_services = True
-                current = None
-                continue
-            if re.match(r"^[A-Za-z0-9_-]+:", line):  # another top-level block
-                in_services = False
-                current = None
-                continue
-            if not in_services:
-                continue
-            match = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
-            if match:
-                current = match.group(1)
-                services.setdefault(current, [])
-                continue
-            match = re.match(r"^\s+container_name:\s*(\S+)", line)
-            if match and current:
-                services[current].append(match.group(1))
+    for compose_path in paths:
+        in_services = False
+        current = None
+        with open(compose_path) as f:
+            for line in f:
+                if re.match(r"^services:\s*$", line):
+                    in_services = True
+                    current = None
+                    continue
+                if re.match(r"^[A-Za-z0-9_-]+:", line):  # another top-level block
+                    in_services = False
+                    current = None
+                    continue
+                if not in_services:
+                    continue
+                match = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+                if match:
+                    current = match.group(1)
+                    services.setdefault(current, [])
+                    continue
+                match = re.match(r"^\s+container_name:\s*(\S+)", line)
+                if match and current:
+                    services[current].append(match.group(1))
     return services
 
 
@@ -1158,7 +1170,7 @@ def main():
         default_group = fallback_group()
         container_names = get_container_names_from_compose(project_dir)
         if not container_names:
-            log("WARNING: No container names found in compose.yaml")
+            log("WARNING: No container names found in compose/*.yaml")
         else:
             log(f"Found {len(container_names)} containers to monitor")
 

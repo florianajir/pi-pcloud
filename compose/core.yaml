@@ -1,0 +1,324 @@
+# Always-on infrastructure: the reverse proxy and the two shared datastores,
+# plus the updater that keeps the public DNS records pointing here.
+#
+# Included by compose.yaml, which declares the networks and volumes named
+# below and supplies the .env this file interpolates. Not startable on its
+# own: `docker compose -f compose/core.yaml` resolves every relative
+# path against compose/ instead of the project root.
+
+# --- shared preamble: identical in every compose/*.yaml ---
+#
+# YAML anchors are file-scoped and `include:` parses each file on its own, so
+# this block cannot be shared - it is copied. compose.yaml holds the canonical
+# copy, with the reasoning behind every tier; tests/compose-invariants.py fails
+# the build when a copy drifts from it. Change compose.yaml first, then here.
+
+x-service-defaults: &service-defaults
+  logging:
+    driver: "journald"
+    options:
+      tag: "{{.Name}}"
+  restart: unless-stopped
+
+x-cpu-prio-critical: &cpu-prio-critical 4096
+x-cpu-prio-normal: &cpu-prio-normal 1024
+x-cpu-prio-batch: &cpu-prio-batch 256
+x-cpu-prio-idle: &cpu-prio-idle 128
+
+x-oom-score-critical: &oom-score-critical -1000
+x-oom-score-important: &oom-score-important -500
+x-oom-score-deprioritize: &oom-score-deprioritize 500
+
+x-healthcheck-default: &healthcheck-default
+  interval: 60s
+  timeout: 10s
+  retries: 3
+  start_period: 20s
+x-healthcheck-light: &healthcheck-light
+  interval: 90s
+  timeout: 10s
+  retries: 2
+  start_period: 10s
+x-healthcheck-relaxed: &healthcheck-relaxed
+  interval: 120s
+  timeout: 10s
+  retries: 2
+  start_period: 10s
+x-healthcheck-fast: &healthcheck-fast
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 10s
+
+# --- end shared preamble ---
+
+services:
+  traefik:
+    <<: *service-defaults
+    image: traefik:v3.7.13
+    container_name: pi-traefik
+    environment:
+      - CLOUDFLARE_DNS_API_TOKEN=${CLOUDFLARE_DNS_API_TOKEN:-}
+    command:
+      - "--log.level=INFO"
+      # Without this, an ipallowlist rejection is invisible: it never reaches the
+      # backend's own log, so a bare 403 has no recorded client address to blame.
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      - "--api.dashboard=true"
+      - "--ping=true"
+      - "--entrypoints.web.address=:80/tcp"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443/tcp"
+      # autodetect must stay last, so it wraps the router middlewares whose own
+      # responses need it: Traefik v3 no longer fills a missing Content-Type, and
+      # the ipallowlist 403 sets none - nosniff then leaves the browser nothing to
+      # render, so the denial downloads as a file.
+      - "--entrypoints.websecure.http.middlewares=compress@docker,security-headers@docker,autodetect@docker"
+      - "--entrypoints.websecure.http.tls.certresolver=cloudflare"
+      - "--entrypoints.websecure.http3=true"
+      # No forwardedHeaders.trustedIPs on purpose: nothing proxies in front of
+      # Traefik, so every X-Forwarded-* here is client-supplied. Trusting them
+      # lets a client forge X-Forwarded-Host and pick which rule Authelia applies.
+      - "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=0"
+      - "--entrypoints.websecure.transport.respondingTimeouts.writeTimeout=0"
+      - "--entrypoints.websecure.transport.respondingTimeouts.idleTimeout=0"
+      # Lands on the implicit `traefik` entrypoint (:8080), beside api@internal -
+      # not on websecure, where /metrics is a 404.
+      - "--metrics.prometheus=true"
+      # Off by default, and what makes the rate readable per site rather than
+      # per entrypoint.
+      - "--metrics.prometheus.addRoutersLabels=true"
+      - "--providers.docker=true"
+      - "--providers.docker.watch=true"
+      - "--providers.docker.network=frontend"
+      - "--providers.docker.exposedbydefault=false"
+      - "--certificatesresolvers.cloudflare.acme.email=${EMAIL}"
+      - "--certificatesresolvers.cloudflare.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
+      - "--certificatesresolvers.cloudflare.acme.dnschallenge.delaybeforecheck=10"
+    labels:
+      - "homepage.group=Network"
+      - "homepage.name=Traefik"
+      - "homepage.icon=traefik.png"
+      - "homepage.href=https://traefik.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Reverse proxy and TLS certificates"
+      - "homepage.widget.type=traefik"
+      # The address, not the name: traefik is on frontend and backup, and Docker's
+      # DNS answers pi-traefik with the backup one, which internalapi-allow denies.
+      - "homepage.widget.url=http://172.30.11.250:8080"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.middlewares.compress.compress=true"
+      - "traefik.http.middlewares.autodetect.contenttype=true"
+      - "traefik.http.middlewares.security-headers.headers.stsSeconds=15552000"
+      - "traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.security-headers.headers.forceSTSHeader=true"
+      - "traefik.http.middlewares.security-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.security-headers.headers.referrerPolicy=same-origin"
+      # Deliberately NOT in security-headers: that one is applied at the websecure
+      # entrypoint, which wraps every router's own middlewares, so nothing downstream
+      # can opt out of it. Vaultwarden needs to (see its labels), so the frame policy
+      # lives here and is attached per router instead.
+      - "traefik.http.middlewares.frame-deny.headers.frameDeny=true"
+      # HOST_LAN_SUBNET6 and WAN_HAIRPIN_IP are appended rather than merged into
+      # ALLOW_IP_RANGES: they expire with what the ISP hands out, and
+      # wan-allowlist-sync.sh owns both. `:+` so an empty value adds nothing
+      # rather than a trailing comma, which Traefik rejects as an invalid CIDR -
+      # taking every router referencing the middleware offline with it.
+      - "traefik.http.middlewares.lan.ipallowlist.sourcerange=${ALLOW_IP_RANGES:-127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd7a:115c:a1e0::/48}${HOST_LAN_SUBNET6:+,${HOST_LAN_SUBNET6}}${WAN_HAIRPIN_IP:+,${WAN_HAIRPIN_IP}}"
+      - "traefik.http.middlewares.rate-limit-auth.ratelimit.average=10"
+      - "traefik.http.middlewares.rate-limit-auth.ratelimit.burst=20"
+      - "traefik.http.middlewares.rate-limit-auth.ratelimit.period=1s"
+      - "traefik.http.routers.traefik.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.tls=true"
+      - "traefik.http.routers.traefik.tls.domains[0].main=${HOST_NAME:-pi.lan}"
+      - "traefik.http.routers.traefik.tls.domains[0].sans=*.${HOST_NAME:-pi.lan}"
+      - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+      # Traefik's implicit :8080 "traefik" entrypoint, so Homepage can read the
+      # API from inside frontend without the Authelia-protected dashboard router.
+      - "traefik.http.routers.internalapi.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.internalapi.entrypoints=traefik"
+      - "traefik.http.routers.internalapi.service=api@internal"
+      # api@internal is unauthenticated and /api/rawdata is the full router map,
+      # public-bypass rules included. Homepage's widget is the only consumer.
+      - "traefik.http.middlewares.internalapi-allow.ipallowlist.sourcerange=172.30.11.240/32"
+      - "traefik.http.routers.internalapi.middlewares=internalapi-allow@docker"
+    ports:
+      # Both families spelled out, never a bare port. An IPv6 listener is only
+      # safe once the container has an IPv6 address to DNAT to - without one,
+      # docker-proxy rewrites the source to a Docker gateway address, inside
+      # ALLOW_IP_RANGES. That is what `ingress6` is for. docs/NETWORKING.md#ipv6.
+      - "0.0.0.0:80:80"
+      - "[::]:80:80"
+      - "0.0.0.0:443:443"
+      - "[::]:443:443"
+      # http3=true advertises Alt-Svc, which browsers cache for ~30 days; without
+      # this listener they retry QUIC and time out. Also needs a router forward.
+      - "0.0.0.0:443:443/udp"
+      - "[::]:443:443/udp"
+    expose:
+      - 8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DATA_LOCATION:-./data}/traefik/letsencrypt:/letsencrypt
+    networks:
+      frontend:
+        ipv4_address: 172.30.11.250
+      # Only so backrest.$HOST_NAME can still be routed after backrest left
+      # frontend. Nothing else lives on this segment except homepage.
+      backup: {}
+      # Same again for dockhand and vaultwarden. Static .250 as on frontend, so
+      # vaultwarden's extra_hosts can name Traefik by address.
+      dockhand:
+        ipv4_address: 172.30.13.250
+      vaultwarden_web:
+        ipv4_address: 172.30.14.250
+      # The DNAT target for the [::] ports above, and necessarily so: Docker
+      # programs DNAT per address family, and this is the only endpoint with an
+      # IPv6 address. Which network serves the *v4* publishes is an unpinned
+      # tie-break, harmless because every candidate sits in 172.30.0.0/16.
+      ingress6:
+        ipv4_address: 172.30.15.250
+        ipv6_address: fd00:30:15::250
+    healthcheck:
+      <<: *healthcheck-fast
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      start_interval: 5s
+    cpuset: "0"
+    cpu_shares: *cpu-prio-critical
+    mem_limit: 192m
+    mem_reservation: 96m
+    oom_score_adj: *oom-score-critical
+
+  # Database & Cache
+  postgres:
+    <<: *service-defaults
+    restart: always
+    container_name: pi-postgres
+    # Postgres 18. The data directory moved with the major: from 18 the upstream
+    # image keeps PGDATA at /var/lib/postgresql/<major>/docker and refuses to
+    # start with anything mounted at /var/lib/postgresql/data, so the mount is
+    # the parent and the host path carries the major. That also leaves the
+    # Postgres 16 cluster at <postgres root>/postgres intact as the rollback —
+    # the same root the line below resolves, so a cluster moved with
+    # POSTGRES_DATA_LOCATION has to take its predecessor with it —
+    # which also needs `docker compose build backrest`, since its pinned
+    # pgNN-client moved with this line and a newer client's dumps do not replay
+    # into an older server (config/backrest/Dockerfile).
+    # Migrate with scripts/pg-major-upgrade.sh, never by editing these two lines
+    # alone: 18 cannot read a 16 data directory.
+    # pgvecto.rs is gone from the 18 images; nothing here used it (the immich
+    # database only ever created vchord and earthdistance).
+    image: ghcr.io/immich-app/postgres:18-vectorchord1.1.1-pgvector0.8.5@sha256:6e384bf4aa03866473395961786f40006555e4cd008b98f92bf4a44e5ab7b012
+    environment:
+      POSTGRES_PASSWORD: ${PASSWORD}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      # No DB_STORAGE_TYPE: the image defaults to SSD, which is what this
+      # cluster wants as long as POSTGRES_DATA_LOCATION points at solid-state
+      # storage. That default is not free — it is the only thing separating the
+      # two tuning profiles the image ships, and it sets
+      # effective_io_concurrency=200 and random_page_cost=1.2. Both are wrong on
+      # a spinning disk, where a random read costs ~18 ms rather than the ~0.2 ms
+      # those numbers assume, so an install leaving the cluster on a rotational
+      # DATA_LOCATION must add `DB_STORAGE_TYPE: HDD` here.
+    volumes:
+      # Deliberately not under DATA_LOCATION by default-but-overridable: that
+      # root is sized for media (Immich originals, Nextcloud, downloads) and is
+      # commonly a large external USB disk, while the cluster is ~1 GB and is
+      # the one thing here that wants low seek latency and a truthful fsync.
+      # Sharing a spindle with qBittorrent and thumbnail generation costs the
+      # database far more than it costs them, and consumer USB-SATA bridges
+      # routinely acknowledge a flush before the platter has it, which a
+      # database cannot detect and a power cut turns into a corrupt cluster.
+      # Falls back to DATA_LOCATION so installs that never set it are unchanged.
+      # The major stays in the path for the same reason as below: it is what
+      # makes a major upgrade's rollback a compose edit rather than a restore.
+      - ${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres18:/var/lib/postgresql
+      - ./config/postgres/init-databases.sh:/docker-entrypoint-initdb.d/01-init-databases.sh
+    networks:
+      - immich
+      - nextcloud
+      - auth
+      - ai
+      - vault
+      - rss
+    healthcheck:
+      <<: *healthcheck-fast
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres}"]
+      start_interval: 3s
+    mem_limit: 1536m
+    mem_reservation: 768m
+    # 256 MB of swap, not the 1536 MB Docker would grant by default: 535 MB of
+    # this limit is shared_buffers, and shmem is swappable but not reclaimable,
+    # so a paged-out buffer cache is a database that thinks it is reading RAM.
+    memswap_limit: 1792m
+    # No cpuset on purpose. "1-3" put the database on exactly the three cores
+    # llama-cpp and parakeet saturate, and left it the one core it could not
+    # use. Everything that queries it waits on it, so it floats over all four
+    # and wins on cpu_shares instead - which the AI services cannot do to it,
+    # being pinned away from core 0.
+    cpu_shares: *cpu-prio-critical
+    shm_size: 256mb
+    oom_score_adj: *oom-score-critical
+
+  redis:
+    <<: *service-defaults
+    restart: always
+    container_name: pi-redis
+    image: docker.io/valkey/valkey:9@sha256:c123e3715db63d06d4ad6964884037aa0d5d4d703939b9929954112889708e1d
+    healthcheck:
+      <<: *healthcheck-fast
+      # Matched on the reply, because `redis-cli ping` exits 0 while printing
+      # `NOAUTH Authentication required` - so the probe this replaces would have
+      # reported healthy on a cache every client was being rejected by.
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$(cat /run/secrets/redis_password) valkey-cli ping | grep -q PONG"]
+      start_period: 5s
+      start_interval: 3s
+    command: ["valkey-server", "/etc/valkey/valkey.conf"]
+    volumes:
+      - ./config/redis/valkey.conf:/etc/valkey/valkey.conf:ro
+      - ${DATA_LOCATION:-./data}/redis/redis-auth.conf:/run/secrets/redis-auth.conf:ro
+      # The same secret again, bare, because the healthcheck above cannot parse
+      # a config directive.
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/redis_password:/run/secrets/redis_password:ro
+      - redis_data:/data
+    networks:
+      - immich
+      - nextcloud
+      - auth
+    cpu_shares: *cpu-prio-critical
+    # Shared by Immich, Nextcloud and Authelia. Peak dataset has been seen at
+    # ~44M; the limit must also cover the BGSAVE fork's copy-on-write pages, so
+    # keep it well above config/redis/valkey.conf's maxmemory (192mb).
+    mem_limit: 256m
+    mem_reservation: 64m
+    oom_score_adj: *oom-score-critical
+
+  ddns-updater:
+    <<: *service-defaults
+    image: ghcr.io/qdm12/ddns-updater:v2.10.0
+    container_name: pi-ddns-updater
+    networks:
+      - egress_ddns
+    environment:
+      # It looks a name up *before* writing it, so the first AAAA publication
+      # seeds a NODATA into the router's negative cache and the healthcheck then
+      # reports a mismatch on a record that is correct.
+      RESOLVER_ADDRESS: 1.1.1.1:53
+      # ip_version on every entry: the default is "ipv4 or ipv6", i.e. whichever
+      # the lookup returns first, so an unpinned entry *replaces* the A record
+      # with an AAAA instead of adding one. One entry carries one family.
+      # `:+` so an empty switch adds nothing rather than a comma, which would
+      # make CONFIG invalid JSON.
+      CONFIG: >-
+        {"settings":[ {"provider":"cloudflare","zone_identifier":"${CLOUDFLARE_ZONE_ID}","domain":"${HOST_NAME}","token":"${CLOUDFLARE_DNS_API_TOKEN}","ttl":1,"proxied":false,"ip_version":"ipv4"}, {"provider":"cloudflare","zone_identifier":"${CLOUDFLARE_ZONE_ID}","domain":"*.${HOST_NAME}","token":"${CLOUDFLARE_DNS_API_TOKEN}","ttl":1,"proxied":false,"ip_version":"ipv4"}${IPV6_PUBLIC_RECORDS:+, {"provider":"cloudflare","zone_identifier":"${CLOUDFLARE_ZONE_ID}","domain":"${HOST_NAME}","token":"${CLOUDFLARE_DNS_API_TOKEN}","ttl":1,"proxied":false,"ip_version":"ipv6"}, {"provider":"cloudflare","zone_identifier":"${CLOUDFLARE_ZONE_ID}","domain":"*.${HOST_NAME}","token":"${CLOUDFLARE_DNS_API_TOKEN}","ttl":1,"proxied":false,"ip_version":"ipv6"}} ]}
+    volumes:
+      - ddns_data:/updater/data
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 64m
+    oom_score_adj: *oom-score-critical

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Manage optional pi-pcloud services through Docker Compose profiles.
 #
-# Every optional service in compose.yaml carries a profile named after itself
+# Every optional service in compose/*.yaml carries a profile named after itself
 # (plus the catch-all "all"); COMPOSE_PROFILES in .env selects which run. A
 # missing line means everything (pre-profiles installs); an explicitly empty
 # value means core-only, matching what docker compose does with it.
@@ -81,7 +81,7 @@ selection_has() {
 }
 
 # The profiles the catch-all "all" stands for, one per line: every profile named
-# alongside "all" in a `profiles:` list. Read straight out of compose.yaml (no
+# alongside "all" in a `profiles:` list. Read straight out of compose/*.yaml (no
 # docker call, and no pipeline that could swallow its failure), because a
 # profile deliberately left out of "all" — stremio-lan — must never be
 # treated as covered by it.
@@ -98,7 +98,7 @@ profiles_covered_by_all() {
                     if (part[i] != "" && part[i] != "all") print part[i]
             }
         }
-    ' "$PROJECT_DIR/compose.yaml" | sort -u
+    ' "$PROJECT_DIR"/compose/*.yaml | sort -u
 }
 
 # 0 if the selection would actually run <name>: listed by name, or covered by
@@ -132,7 +132,7 @@ conflicts_of() {
 }
 
 # "<a> <b>" per line: two profiles that must never be selected together, from
-# the pi-pcloud.conflicts-with labels in compose.yaml. Each pair once, ordered,
+# the pi-pcloud.conflicts-with labels in compose/*.yaml. Each pair once, ordered,
 # since config_rows reports the relation on both sides.
 exclusive_pairs() {
     config_rows | awk -F: '
@@ -315,7 +315,7 @@ validate_service() {
 # One row per optional service, as
 # "<service>:<section>:<companion-of>:<needs>:<conflicts-with>:<description>"
 # (description last, so a colon inside it survives),
-# ordered by section. Everything comes out of compose.yaml, so the picker can
+# ordered by section. Everything comes out of compose/*.yaml, so the picker can
 # never drift from the stack:
 #   homepage.group=            the section the service is listed under
 #   pi-pcloud.companion-of=    the service it is pointless without, which is
@@ -430,7 +430,7 @@ config_rows() {
             }
             svc = ""; profiles = ""; group = ""; companion = ""; desc = ""; conflict = ""
         }
-    ' "$PROJECT_DIR/compose.yaml" \
+    ' "$PROJECT_DIR"/compose/*.yaml \
         | sort -t'|' -k1,1 -k2,2 -k3,3n -k4,4 \
         | awk -F'|' '{ printf "%s:%s:%s:%s:%s:%s\n", $4, ($3 == 0 ? $1 : ""), $5, $6, $8, $7 }'
 }
@@ -469,7 +469,7 @@ $(config_rows)
 EOF
     if [ ! -s "$_rows" ]; then
         rm -f "$_rows" "$_picked"
-        echo "❌ No optional services declared in compose.yaml" >&2
+        echo "❌ No optional services declared in compose/*.yaml" >&2
         return 2
     fi
     if ! python3 "$PROJECT_DIR/scripts/services-picker.py" "$_rows" "$_picked" </dev/tty >/dev/tty; then
@@ -630,7 +630,7 @@ cmd_pick() {
     printf '%s\n' "$_value"
 }
 
-# Just the service names, one per line: read straight out of compose.yaml with
+# Just the service names, one per line: read straight out of compose/*.yaml with
 # no docker call, so shell completion stays instant.
 cmd_names() {
     config_rows | cut -d: -f1

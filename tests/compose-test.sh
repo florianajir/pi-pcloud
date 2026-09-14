@@ -107,6 +107,12 @@ none "only the two single-member networks enable IPv6" NETWORK
 # would pass having inspected four services.
 none "the rendered stack is the expected size" FLOOR
 
+# The x- tier anchors are copied into every compose/*.yaml because YAML anchors
+# are file-scoped and `include:` parses each file on its own. Nothing in the
+# render can show a copy that drifted - both spellings produce the same
+# container - so this one reads the files instead.
+none "every compose/*.yaml is included and its anchors match compose.yaml" LAYOUT
+
 # --- the checker must actually catch each of them ---------------------------
 #
 # Five green assertions above prove nothing on their own: a checker that looks
@@ -172,6 +178,26 @@ catches "a reservation as large as the limit it sits under" RESOURCE '{"services
 catches "a memswap_limit that silently disables swap" RESOURCE '{"services": {"swapless": {
   "image": "x:1", "mem_limit": "512m", "memswap_limit": "512m"
 }}}'
+
+# LAYOUT reads the repository, not the render, so it takes a broken copy of the
+# repository rather than a broken JSON document: one anchor edited in one domain
+# file, which is exactly the drift the duplicated preamble invites.
+drifted="$(mktemp -d)"
+mkdir -p "$drifted/compose" "$drifted/config/postgres"
+cp "$REPO_DIR/compose.yaml" "$drifted/compose.yaml"
+cp "$REPO_DIR"/compose/*.yaml "$drifted/compose/"
+cp "$REPO_DIR/config/postgres/init-databases.sh" "$drifted/config/postgres/"
+sed -i 's/^x-cpu-prio-batch: &cpu-prio-batch .*$/x-cpu-prio-batch: \&cpu-prio-batch 999/' \
+    "$drifted/compose/media.yaml"
+drift_hits="$(printf '%s' '{"services": {"a": {"image": "x:1", "mem_limit": "64m"}}}' \
+    | python3 "$TESTS_DIR/compose-invariants.py" "$drifted" | grep -c '^LAYOUT ' || true)"
+rm -rf "$drifted"
+if [ "$drift_hits" -gt 0 ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1))
+    printf 'FAIL a preamble copy that drifted from compose.yaml (the checker reported nothing)\n'
+fi
 
 # --- and it must never echo a value it was handed ---------------------------
 #

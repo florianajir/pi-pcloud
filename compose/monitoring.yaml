@@ -1,0 +1,733 @@
+# Metrics, uptime, dashboards and backups: everything that watches the
+# rest of the stack rather than serving it.
+#
+# Included by compose.yaml, which declares the networks and volumes named
+# below and supplies the .env this file interpolates. Not startable on its
+# own: `docker compose -f compose/monitoring.yaml` resolves every relative
+# path against compose/ instead of the project root.
+
+# --- shared preamble: identical in every compose/*.yaml ---
+#
+# YAML anchors are file-scoped and `include:` parses each file on its own, so
+# this block cannot be shared - it is copied. compose.yaml holds the canonical
+# copy, with the reasoning behind every tier; tests/compose-invariants.py fails
+# the build when a copy drifts from it. Change compose.yaml first, then here.
+
+x-service-defaults: &service-defaults
+  logging:
+    driver: "journald"
+    options:
+      tag: "{{.Name}}"
+  restart: unless-stopped
+
+x-cpu-prio-critical: &cpu-prio-critical 4096
+x-cpu-prio-normal: &cpu-prio-normal 1024
+x-cpu-prio-batch: &cpu-prio-batch 256
+x-cpu-prio-idle: &cpu-prio-idle 128
+
+x-oom-score-critical: &oom-score-critical -1000
+x-oom-score-important: &oom-score-important -500
+x-oom-score-deprioritize: &oom-score-deprioritize 500
+
+x-healthcheck-default: &healthcheck-default
+  interval: 60s
+  timeout: 10s
+  retries: 3
+  start_period: 20s
+x-healthcheck-light: &healthcheck-light
+  interval: 90s
+  timeout: 10s
+  retries: 2
+  start_period: 10s
+x-healthcheck-relaxed: &healthcheck-relaxed
+  interval: 120s
+  timeout: 10s
+  retries: 2
+  start_period: 10s
+x-healthcheck-fast: &healthcheck-fast
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 10s
+
+# --- end shared preamble ---
+
+services:
+  beszel:
+    <<: *service-defaults
+    image: henrygd/beszel:0.19.0
+    container_name: pi-beszel
+    profiles: ["beszel", "beszel-agent", "all"]
+    networks:
+      - frontend
+    expose:
+      - 8090
+    environment:
+      - APP_URL=https://beszel.${HOST_NAME:-pi.lan}
+      - USER_EMAIL=${EMAIL}
+      - USER_PASSWORD=${PASSWORD}
+      - USER_CREATION=true
+      - DISABLE_PASSWORD_AUTH=true
+    volumes:
+      - beszel_data:/beszel_data
+      - beszel_socket:/beszel_socket
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      <<: *healthcheck-light
+      test: ["CMD", "/beszel", "health", "--url", "http://localhost:8090"]
+      start_period: 5s
+      start_interval: 3s
+    labels:
+      - "homepage.group=Monitoring"
+      - "homepage.name=Beszel"
+      - "homepage.icon=beszel.png"
+      - "homepage.href=https://beszel.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Server resource monitoring"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.beszel.rule=Host(`beszel.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.beszel.entrypoints=websecure"
+      - "traefik.http.routers.beszel.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.beszel.tls=true"
+      - "traefik.http.routers.beszel-agentconnect.rule=Host(`beszel.${HOST_NAME:-pi.lan}`) && PathPrefix(`/api/beszel/agent-connect`)"
+      - "traefik.http.routers.beszel-agentconnect.entrypoints=websecure"
+      - "traefik.http.routers.beszel-agentconnect.middlewares=frame-deny@docker"
+      - "traefik.http.routers.beszel-agentconnect.priority=100"
+      - "traefik.http.routers.beszel-agentconnect.tls=true"
+      - "traefik.http.services.beszel.loadbalancer.server.port=8090"
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 64m
+    oom_score_adj: *oom-score-important
+
+  beszel-agent:
+    <<: *service-defaults
+    build:
+      context: ./config/beszel-agent
+      dockerfile: Dockerfile
+    image: pi-beszel-agent:local
+    container_name: pi-beszel-agent
+    profiles: ["beszel-agent", "all"]
+    labels:
+      - "homepage.description=Host metrics collector for Beszel"
+      - "pi-pcloud.companion-of=beszel"
+    depends_on:
+      beszel:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    network_mode: host
+    # smartctl is the only thing here that needs privilege: SYS_RAWIO for the
+    # USB/SAT disk's SG_IO passthrough, SYS_ADMIN for the NVMe admin ioctl. The
+    # cgroup rules stay wildcard because the kernel allocates the NVMe major
+    # dynamically.
+    cap_add:
+      - SYS_RAWIO
+      - SYS_ADMIN
+    device_cgroup_rules:
+      - 'b *:* rmw'
+      - 'c *:* rmw'
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /dev:/dev
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro
+      - /run/udev/data:/run/udev/data:ro
+      - /proc:/host/proc:ro
+      - /mnt/sdcard:/extra-filesystems/mmcblk0:ro,rslave
+      - beszel_socket:/beszel_socket
+      - beszel_agent_data:/var/lib/beszel-agent
+    env_file:
+      - path: ./config/beszel-agent/agent.env
+        required: false
+    environment:
+      LISTEN: /beszel_socket/beszel.sock
+      HUB_URL: https://beszel.${HOST_NAME:-pi.lan}
+      HOST_PROC: /host/proc
+    healthcheck:
+      <<: *healthcheck-light
+      test: ["CMD", "/agent", "health"]
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 64m
+    oom_score_adj: *oom-score-important
+
+  uptime-kuma:
+    <<: *service-defaults
+    image: louislam/uptime-kuma:2.5.4@sha256:917318f9d7be5257f43ba412c766a473be336eb451d70744f3b482d0c3997c0e
+    container_name: pi-uptime-kuma
+    profiles: ["uptime-kuma", "all"]
+    networks:
+      - frontend
+      - ntfy
+    expose:
+      - 3001
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - APP_URL=https://uptime.${HOST_NAME:-pi.lan}
+      - UPTIME_KUMA_DB_TYPE=sqlite
+    env_file:
+      - path: ./config/ntfy/ntfy.env
+        required: false
+    volumes:
+      - ${DATA_LOCATION:-./data}/uptime-kuma:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      - "homepage.group=Monitoring"
+      - "homepage.name=Uptime Kuma"
+      - "homepage.icon=uptime-kuma.png"
+      - "homepage.href=https://uptime.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Service uptime monitoring"
+      - "homepage.widget.type=uptimekuma"
+      - "homepage.widget.url=http://pi-uptime-kuma:3001"
+      - "homepage.widget.slug=homepage"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.uptime-kuma.rule=Host(`uptime.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.uptime-kuma.entrypoints=websecure"
+      - "traefik.http.routers.uptime-kuma.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.uptime-kuma.tls=true"
+      - "traefik.http.services.uptime-kuma.loadbalancer.server.port=3001"
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 256m
+    oom_score_adj: *oom-score-important
+
+  # The metric half of the monitoring split, beside Beszel's hardware and
+  # Uptime Kuma's availability. Every target serves /metrics natively or behind
+  # one flag - the ones that would need an exporter sidecar are deliberately not
+  # scraped. See docs/MONITORING.md#prometheus--the-numbers.
+  prometheus:
+    <<: *service-defaults
+    # v3.13.3, not the newer v3.14.0: 3.14.0 predates 3.13.3's dependency CVE
+    # bumps and its TSDB fix for out-of-order queries blocking compaction, which
+    # is the failure mode a 90-day retention meets. It adds nothing used here.
+    image: prom/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
+    container_name: pi-prometheus
+    profiles: ["prometheus", "all"]
+    networks:
+      # Between them these reach every target in prometheus.yml; `ai` is there
+      # for llama-cpp.
+      - frontend
+      - ai
+    # No expose and no router: the query API is unauthenticated and Grafana is
+    # the only reader. See docs/MONITORING.md#prometheus-has-no-url-on-purpose.
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      # Both: the size cap is what stops a cardinality mistake filling the root
+      # filesystem before anyone notices.
+      - "--storage.tsdb.retention.time=90d"
+      - "--storage.tsdb.retention.size=8GiB"
+      # The default, spelled out because no `expose` or router names the port.
+      - "--web.listen-address=0.0.0.0:9090"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Named, not DATA_LOCATION: high-churn and regenerable, so it belongs on
+      # the root filesystem with the other state Backrest deliberately skips.
+      - prometheus_data:/prometheus
+    healthcheck:
+      <<: *healthcheck-default
+      # busybox wget; the image ships no curl.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/healthy"]
+      start_period: 30s
+    labels:
+      # A group and description but no href: nothing to open, yet `make config`
+      # only lists what carries them.
+      - "homepage.group=Monitoring"
+      - "homepage.name=Prometheus"
+      - "homepage.icon=prometheus.png"
+      - "homepage.description=Metrics collection and storage"
+    cpu_shares: *cpu-prio-batch
+    # 32 MiB measured at rest; the rest is headroom for the in-memory head
+    # block, which compaction briefly doubles.
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize
+
+  grafana:
+    <<: *service-defaults
+    image: grafana/grafana:13.2.1@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283
+    container_name: pi-grafana
+    profiles: ["grafana", "all"]
+    networks:
+      # frontend alone, unlike prometheus: Grafana dials only prometheus:9090,
+      # and `ai` would give the browser-facing half of the pair a leg into the
+      # segment where system-tools holds the Docker socket.
+      - frontend
+    extra_hosts:
+      # The token and userinfo calls are server-side, so they must not depend on
+      # public DNS hairpinning back in.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 3000
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - GF_SERVER_ROOT_URL=https://grafana.${HOST_NAME:-pi.lan}
+      # No phoning home and no update banner on a LAN-only box.
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES=false
+      - GF_NEWS_NEWS_FEED_ENABLED=false
+      - GF_USERS_ALLOW_SIGN_UP=false
+      # False by default whatever root_url says, so without it the session
+      # cookie has no `Secure` attribute: one mistyped http:// link puts it on
+      # the wire before Traefik's redirect can fire.
+      - GF_SECURITY_COOKIE_SECURE=true
+      # The second is the one that matters: the API accepts basic auth from the
+      # built-in admin *regardless* of the login form, so disabling the form
+      # alone would leave admin/admin usable by anything on frontend. Inert
+      # like this, which is why no PASSWORD is injected. Lockout recovery in
+      # docs/MONITORING.md.
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_AUTH_BASIC_ENABLED=false
+      - GF_AUTH_GENERIC_OAUTH_ENABLED=true
+      - GF_AUTH_GENERIC_OAUTH_NAME=Authelia
+      - GF_AUTH_GENERIC_OAUTH_CLIENT_ID=grafana
+      # Grafana's own file provider, so the secret stays out of docker inspect.
+      # `$$` is mandatory: `$__file` is a valid variable name to compose, which
+      # would expand it to "" and 401 every login.
+      - GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET=$$__file{/run/secrets/oidc_grafana_secret}
+      - GF_AUTH_GENERIC_OAUTH_SCOPES=openid profile email groups
+      # Grafana has no issuer-only mode; it wants all three endpoints.
+      - GF_AUTH_GENERIC_OAUTH_AUTH_URL=https://auth.${HOST_NAME:-pi.lan}/api/oidc/authorization
+      - GF_AUTH_GENERIC_OAUTH_TOKEN_URL=https://auth.${HOST_NAME:-pi.lan}/api/oidc/token
+      - GF_AUTH_GENERIC_OAUTH_API_URL=https://auth.${HOST_NAME:-pi.lan}/api/oidc/userinfo
+      - GF_AUTH_GENERIC_OAUTH_LOGIN_ATTRIBUTE_PATH=preferred_username
+      - GF_AUTH_GENERIC_OAUTH_GROUPS_ATTRIBUTE_PATH=groups
+      # Fail-safe, not a live path: both gates in front already require `admin`.
+      # If either is relaxed, this keeps the newcomer read-only.
+      - GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH=contains(groups[*], 'admin') && 'Admin' || 'Viewer'
+      - GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP=true
+      - GF_AUTH_GENERIC_OAUTH_USE_PKCE=true
+      # The client has no offline_access, so this would only add a failing
+      # background call per session.
+      - GF_AUTH_GENERIC_OAUTH_USE_REFRESH_TOKEN=false
+      # With the form disabled /login is a lone "Sign in with Authelia" button,
+      # and the forward-auth has already established that session. Same as
+      # HOMEPAGE_OIDC_AUTO_LOGIN. Escape hatch in docs/MONITORING.md.
+      - GF_AUTH_GENERIC_OAUTH_AUTO_LOGIN=true
+      # Authelia implements no RP-initiated logout; this is its portal route,
+      # as for every other client. See docs/SECURITY.md.
+      #
+      # `%3FdisableAutoLogin` is load-bearing: with the flag above, a bare
+      # /login re-runs the flow at once and signing out does nothing. Homepage
+      # pins `?autologin=0` for the same reason.
+      - GF_AUTH_SIGNOUT_REDIRECT_URL=https://auth.${HOST_NAME:-pi.lan}/logout?rd=https%3A%2F%2Fgrafana.${HOST_NAME:-pi.lan}%2Flogin%3FdisableAutoLogin
+    volumes:
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_grafana_secret.txt:/run/secrets/oidc_grafana_secret:ro
+      # Provisioned by file so the database below stays disposable.
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Named: sessions and preferences only, and the image seeds it with uid
+      # 472's ownership, which a bind mount would not. Absent from backrest.
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+        required: false
+      authelia:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-default
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/health"]
+      start_period: 40s
+    labels:
+      - "homepage.group=Monitoring"
+      - "homepage.name=Grafana"
+      - "homepage.icon=grafana.png"
+      - "homepage.href=https://grafana.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Metric dashboards and visualisation"
+      # No homepage.widget: it authenticates with a local username and
+      # password, and basic auth is off above.
+      #
+      # This direction, so selecting grafana pulls prometheus in: the reverse
+      # would let `COMPOSE_PROFILES=grafana` render against no datasource.
+      - "pi-pcloud.companion-of=prometheus"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      # Forward-auth *and* its own OIDC, as homepage and headplane do: /api is
+      # reachable from anything on frontend that dials :3000, which no
+      # forward-auth covers.
+      - "traefik.http.routers.grafana.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.grafana.tls=true"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    cpu_shares: *cpu-prio-batch
+    # 262 MiB measured at rest with this dashboard loaded.
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize
+
+  dockhand:
+    <<: *service-defaults
+    image: fnsys/dockhand:v1.0.47
+    container_name: pi-dockhand
+    profiles: ["dockhand", "all"]
+    # Not frontend: this container reads the Docker socket. See the `dockhand`
+    # network below; its bootstrap sets DOCKER_CURL_NETWORK to reach it.
+    networks:
+      - dockhand
+      # Its OOM/unhealthy notifications used to reach ntfy over frontend.
+      - ntfy
+    expose:
+      - 3000
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - DISABLE_LOCAL_LOGIN=true
+      - GOMEMLIMIT=160MiB
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - dockhand_data:/app/data
+    labels:
+      - "homepage.group=Monitoring"
+      - "homepage.name=Dockhand"
+      - "homepage.icon=docker.png"
+      - "homepage.href=https://dockhand.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Docker container management"
+      - "traefik.enable=true"
+      - "traefik.docker.network=dockhand"
+      - "traefik.http.routers.dockhand.rule=Host(`dockhand.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.dockhand.entrypoints=websecure"
+      - "traefik.http.routers.dockhand.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.dockhand.tls=true"
+      - "traefik.http.services.dockhand.loadbalancer.server.port=3000"
+    healthcheck:
+      <<: *healthcheck-light
+      test: ["CMD", "curl", "-fsSo", "/dev/null", "http://127.0.0.1:3000/api/auth/session"]
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 192m
+    oom_score_adj: *oom-score-deprioritize
+
+  homepage:
+    <<: *service-defaults
+    image: ghcr.io/gethomepage/homepage:v2.3.0@sha256:f820276654539cdc2cf0169f28188d135919a7984fad76d83d8d5ff1383f3705
+    container_name: pi-homepage
+    networks:
+      frontend:
+        # Static so internalapi-allow can name it. High in the range: Docker
+        # hands out dynamic addresses from .2 upwards.
+        ipv4_address: 172.30.11.240
+      # For the Backrest widget only: pi-backrest:9898 is no longer on frontend.
+      backup: {}
+    expose:
+      - 3000
+    # Neither secret has a *_FILE variant: Next.js freezes both at module load.
+    # Same trick as freshrss, vaultwarden and open-webui.
+    entrypoint:
+      - sh
+      - -c
+      - 'export HOMEPAGE_AUTH_SECRET="$(cat /run/secrets/homepage_auth_secret)" HOMEPAGE_OIDC_CLIENT_SECRET="$(cat /run/secrets/oidc_homepage_secret)" && exec /usr/local/bin/docker-entrypoint.sh "$$@"'
+      - sh
+    # An `entrypoint:` in compose **clears the image's CMD**, and the image
+    # entrypoint ends in `exec "$$@"` - without this the container execs nothing
+    # and exits 0. Re-check against `docker inspect` on an image bump.
+    command: ["node", "server.js"]
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - HOMEPAGE_ALLOWED_HOSTS=homepage.${HOST_NAME:-pi.lan}
+      # Homepage's own auth (v2.0+), stacked on the authelia@docker forward-auth
+      # the router already carries - see docs/SECURITY.md for why both.
+      - HOMEPAGE_AUTH_ENABLED=true
+      # Becomes NEXTAUTH_URL, which the redirect_uri is built from - so it has
+      # to match the Authelia client registration exactly.
+      - HOMEPAGE_EXTERNAL_URL=https://homepage.${HOST_NAME:-pi.lan}
+      - HOMEPAGE_OIDC_ISSUER=https://auth.${HOST_NAME:-pi.lan}
+      - HOMEPAGE_OIDC_CLIENT_ID=homepage
+      - HOMEPAGE_OIDC_NAME=Authelia
+      # Explicit, so this and the Authelia client's `scopes:` are visibly one
+      # decision. No `groups`: homepage has no roles.
+      - HOMEPAGE_OIDC_SCOPE=openid profile email
+      # v2.3.0. Skips the page whose only control is a sign-in button.
+      # /auth/signin?autologin=0 still reaches it if the redirect ever loops.
+      - HOMEPAGE_OIDC_AUTO_LOGIN=true
+      # Read by widget labels as {{HOMEPAGE_VAR_x}}.
+      # HOST_NAME is also read from widgets.yaml and settings.yaml, which is the
+      # only reason it is passed at all: those two files are substituted the same
+      # way labels are (widgetsFromConfig and getSettings both call
+      # substituteEnvironmentVars), and the SearXNG search URL in them has to
+      # name the real domain because the browser is what opens it.
+      - HOMEPAGE_VAR_HOST_NAME=${HOST_NAME:-pi.lan}
+      - HOMEPAGE_VAR_ADMIN_USER=${ADMIN_USER:-admin}
+      - HOMEPAGE_VAR_ADMIN_PASSWORD=${PASSWORD}
+      # NEXTCLOUD_ADMIN_USER only applies at first install, where it resolved to
+      # $EMAIL - so that, not the current $ADMIN_USER, is the account that exists.
+      - HOMEPAGE_VAR_NEXTCLOUD_USER=${EMAIL}
+      # Read by widget labels as {{HOMEPAGE_FILE_x}}; written by
+      # scripts/homepage-widgets-bootstrap.sh into the mounted config dir.
+      - HOMEPAGE_FILE_PROWLARR_API_KEY=/app/config/secrets/prowlarr_api_key
+      - HOMEPAGE_FILE_KAVITA_API_KEY=/app/config/secrets/kavita_api_key
+      - HOMEPAGE_FILE_AUDIOBOOKSHELF_API_KEY=/app/config/secrets/audiobookshelf_api_key
+      - HOMEPAGE_FILE_HEADSCALE_API_KEY=/app/config/secrets/headscale_api_key
+      - HOMEPAGE_FILE_HEADSCALE_NODE_ID=/app/config/secrets/headscale_node_id
+      # Immich is the one key nothing can mint: its admin password is set at signup
+      # and is not derivable from .env, and api_key.key is stored hashed, so neither
+      # the API nor the database can produce one. Paste it into the secret file --
+      # scripts/homepage-widgets-bootstrap.sh creates it empty on first run.
+      - HOMEPAGE_FILE_IMMICH_API_KEY=/app/config/secrets/immich_api_key
+      # Copied out of config/backrest/backrest.env by the widgets bootstrap: the
+      # Backrest API credential is no longer ${PASSWORD}, and this widget is the
+      # only other thing that holds it.
+      - HOMEPAGE_FILE_BACKREST_PASSWORD=/app/config/secrets/backrest_password
+    extra_hosts:
+      # So the widget's https:// call passes Nextcloud's trusted-domains check.
+      - "nextcloud.${HOST_NAME:-pi.lan}:172.30.11.250"
+      # Authelia's discovery and token endpoints, fetched server-side by
+      # next-auth. Same entry freshrss carries.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    volumes:
+      - ./config/homepage:/app/config
+      # /app/public is the only path homepage serves over HTTP (/api/config is
+      # hardcoded to custom.css and custom.js), so local icons have to live here.
+      - ./config/homepage/icons:/app/public/icons:ro
+      # Overriding the files the server-rendered HTML points at, rather than
+      # `favicon:` in settings.yaml, which only applies after hydration and left
+      # the tab flickering. Regenerate from docs/assets/logo.png with
+      # scripts/homepage-favicon.sh.
+      - ./config/homepage/icons/favicon.ico:/app/public/favicon.ico:ro
+      - ./config/homepage/icons/favicon-16x16.png:/app/public/favicon-16x16.png:ro
+      - ./config/homepage/icons/favicon-32x32.png:/app/public/favicon-32x32.png:ro
+      - ./config/homepage/icons/homepage.ico:/app/public/homepage.ico:ro
+      - ./config/homepage/icons/apple-touch-icon.png:/app/public/apple-touch-icon.png:ro
+      - ./config/homepage/icons/safari-pinned-tab.svg:/app/public/safari-pinned-tab.svg:ro
+      - ./config/homepage/icons/android-chrome-192x192.png:/app/public/android-chrome-192x192.png:ro
+      - ./config/homepage/icons/android-chrome-512x512.png:/app/public/android-chrome-512x512.png:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/sys:ro
+      # Read by the entrypoint above. Not under ./config/homepage: that whole
+      # directory is the container's /app/config.
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_homepage_secret.txt:/run/secrets/oidc_homepage_secret:ro
+      # Signs the session cookie. From scripts/homepage-pre-start.sh, and
+      # independent of PASSWORD - regenerating it only signs everyone out.
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/homepage_auth_secret:/run/secrets/homepage_auth_secret:ro
+    tmpfs:
+      - /app/config/logs
+    labels:
+      - "homepage.group=Dashboard"
+      - "homepage.name=Homepage"
+      # The one tile that stands for this stack rather than a third-party app, so
+      # it uses the pi-pcloud mark from the icons mount instead of dashboard-icons.
+      - "homepage.icon=/icons/logo.png"
+      - "homepage.href=https://homepage.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Service dashboard"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.homepage.rule=Host(`homepage.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.homepage.entrypoints=websecure"
+      - "traefik.http.routers.homepage.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.homepage.tls=true"
+      - "traefik.http.services.homepage.loadbalancer.server.port=3000"
+    depends_on:
+      - traefik
+    healthcheck:
+      <<: *healthcheck-default
+      # Not the auth-exempt /api/healthcheck: that answers 200 from a homepage
+      # whose auth stack failed to initialise, and Uptime Kuma's external check
+      # cannot see it either (forward-auth 302s an anonymous probe). This path
+      # is outside the middleware matcher, so it cannot redirect into a false
+      # 200 - it is 200 or 500, and busybox wget exits 1 on 5xx. localhost needs
+      # no Host header: the middleware always allows it.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/auth/providers"]
+    cpu_shares: *cpu-prio-normal
+    mem_limit: 192m
+    oom_score_adj: *oom-score-deprioritize
+
+  backrest:
+    <<: *service-defaults
+    build:
+      context: ./config/backrest
+      dockerfile: Dockerfile
+    image: pi-backrest:local
+    container_name: pi-backrest
+    networks:
+      # Not frontend: its API is as valuable as the backups (see BACKREST_AUTH_USER
+      # below), and frontend carries ~24 other containers, any one of which could
+      # open :9898. `backup` is a dedicated segment joined only by traefik (to route
+      # backrest.$HOST_NAME) and homepage (for its widget) - the same split already
+      # used for vault, immich, nextcloud and ai. It is the only non-internal network
+      # backrest has left, so it is also what carries restic's egress to S3.
+      - backup
+      - immich
+      - ntfy
+      - nextcloud
+      - auth
+    expose:
+      - 9898
+    environment:
+      - BACKREST_PORT=0.0.0.0:9898
+      - BACKREST_DATA=/data
+      - BACKREST_CONFIG=/config/backrest/config.json
+      - XDG_CACHE_HOME=/cache
+      - TMPDIR=/tmp
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - HOST_NAME=${HOST_NAME:-pi.lan}
+      - DB_HOST=postgres
+      - DB_NAME=nextcloud
+      - DB_USER=nextcloud
+      - DB_PASSWORD=${PASSWORD}
+      - NEXTCLOUD_CONFIG_FILE=/userdata/nextcloud-config/config.php
+      - NEXTCLOUD_SQL_BACKUP_DIR=/userdata/nextcloud-config/backups
+      - NEXTCLOUD_SQL_BACKUP_KEEP=${NEXTCLOUD_SQL_BACKUP_KEEP:-30}
+      - NEXTCLOUD_HOOK_STATE_FILE=/tmp/nextcloud-maintenance.state
+      - AUTHELIA_DB_NAME=authelia
+      - AUTHELIA_DB_USER=authelia
+      - AUTHELIA_DB_PASSWORD=${PASSWORD}
+      - AUTHELIA_SQL_BACKUP_DIR=/userdata/authelia-config/backups
+      - AUTHELIA_SQL_BACKUP_KEEP=7
+      - LLDAP_DB_NAME=lldap
+      - LLDAP_DB_USER=lldap
+      - LLDAP_DB_PASSWORD=${PASSWORD}
+      - LLDAP_SQL_BACKUP_DIR=/userdata/lldap/backups
+      - LLDAP_SQL_BACKUP_KEEP=7
+      - OPEN_WEBUI_DB_NAME=open-webui
+      - OPEN_WEBUI_DB_USER=open-webui
+      - OPEN_WEBUI_DB_PASSWORD=${PASSWORD}
+      - OPEN_WEBUI_SQL_BACKUP_DIR=/userdata/open-webui/backups
+      - OPEN_WEBUI_SQL_BACKUP_KEEP=7
+      - IMMICH_DB_NAME=immich
+      - IMMICH_DB_USER=immich
+      - IMMICH_DB_PASSWORD=${PASSWORD}
+      - IMMICH_SQL_BACKUP_DIR=/userdata/immich/backups
+      - IMMICH_SQL_BACKUP_KEEP=7
+      - VAULTWARDEN_DB_NAME=vaultwarden
+      - VAULTWARDEN_DB_USER=vaultwarden
+      - VAULTWARDEN_DB_PASSWORD=${PASSWORD}
+      - VAULTWARDEN_SQL_BACKUP_DIR=/userdata/vaultwarden/backups
+      - VAULTWARDEN_SQL_BACKUP_KEEP=7
+      - FRESHRSS_DB_NAME=freshrss
+      - FRESHRSS_DB_USER=freshrss
+      - FRESHRSS_DB_PASSWORD=${PASSWORD}
+      - FRESHRSS_SQL_BACKUP_DIR=/userdata/freshrss/backups
+      - FRESHRSS_SQL_BACKUP_KEEP=7
+      - RESTIC_PACK_SIZE=32
+      - GOMEMLIMIT=1200MiB
+      # Backrest's API serves the repo password and S3 keys to anyone who can reach
+      # :9898 and authenticate. The image entrypoint turns this user and the password
+      # from backrest.env into the bcrypt entry in config.json.
+      - BACKREST_AUTH_USER=${ADMIN_USER:-admin}
+      # Reached directly on the internal ntfy network instead of the old
+      # `ntfy.$HOST_NAME` -> 172.30.11.1 hop, which was the *frontend bridge gateway*
+      # (i.e. the host) and then back in through Traefik - a route that no longer
+      # exists now that backrest is off frontend. ntfy's own user/password auth is
+      # unchanged; what is lost is TLS across a three-member internal bridge.
+      - NTFY_BASE_URL=http://pi-ntfy
+    env_file:
+      - path: ./config/ntfy/ntfy.env
+        required: false
+      # BACKREST_AUTH_PASSWORD, generated by scripts/backrest-pre-start.sh. Kept out
+      # of `environment:` above, where it would shadow this file (Compose lets
+      # `environment:` win). Frozen at container creation - rotate with `up -d`.
+      - path: ./config/backrest/backrest.env
+        required: false
+    volumes:
+      - ${DATA_LOCATION:-./data}/backrest/data:/data
+      - ./config/backrest:/config/backrest
+      - ${DATA_LOCATION:-./data}/backrest/repos:/repos
+      - ${DATA_LOCATION:-./data}/immich:/userdata/immich:ro
+      # Writable so the db-backup.sh hook can drop its pg_dump here. Also the
+      # only immich DB backup: the immich role is not a superuser, so Immich's
+      # built-in pg_dumpall job cannot run (disabled in config/immich/config.yaml).
+      - ${DATA_LOCATION:-./data}/immich/backups:/userdata/immich/backups
+      - ${DATA_LOCATION:-./data}/nextcloud:/userdata/nextcloud-data:ro
+      - ${DATA_LOCATION:-./data}/nextcloud-config:/userdata/nextcloud-config
+      - ${DATA_LOCATION:-./data}/nextcloud-themes:/userdata/nextcloud-themes:ro
+      - ${DATA_LOCATION:-./data}/uptime-kuma:/userdata/uptime-kuma:ro
+      - beszel_data:/userdata/beszel:ro
+      - ${DATA_LOCATION:-./data}/lldap:/userdata/lldap:ro
+      - ${DATA_LOCATION:-./data}/vaultwarden:/userdata/vaultwarden:ro
+      # Writable so the db-backup.sh hook can drop its pg_dump here, like lldap's.
+      - ${DATA_LOCATION:-./data}/vaultwarden/backups:/userdata/vaultwarden/backups
+      - ${DATA_LOCATION:-./data}/lldap/backups:/userdata/lldap/backups
+      # Subscriptions and read state are in Postgres; what is only here is
+      # data/config.php (the system settings) and data/users/*/config.php.
+      - ${DATA_LOCATION:-./data}/freshrss:/userdata/freshrss:ro
+      - ${DATA_LOCATION:-./data}/trilium:/userdata/trilium:ro
+      # Writable so the db-backup.sh hook can drop its pg_dump here, like lldap's.
+      - ${DATA_LOCATION:-./data}/freshrss/backups:/userdata/freshrss/backups
+      - ${DATA_LOCATION:-./data}/authelia-config:/userdata/authelia-config
+      - ${DATA_LOCATION:-./data}/open-webui/backups:/userdata/open-webui/backups
+      # The only copy of the models, providers and MCP targets added through its
+      # UI, and of the virtual key every /v1 caller presents.
+      - ${DATA_LOCATION:-./data}/agentgateway:/userdata/agentgateway:ro
+      # Open WebUI's uploads and vector store; without this a DB restore points
+      # at blobs that were never snapshotted.
+      - open_webui_data:/userdata/open-webui-data:ro
+      # Small, high-value state that nothing else can regenerate: tailnet node
+      # keys and ACLs, n8n workflow credentials, ntfy topic ACLs, ACME certs,
+      # and the *arr configs that carry their API keys. Under 100 MB together.
+      - headscale_data:/userdata/headscale:ro
+      - headplane_data:/userdata/headplane:ro
+      - n8n_data:/userdata/n8n:ro
+      - ntfy_data:/userdata/ntfy:ro
+      - kavita_config:/userdata/kavita:ro
+      - pihole_data:/userdata/pihole:ro
+      - ${DATA_LOCATION:-./data}/traefik/letsencrypt:/userdata/traefik-letsencrypt:ro
+      - ${DATA_LOCATION:-./data}/qbittorrent:/userdata/qbittorrent:ro
+      - ${DATA_LOCATION:-./data}/prowlarr:/userdata/prowlarr:ro
+      - ${DATA_LOCATION:-./data}/kapowarr/db:/userdata/kapowarr-db:ro
+      - ${DATA_LOCATION:-./data}/shelfmark:/userdata/shelfmark:ro
+      # Only /config: the SQLite database, the server settings and the OIDC
+      # client live there. /metadata is covers and cached art, rebuilt by a scan.
+      - ${DATA_LOCATION:-./data}/audiobookshelf/config:/userdata/audiobookshelf:ro
+      # Read by backrest-env-snapshot.sh, which feeds two plans: s3-backup
+      # (off-site, but opening that repo needs BACKREST_S3_REPO_PASSWORD, which
+      # is inside the .env it stores) and usb-env, a local repo under
+      # /repos/env whose password sits next to it on the data disk so this file
+      # can be restored from that disk alone. See docs/MONITORING.md.
+      #
+      # The project directory, not ./.env directly: a single-file bind mount
+      # pins the inode, and every writer here (services.sh, rotate-password.sh,
+      # any editor) replaces .env instead of rewriting it, so the container
+      # would keep snapshotting the pre-edit file. backrest-env-snapshot.sh
+      # reads it by name at snapshot time and drops a copy in the second mount,
+      # which is the one that gets backed up. /pi-web-src is outside /userdata,
+      # so the repo itself is not in the snapshot.
+      - ./:/pi-web-src:ro
+      - ${DATA_LOCATION:-./data}/backrest/env-snapshot:/userdata/pi-web-env
+      # Where sqlite-backup.sh writes its consistent copies of the live SQLite
+      # databases above, which are all mounted read-only. Writable, and inside
+      # /userdata so the snapshot picks it up.
+      - ${DATA_LOCATION:-./data}/backrest/sqlite:/userdata/sqlite-backups
+      - ./scripts/db-backup.sh:/hooks/db-backup.sh:ro
+      - ./scripts/sqlite-backup.sh:/hooks/sqlite-backup.sh:ro
+      - ./scripts/backrest-env-snapshot.sh:/hooks/backrest-env-snapshot.sh:ro
+      - ./scripts/backrest-post-hook.sh:/hooks/backrest-post-hook.sh:ro
+      - ./scripts/backrest-unlock.sh:/hooks/backrest-unlock.sh:ro
+    tmpfs:
+      - /cache
+      - /tmp
+    depends_on:
+      immich-server:
+        condition: service_healthy
+        required: false
+      nextcloud:
+        condition: service_healthy
+        required: false
+      postgres:
+        condition: service_healthy
+      authelia:
+        condition: service_healthy
+    labels:
+      - "homepage.group=Backup & Recovery"
+      - "homepage.name=Backrest"
+      - "homepage.icon=backrest.png"
+      - "homepage.href=https://backrest.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Backup scheduling and restore"
+      - "homepage.widget.type=backrest"
+      - "homepage.widget.url=http://pi-backrest:9898"
+      - "homepage.widget.username={{HOMEPAGE_VAR_ADMIN_USER}}"
+      - "homepage.widget.password={{HOMEPAGE_FILE_BACKREST_PASSWORD}}"
+      - "traefik.enable=true"
+      # Overrides --providers.docker.network=frontend: backrest is not there any more.
+      - "traefik.docker.network=backup"
+      - "traefik.http.routers.backrest.rule=Host(`backrest.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.backrest.entrypoints=websecure"
+      - "traefik.http.routers.backrest.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.backrest.tls=true"
+      - "traefik.http.services.backrest.loadbalancer.server.port=9898"
+    healthcheck:
+      <<: *healthcheck-default
+      test: ["CMD", "curl", "-fsS", "http://localhost:9898/"]
+      start_period: 45s
+    cpu_shares: *cpu-prio-batch
+    mem_limit: 1536m
+    memswap_limit: 2g
+    oom_score_adj: *oom-score-important

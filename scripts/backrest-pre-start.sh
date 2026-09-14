@@ -57,7 +57,7 @@ BACKREST_INSTANCE="$(env_value BACKREST_INSTANCE)"
 LOCAL_REPO_ID="usb"
 LOCAL_PLAN_ID="usb-env"
 # Container-side path. ${DATA_LOCATION}/backrest/repos is bind-mounted at
-# /repos in compose.yaml, so restic sees a plain local repository here.
+# /repos in compose/monitoring.yaml, so restic sees a plain local repository here.
 LOCAL_REPO_URI="/repos/env"
 
 # Trailing slash stripped so the host paths below don't come out with "//" in
@@ -237,14 +237,15 @@ fi
 # Which is a supported workflow: `make enable` and `make config` exist for it.
 #
 # Created here instead, where the hook always runs and before any `up -d`. The
-# list is read out of compose.yaml rather than kept here, because a copy of it
-# would be the one nobody updates. Only backrest mounts into /userdata.
+# list is read out of compose/*.yaml rather than kept here, because a copy of it
+# would be the one nobody updates. Only backrest mounts into /userdata, so the
+# glob would still be right if it ever moved to another domain file.
 ensure_backrest_mount_dirs() {
   local data_root=""
   local dir=""
   data_root="$(resolve_data_location_path)"
 
-  grep -oE '\$\{DATA_LOCATION[^}]*\}/[a-z0-9/-]+:/userdata/' "$PROJECT_DIR/compose.yaml" |
+  grep -hoE '\$\{DATA_LOCATION[^}]*\}/[a-z0-9/-]+:/userdata/' "$PROJECT_DIR"/compose/*.yaml |
     sed -E 's|.*\}/([a-z0-9/-]+):/userdata/|\1|' | sort -u |
     while read -r name; do
       [ -n "$name" ] || continue

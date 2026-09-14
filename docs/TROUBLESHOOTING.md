@@ -281,7 +281,7 @@ if `make update` ran unprivileged and the start log warned about it.
 either a *subfolder* of the library or a *single loose file* at its root. It never
 groups root-level files with each other — not even ones sharing an `album` tag — so a
 multi-file release dropped flat into `download/audiobooks/` becomes one book per track.
-Shelfmark's `FILE_ORGANIZATION_AUDIOBOOK` is now `organize` in `compose.yaml`, which
+Shelfmark's `FILE_ORGANIZATION_AUDIOBOOK` is now `organize` in `compose/media.yaml`, which
 applies `{Author}/{Title}/{Title}` and produces the folder Audiobookshelf expects; its
 default, `rename`, renames single-file grabs and leaves multi-file ones flat, which is
 what caused this. To repair an existing one, move the tracks into a subfolder on the
@@ -316,7 +316,7 @@ narrowness fails in two independent ways.
 *The indexer is never queried.* `_indexer_supports_search_categories` skips any indexer
 whose capabilities do not declare the requested id — on this stack 5 of the 12 enabled
 ones, including **YggReborn** and **Torrent9**. `PROWLARR_AUTO_EXPAND=true` in
-`compose.yaml` covers this: when a query variant returns nothing and no indexer errored,
+`compose/media.yaml` covers this: when a query variant returns nothing and no indexer errored,
 Shelfmark reruns *that variant* with no category filter, and every indexer is queried.
 
 *The indexer answers, but the release is tagged 7000.* The trap, because auto-expand

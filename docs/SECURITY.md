@@ -68,8 +68,8 @@ Only Nextcloud needs the odd-looking trailing `&ignored=`, and it is load-bearin
 | **Nextcloud** | `user_oidc` provider `endSessionEndpoint` | `scripts/nextcloud-oidc-bootstrap.sh` |
 | **Audiobookshelf** | `authOpenIDLogoutURL` auth setting | `scripts/audiobookshelf-bootstrap.sh` |
 | **Immich** | `oauth.endSessionEndpoint` (takes precedence over discovery) | `config/immich/oauth-config.yaml.template` |
-| **Open WebUI** | `WEBUI_AUTH_SIGNOUT_REDIRECT_URL` | `compose.yaml` |
-| **Grafana** | `GF_AUTH_SIGNOUT_REDIRECT_URL` | `compose.yaml` |
+| **Open WebUI** | `WEBUI_AUTH_SIGNOUT_REDIRECT_URL` | `compose/ai.yaml` |
+| **Grafana** | `GF_AUTH_SIGNOUT_REDIRECT_URL` | `compose/monitoring.yaml` |
 
 The remaining clients have nowhere to put one, so signing out of them leaves the portal session standing and the next visit signs the user back in: Kavita, Beszel, Dockhand and Headplane expose no such field, Shelfmark implements no logout handling of its own, Homepage hardcodes its sign-out redirect to `/auth/signin?autologin=0` (which is exactly why that escape hatch exists — landing on `/` would auto-login straight back; Grafana's `rd` ends in `%2Flogin%3FdisableAutoLogin` for the same reason, since it too auto-logs in), and Vaultwarden offers no override (it is `SSO_AUTH_ONLY_NOT_SESSION` here in any case). Headscale is not affected — it holds no browser session, only device registrations.
 
@@ -264,7 +264,7 @@ Served at `https://vault.<HOST_NAME>`. Its data lives in the shared PostgreSQL i
 sudo cat ${DATA_LOCATION}/authelia-config/secrets/vaultwarden_admin_token
 ```
 
-**The admin token is not `PASSWORD`.** `scripts/vaultwarden-pre-start.sh` generates a random token on first start and hands the container only its Argon2id digest, so the plaintext never appears in `compose.yaml`, the container's environment or `docker inspect`. That matters because `/admin` inherits this router's middleware — the LAN allowlist and nothing else, no Authelia forward-auth — so reusing the SSO password would make a `PASSWORD` leak an admin-panel compromise as well. Like the OIDC client secrets and the ntfy passwords, `rotate-password.sh` deliberately leaves it alone; to change it, delete both files and restart.
+**The admin token is not `PASSWORD`.** `scripts/vaultwarden-pre-start.sh` generates a random token on first start and hands the container only its Argon2id digest, so the plaintext never appears in `compose/cloud.yaml`, the container's environment or `docker inspect`. That matters because `/admin` inherits this router's middleware — the LAN allowlist and nothing else, no Authelia forward-auth — so reusing the SSO password would make a `PASSWORD` leak an admin-panel compromise as well. Like the OIDC client secrets and the ntfy passwords, `rotate-password.sh` deliberately leaves it alone; to change it, delete both files and restart.
 
 Vaultwarden accepts a plaintext `ADMIN_TOKEN` but logs a NOTICE about it on every start, and hashing has to happen outside the container because neither tool that can produce a PHC string reads the secret from stdin: `vaultwarden hash` wants a TTY, and Authelia's `crypto hash generate` wants `--password` on argv. The script borrows Authelia's CLI through a throwaway `docker run`, at its default `m=65536,t=3,p=4` — the same cost as Vaultwarden's own `bitwarden` preset.
 
@@ -367,7 +367,7 @@ no rotation caused.
 
 `config/n8n/n8n.env` (mode `600`, gitignored) holds one value, `N8N_RUNNERS_AUTH_TOKEN`, written by
 `scripts/n8n-pre-start.sh` and loaded by both `n8n` and `n8n-runners` as an `env_file`. It used to be
-`${N8N_RUNNERS_AUTH_TOKEN:-<a hard-coded default>}` in `compose.yaml` with the variable set nowhere, so every
+`${N8N_RUNNERS_AUTH_TOKEN:-<a hard-coded default>}` in `compose/cloud.yaml` with the variable set nowhere, so every
 install ran the task broker on the same published default while it listened on `0.0.0.0` inside
 `frontend` — any of the containers there could register as a task runner and receive the workflow code
 and data n8n hands out for execution. Like the Comet and Vaultwarden secrets it is machine-to-machine, so

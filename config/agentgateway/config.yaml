@@ -59,7 +59,7 @@ llm:
   models:
     # The one model that has to exist before anyone can log in - everything
     # else is added through the UI. `name` is what clients ask for and what
-    # /v1/models lists; `params.model` is LLAMA_ARG_ALIAS in compose.yaml.
+    # /v1/models lists; `params.model` is LLAMA_ARG_ALIAS in compose/ai.yaml.
     - name: gemma-4-e2b-it
       provider:
         # Not `openAI`: that provider talks to api.openai.com. `custom` is the

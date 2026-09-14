@@ -129,7 +129,7 @@ resolve_data_location_path() {
 }
 
 # Root the shared Postgres cluster lives under, made absolute the same way.
-# Mirrors compose.yaml's ${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}:
+# Mirrors compose/core.yaml's ${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}:
 # unset and empty must both fall back, because .env.dist ships the key empty and
 # an operator clearing the value means "put it back with the rest of the data",
 # not "use the project directory".

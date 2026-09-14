@@ -583,7 +583,7 @@ def persist_agent_config(agent_env: AgentEnv, token: str, hub_key: str) -> bool:
 
 def restart_agent_if_needed(agent_env: AgentEnv) -> None:
     # container_is_running is asked for pi-beszel-agent, the container_name in
-    # compose.yaml - not the service name `beszel-agent`, which never appears in
+    # compose/monitoring.yaml - not the service name `beszel-agent`, which never appears in
     # `docker ps` and once made this check false unconditionally, leaving the
     # branch that reloads a rotated TOKEN/KEY unreachable.
     running = pilib.container_is_running(AGENT_CONTAINER)
@@ -665,7 +665,7 @@ def main() -> int:
     except CurlError as exc:
         log(f"WARNING: OIDC bootstrap failed: {exc}")
 
-    # compose.yaml sets DISABLE_PASSWORD_AUTH=true, so this is the normal path:
+    # compose/monitoring.yaml sets DISABLE_PASSWORD_AUTH=true, so this is the normal path:
     # the `users` collection refuses auth-with-password and only _superusers
     # answers. The password branch below is what a hub with the flag turned off
     # takes, and what a first install needs before OIDC is reachable.
