@@ -42,6 +42,10 @@
                     - abbr: AE
                       href: https://www.aliexpress.com
                       icon: si-aliexpress
+          - Raspberry Pi:
+                    - abbr: RPI
+                      href: https://www.raspberrypi.com
+                      icon: si-raspberrypi
           - Framework:
                     - abbr: FW
                       href: https://frame.work
