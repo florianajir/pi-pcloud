@@ -85,6 +85,11 @@ none "every image is pinned by tag or digest" IMAGE
 # allowlist nor forward auth on it.
 none "every publicly routed router carries middlewares" ROUTER
 
+# A router with no tls label does not fall over: it inherits the websecure
+# entrypoint's certresolver and orders a certificate of its own, one per
+# service, instead of being served from the wildcard the stack already holds.
+none "every publicly routed router carries a tls label" TLS
+
 # Adding a Postgres-backed service means adding its role, or it silently uses
 # none and the password rotation misses it.
 none "every Postgres-backed service owns a role" POSTGRES
@@ -157,6 +162,12 @@ catches "an image with no tag at all" IMAGE '{"services": {"untagged": {"image":
 catches "a public router with no middlewares" ROUTER '{"services": {"exposed": {"image": "x:1", "labels": {
   "traefik.http.routers.exposed.rule": "Host(`x`)",
   "traefik.http.routers.exposed.entrypoints": "websecure"
+}}}}'
+
+catches "a public router with no tls label" TLS '{"services": {"exposed": {"image": "x:1", "labels": {
+  "traefik.http.routers.exposed.rule": "Host(`x`)",
+  "traefik.http.routers.exposed.entrypoints": "websecure",
+  "traefik.http.routers.exposed.middlewares": "lan@docker"
 }}}}'
 
 catches "a Postgres-backed service with no role" POSTGRES '{"services":{

@@ -534,6 +534,18 @@ def main():
             continue
         if "middlewares" not in spec:
             report("ROUTER", f"{router} ({spec['_service']}) is routed publicly with no middlewares")
+        # Omitting `tls` does not break the router, which is the problem.
+        # websecure sets http.tls.certresolver, and Traefik applies that default
+        # only to routers declaring no TLS config of their own: `tls=true`
+        # resolves to {options: default} with no certResolver and is served from
+        # the wildcard `traefik` and `headscale` obtain, while a router saying
+        # nothing inherits the resolver and orders a DNS-01 certificate of its
+        # own - one per service, against a Let's Encrypt limit of 50 a week.
+        # Measured on v3.7.13, one API snapshot, entrypoint resolver `dummy`:
+        #   rule + entrypoints + tls=true -> {"options": "default"}
+        #   rule + entrypoints            -> {"certResolver": "dummy", ...}
+        if not any(key == "tls" or key.startswith("tls.") for key in spec):
+            report("TLS", f"{router} ({spec['_service']}) is routed publicly with no tls label")
 
     # A bare "443:443" binds [::] as well as 0.0.0.0, and an IPv6 listener in
     # front of a container with no IPv6 address is served by userland
