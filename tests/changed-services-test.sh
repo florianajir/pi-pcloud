@@ -38,9 +38,9 @@ ok() {
 # freshrss stands for a service the operator turned off.
 ALL_SERVICES='traefik kavita ntfy backrest uptime-kuma immich-server
 immich-machine-learning gluetun qbittorrent kapowarr stremio stremio-lan
-freshrss'
+postgres freshrss'
 ENABLED_SERVICES='traefik kavita ntfy backrest uptime-kuma immich-server
-immich-machine-learning gluetun qbittorrent kapowarr stremio-lan'
+immich-machine-learning gluetun qbittorrent kapowarr stremio-lan postgres'
 export ALL_SERVICES ENABLED_SERVICES
 
 mkdir -p "$WORK/scripts" "$WORK/bin"
@@ -129,6 +129,16 @@ answer "nor a file install-system copies to /etc"   "" config/completion/pi-pclo
 answer "nor the sysctl drop-in"                     "" config/sysctl.d/pi-pcloud.conf
 answer "nor a path outside config/ and scripts/"    "" docs/COMMANDS.md
 answer "nor a disabled service's own config"        "" config/freshrss/x.php
+
+# /docker-entrypoint-initdb.d/ is read over an empty data directory and never
+# again, so recreating postgres for it applies nothing - while `--no-deps`
+# leaves every service holding a connection to that database unrestarted through
+# the bounce. Exempt by path and not by directory, which the second assertion is
+# what proves.
+answer "nor a file only a first init reads"         "" \
+    config/postgres/init-databases.sh
+answer "but the rest of that tree still counts"     "postgres" \
+    config/postgres/postgresql.conf
 
 # --- everything ---------------------------------------------------------------
 #

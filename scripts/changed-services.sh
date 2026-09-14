@@ -102,6 +102,19 @@ configure-kernel-params.sh configure-swap.sh lint.sh pg-major-upgrade.sh
 pi-pcloud recovery-kit.sh rotate-password.sh rotate-secret.sh sarif-merge.py
 services.sh services-picker.py wan-allowlist-sync.sh'
 
+# config/ files a container reads only while it initialises for the first time,
+# spelled as the path under config/. config/postgres/init-databases.sh is
+# mounted into /docker-entrypoint-initdb.d/, which the Postgres entrypoint runs
+# over an empty data directory and never again - so on any existing install a
+# recreate applies exactly nothing, while `--no-deps` leaves the dozen services
+# holding connections to that database unrestarted through the bounce. And it is
+# a common pull: AGENTS.md asks for a role in this file with every new
+# Postgres-backed service.
+#
+# A path, not a directory: a real runtime config arriving in config/postgres/
+# later must still recreate postgres, so only the one file is exempt.
+FIRST_INIT_CONFIG='postgres/init-databases.sh'
+
 # config/<dir> trees read by services not named after the directory, spelled
 # <dir>:<service>[,<service>]. One tree, two containers: both immich services
 # mount config/immich. Kept in the same greppable shape as the lists above so
@@ -225,8 +238,9 @@ for path in $changed; do
 
     case "$path" in
         config/*/*)
-            _dir="${path#config/}"
-            _dir="${_dir%%/*}"
+            _rel="${path#config/}"
+            in_words "$_rel" "$FIRST_INIT_CONFIG" && continue
+            _dir="${_rel%%/*}"
             in_words "$_dir" "$HOST_CONFIG_DIRS" && continue
             in_words "$_dir" "$ALWAYS_ALL_CONFIG_DIRS" && { echo ALL; exit 0; }
             owners="$(config_dir_readers "$_dir")"
