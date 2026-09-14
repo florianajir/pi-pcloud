@@ -14,6 +14,7 @@ a shell variable.
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -77,6 +78,15 @@ DEPENDABOT_COMPOSE_NAME = re.compile(r"(docker-)?compose(-[\w]+)?(\.[\w-]+)?\.ya
 # Where a compose file may live. The fetcher lists one directory and does not
 # descend, so each of these has to be named in .github/dependabot.yml on its own.
 COMPOSE_DIRS = ("", "compose")
+
+# The sibling pattern for the `docker` ecosystem, from
+# dependabot-core docker/lib/dependabot/docker/file_fetcher.rb. Unanchored and
+# matched against the basename, so Dockerfile.dev and my.containerfile count.
+DEPENDABOT_DOCKERFILE_NAME = re.compile(r"dockerfile|containerfile", re.I)
+
+# Pruned when walking for Dockerfiles: .git is enormous and `data` is the
+# gitignored DATA_LOCATION default, neither of which can hold a build context.
+SKIP_DIRS = {".git", "data", "node_modules", "__pycache__"}
 
 
 def yaml_files(base):
@@ -292,15 +302,70 @@ def dependabot_blind_spots(repo_dir):
     config_path = Path(repo_dir, ".github/dependabot.yml")
     if not config_path.exists():
         return messages
+    config = config_path.read_text()
 
-    # Read loosely on purpose: indentation, key order and flow-vs-block style
-    # are all free in YAML, and a reformat that Dependabot reads identically
-    # must not come back here as "no update names that directory". An entry is
-    # split on `- <key>:` because that is the one shape a nested sequence item
-    # here does not take - `directories:` and `labels:` hold bare scalars.
+    for directory in sorted(needed - dependabot_directories(config, "docker-compose")):
+        messages.append(
+            f"images are pinned under {directory} but no docker-compose update names that "
+            f"directory, so nothing bumps them"
+        )
+
+    # The same blind spot, one ecosystem over. `docker` reads a directory the
+    # same way - one listing, no descent - so a Dockerfile whose directory is
+    # not named has a base image nothing ever bumps. (That ecosystem also
+    # fetches Kubernetes manifests; this repo has none, so they are not modelled
+    # here and a first one would need this widened.)
+    named = dependabot_directories(config, "docker")
+    present = dockerfile_dirs(repo_dir)
+    for directory in sorted(present - named):
+        messages.append(
+            f"{directory} holds a Dockerfile but no docker update names that directory, "
+            f"so its base image never bumps"
+        )
+    for directory in sorted(named - present):
+        messages.append(
+            f"a docker update names {directory}, which holds no Dockerfile; Dependabot "
+            f"errors on that entry instead of skipping it"
+        )
+    return messages
+
+
+def dockerfile_dirs(repo_dir):
+    """Every directory holding a file the `docker` fetcher would open.
+
+    Nested repositories are pruned along with SKIP_DIRS: a git worktree checked
+    out inside the tree (.claude/worktrees/* here) carries its own copy of every
+    Dockerfile, and none of it exists in the repository Dependabot reads.
+    """
+    root = Path(repo_dir)
+    found = set()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in SKIP_DIRS and not os.path.exists(os.path.join(dirpath, d, ".git"))
+        ]
+        if not any(DEPENDABOT_DOCKERFILE_NAME.search(name) for name in filenames):
+            continue
+        rel = Path(dirpath).relative_to(root).as_posix()
+        found.add("/" if rel == "." else "/" + rel)
+    return found
+
+
+def dependabot_directories(config, ecosystem):
+    """The directories one `package-ecosystem` update covers.
+
+    Read loosely on purpose: indentation, key order and flow-vs-block style are
+    all free in YAML, and a reformat that Dependabot reads identically must not
+    come back as "no update names that directory". An entry is split on
+    `- <key>:` because that is the one shape a nested sequence item here does
+    not take - `directories:` and `labels:` hold bare scalars.
+    """
     covered = set()
-    for block in re.split(r"^[ \t]*-[ \t]+(?=[A-Za-z_-]+:)", config_path.read_text(), flags=re.M)[1:]:
-        if not re.search(r'^\s*package-ecosystem:\s*"?docker-compose"?', block, re.M):
+    name = re.escape(ecosystem)
+    for block in re.split(r"^[ \t]*-[ \t]+(?=[A-Za-z_-]+:)", config, flags=re.M)[1:]:
+        # Anchored at both ends: unanchored, "docker" also matches the
+        # "docker-compose" entry and each would inherit the other's directories.
+        if not re.search(rf'^\s*package-ecosystem:\s*"?{name}"?\s*$', block, re.M):
             continue
         covered.update(re.findall(r'^\s*directory:\s*"?([^"\s]+)"?\s*$', block, re.M))
         for inline in re.findall(r"^\s*directories:\s*\[([^\]]*)\]\s*$", block, re.M):
@@ -317,13 +382,7 @@ def dependabot_blind_spots(repo_dir):
                 covered.add(item.group(1))
             elif line.strip() and not line.lstrip().startswith("#"):
                 listing = False
-
-    for directory in sorted(needed - covered):
-        messages.append(
-            f"images are pinned under {directory} but no docker-compose update names that "
-            f"directory, so nothing bumps them"
-        )
-    return messages
+    return covered
 
 
 def postgres_roles(repo_dir):

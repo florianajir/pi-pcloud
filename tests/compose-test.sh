@@ -118,7 +118,7 @@ none "every compose/*.yaml is included and its anchors match compose.yaml" LAYOU
 # directory without descending, so a domain file renamed back to core.yaml, or
 # a .github/dependabot.yml that stops naming /compose, ends every image-bump PR
 # with no error raised anywhere.
-none "every image pin sits where Dependabot will look for it" DEPENDABOT
+none "every image pin and Dockerfile sits where Dependabot will look for it" DEPENDABOT
 
 # --- the checker must actually catch each of them ---------------------------
 #
@@ -237,6 +237,48 @@ blind() {
         printf 'FAIL %s (the checker reported nothing)\n' "$_label"
     fi
 }
+
+# The same blind spot one ecosystem over: `docker` reads a directory the same
+# way, and its five entries are hand-maintained against config/*/Dockerfile with
+# nothing but this asserting they still agree.
+blind_docker() {
+    _label="$1"
+    _new_dockerfile="$2"   # a directory that gains a Dockerfile, or empty
+    _new_entry="$3"        # a directory added to the docker update, or empty
+    _tree="$(mktemp -d)"
+    mkdir -p "$_tree/compose" "$_tree/.github" "$_tree/config/postgres"
+    # A tree the compose half passes on, so the only finding is the docker one.
+    cp "$REPO_DIR/compose.yaml" "$REPO_DIR/compose.test.yaml" "$_tree/"
+    cp "$REPO_DIR"/compose/*.yaml "$_tree/compose/"
+    cp "$REPO_DIR/config/postgres/init-databases.sh" "$_tree/config/postgres/"
+    for _f in "$REPO_DIR"/config/*/Dockerfile; do
+        _d="$_tree/config/$(basename "$(dirname "$_f")")"
+        mkdir -p "$_d" && cp "$_f" "$_d/"
+    done
+    if [ -n "$_new_entry" ]; then
+        awk -v dir="$_new_entry" '{ print }
+            /- "\/config\/backrest"/ { printf "      - \"%s\"\n", dir }' \
+            "$REPO_DIR/.github/dependabot.yml" > "$_tree/.github/dependabot.yml"
+    else
+        cp "$REPO_DIR/.github/dependabot.yml" "$_tree/.github/dependabot.yml"
+    fi
+    if [ -n "$_new_dockerfile" ]; then
+        mkdir -p "$_tree/$_new_dockerfile"
+        printf 'FROM alpine:3.22\n' > "$_tree/$_new_dockerfile/Dockerfile"
+    fi
+    _hits="$(printf '%s' '{"services": {"a": {"image": "x:1", "mem_limit": "64m"}}}' \
+        | python3 "$TESTS_DIR/compose-invariants.py" "$_tree" | grep -c '^DEPENDABOT ' || true)"
+    rm -rf "$_tree"
+    if [ "$_hits" -gt 0 ]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        printf 'FAIL %s (the checker reported nothing)\n' "$_label"
+    fi
+}
+
+blind_docker "a new Dockerfile no docker update names" config/newthing ''
+blind_docker "a docker update naming a directory with no Dockerfile" '' /config/ghost
 
 blind "a domain file renamed to one Dependabot never fetches" core.yaml ''
 blind "a /compose that no docker-compose update names" compose-core.yaml '- "/compose"'
