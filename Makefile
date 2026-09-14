@@ -1,4 +1,4 @@
-.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env print-required-vars test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit api-keys
+.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-apply update-images status logs doctor preflight check-env print-required-vars test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit api-keys
 
 REQUIRED_ENV_VARS := HOST_NAME TIMEZONE EMAIL ADMIN_USER PASSWORD HOST_LAN_IP CLOUDFLARE_DNS_API_TOKEN CLOUDFLARE_ZONE_ID
 
@@ -336,12 +336,31 @@ else \
 fi
 endef
 
+# A wrapper around update-apply so a failure can say how to get back. Every step
+# after `git pull` runs against a repository that has already moved, and nothing
+# reverts it - the images are pulled, the host files applied, the containers
+# recreated, and a broken one of those leaves the checkout on the new commit
+# with no hint that `git reset --hard` is the way out.
+#
+# HEAD_BEFORE_PULL is passed down explicitly: the sub-make parses *after* the
+# pull has run, where the $(shell git rev-parse HEAD) that computes it already
+# reads the new commit.
+update:
+	@$(MAKE) update-apply HEAD_BEFORE_PULL=$(HEAD_BEFORE_PULL) || { \
+		echo "❌ Update failed."; \
+		if [ -n "$(HEAD_BEFORE_PULL)" ] && [ "$$(git rev-parse HEAD)" != "$(HEAD_BEFORE_PULL)" ]; then \
+			echo "   The pull already moved this checkout to $$(git rev-parse --short HEAD)."; \
+			echo "   ↩ To go back: git reset --hard $(HEAD_BEFORE_PULL) && make update"; \
+		fi; \
+		exit 1; \
+	}
+
 # Images are refreshed while the stack runs, so nothing is interrupted until
 # compose swaps the containers that actually have a new image. `pull` covers
 # what COMPOSE_PROFILES selects and skips the images built here, which
 # `build --pull` rebuilds against their updated bases. The final prune only
 # touches dangling layers, never one a container still references.
-update:
+update-apply:
 	@echo "🔄 Updating pi-pcloud..."
 	@branch=$$(git rev-parse --abbrev-ref HEAD); 	if [ "$$branch" != "main" ]; then echo "  ⚠ on branch $$branch, not main"; fi
 	@echo "📥 Repository..."
@@ -357,19 +376,34 @@ update:
 	@$(SUDO) systemctl try-restart $(WATCH_UNIT)
 # `up -d` compares a container's image and spec, not the contents of the files
 # bind-mounted into it, so a config the pull rewrote would sit on disk unread.
-# That is the one case where the old down/up did necessary work. scripts/ is in
-# the path list too: the generated configs (headscale, backrest, headplane,
-# authelia) are gitignored, so a pull that re-renders one shows up only as a
-# change to the *-pre-start.sh that writes it. (A config edited by hand is
-# still `make restart`; the diff cannot see it.)
+# That is the one case where the old down/up did necessary work - but it did it
+# for the whole stack, and more than half of all pulls touch config/ or
+# scripts/. changed-services.sh names the services that actually read what
+# changed; only a path it cannot attribute still costs a full restart.
+# (A config edited by hand is still `make restart`; the diff cannot see it.)
+#
+# The targeted recreate runs after $(apply_stack), because the pre-start hooks
+# inside it are what render the new config, and stack-up.sh deliberately takes
+# no arguments so boot and update cannot ask for different starts. Its
+# bootstraps therefore run against the containers about to be replaced - they
+# are idempotent and configure through each service's own API, so what they
+# write survives the recreate.
+#
 # `systemctl restart`, not `$(MAKE) restart`: make runs any recipe line
 # mentioning $(MAKE) even under `--dry-run`.
-	@if [ -n "$(HEAD_BEFORE_PULL)" ] && ! git diff --quiet $(HEAD_BEFORE_PULL) HEAD -- config/ scripts/; then \
-		echo "🔁 The pull changed config/ or scripts/; restarting so services read it..."; \
+	@targets=$$(if [ -n "$(HEAD_BEFORE_PULL)" ]; then \
+		/bin/sh scripts/changed-services.sh $(HEAD_BEFORE_PULL) HEAD || echo ALL; \
+	else echo ALL; fi); \
+	if [ "$$targets" = ALL ]; then \
+		echo "🔁 The pull changed something no single service owns; restarting the stack..."; \
 		$(SUDO) systemctl restart $(UNIT); \
 	else \
 		echo "🚀 Applying changes (only what moved is recreated)..."; \
 		$(apply_stack); \
+		if [ -n "$$targets" ]; then \
+			echo "🔁 Re-reading changed config:" $$targets; \
+			$(SUDO) $(COMPOSE) up -d --no-deps --force-recreate $$targets; \
+		fi; \
 	fi
 	@echo "🧹 Reclaiming space from the replaced images..."
 	@docker image prune -f | tail -n1

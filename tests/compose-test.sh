@@ -90,6 +90,12 @@ none "every publicly routed router carries middlewares" ROUTER
 # service, instead of being served from the wildcard the stack already holds.
 none "every publicly routed router carries a tls label" TLS
 
+# A config tree or a script the naming convention does not cover is answered by
+# changed-services.sh with ALL - a full-stack down/up on every `make update`
+# that touches it. Correct, and exactly the cost the targeted recreate exists to
+# avoid, so the gap is caught here rather than paid on the host forever.
+none "every config tree and script resolves to the services reading it" RECREATE
+
 # Adding a Postgres-backed service means adding its role, or it silently uses
 # none and the password rotation misses it.
 none "every Postgres-backed service owns a role" POSTGRES
@@ -215,6 +221,29 @@ if [ "$drift_hits" -gt 0 ]; then
 else
     fail=$((fail + 1))
     printf 'FAIL a preamble copy that drifted from compose.yaml (the checker reported nothing)\n'
+fi
+
+# RECREATE reads the repository as well. The fixture is the real tree with one
+# unowned file added, because the check's whole job is to notice a *new* path
+# that follows no convention - and a `none` assertion above passing could
+# equally mean the checker never looked.
+unowned="$(mktemp -d)"
+mkdir -p "$unowned/compose" "$unowned/scripts" "$unowned/config/postgres" "$unowned/config/notaservice"
+# The compose files come along because LAYOUT reads them unconditionally; this
+# fixture is about RECREATE, and it only greps for that category.
+cp "$REPO_DIR/compose.yaml" "$unowned/compose.yaml"
+cp "$REPO_DIR"/compose/*.yaml "$unowned/compose/"
+cp "$REPO_DIR/scripts/changed-services.sh" "$unowned/scripts/"
+cp "$REPO_DIR/config/postgres/init-databases.sh" "$unowned/config/postgres/"
+touch "$unowned/config/notaservice/settings.yaml"
+unowned_hits="$(printf '%s' '{"services": {"a": {"image": "x:1", "mem_limit": "64m"}}}' \
+    | python3 "$TESTS_DIR/compose-invariants.py" "$unowned" | grep -c '^RECREATE ' || true)"
+rm -rf "$unowned"
+if [ "$unowned_hits" -gt 0 ]; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1))
+    printf 'FAIL a config tree no service reads (the checker reported nothing)\n'
 fi
 
 # DEPENDABOT reads the repository too, so it takes the same treatment: a tree

@@ -453,6 +453,116 @@ def postgres_roles(repo_dir):
     return set(match.group(1).split())
 
 
+def recreate_exceptions(repo_dir):
+    """The lists scripts/changed-services.sh classifies an unowned path by.
+
+    Read out of the script rather than restated here. This check exists to keep
+    one naming convention true; a second copy of its exceptions would be a
+    second thing to keep true, and the two would disagree the first time only
+    one was updated - which is how the old hardcoded hook names in services.sh
+    came to miss half the bootstraps.
+    """
+    try:
+        source = Path(repo_dir, "scripts/changed-services.sh").read_text()
+    except OSError:
+        # The synthetic trees the tests build hold compose files and nothing
+        # else; there is no convention to check there. Same shape as
+        # tracked_files() returning None outside a checkout.
+        return None
+    names = ("HOST_CONFIG_DIRS", "SHARED_START_PATH", "PER_INVOCATION", "HOST_ONLY",
+             "CONFIG_DIR_ALIASES")
+    found = {}
+    for name in names:
+        match = re.search(rf"^{name}='([^']*)'", source, re.M | re.S)
+        found[name] = set(match.group(1).split()) if match else None
+    return found
+
+
+def recreate_mapping_gaps(repo_dir, services):
+    """Every config/ tree and scripts/ file resolves to the services reading it.
+
+    `compose up -d` compares a container's image and spec, never the contents of
+    the files bind-mounted into it, so something has to name which services a
+    changed file obliges `make update` to recreate. That something is a naming
+    convention already in the tree - config/<service>/ and
+    scripts/<service>-*.sh - which scripts/changed-services.sh reads.
+
+    A path the convention does not cover is answered with ALL, a full-stack
+    restart: correct, and the cost the targeted recreate exists to avoid. So the
+    gap is reported here instead of being paid on the host, once per update,
+    forever.
+
+    The render this is handed is `all,stremio-lan`, i.e. every declared service.
+    Should a profile ever hide one from CI again, its config directory shows up
+    below - a visible failure rather than a silent hole.
+    """
+    lists = recreate_exceptions(repo_dir)
+    if lists is None:
+        return []
+    messages = []
+    for name, value in sorted(lists.items()):
+        if value is None:
+            messages.append(f"scripts/changed-services.sh no longer defines {name}, so nothing here reads its exceptions")
+    if any(value is None for value in lists.values()):
+        return messages
+
+    aliased = {}
+    for entry in sorted(lists["CONFIG_DIR_ALIASES"]):
+        directory, _, readers = entry.partition(":")
+        if not readers:
+            messages.append(f"CONFIG_DIR_ALIASES entry {entry} names no reader; the spelling is <dir>:<service>[,<service>]")
+            continue
+        aliased[directory] = readers.split(",")
+        if not Path(repo_dir, "config", directory).is_dir():
+            messages.append(f"CONFIG_DIR_ALIASES maps config/{directory}, which does not exist")
+        for reader in aliased[directory]:
+            if reader not in services:
+                messages.append(f"CONFIG_DIR_ALIASES says {reader} reads config/{directory}, but no such service is declared")
+
+    tracked = tracked_files(repo_dir)
+    if tracked is None:
+        return messages
+
+    config_dirs = {path.split("/")[1] for path in tracked
+                   if path.startswith("config/") and path.count("/") >= 2}
+    for directory in sorted(config_dirs):
+        if directory in services or directory in aliased:
+            continue
+        if directory in lists["HOST_CONFIG_DIRS"]:
+            continue
+        messages.append(
+            f"config/{directory} matches no service, so every change under it restarts the whole stack; "
+            "rename it after the service that reads it, or add it to HOST_CONFIG_DIRS "
+            "(host files) or CONFIG_DIR_ALIASES (read by a differently-named service) "
+            "in scripts/changed-services.sh"
+        )
+    for directory in sorted(lists["HOST_CONFIG_DIRS"]):
+        if directory not in config_dirs:
+            messages.append(f"HOST_CONFIG_DIRS names config/{directory}, which no longer exists")
+
+    # Top level only: a script in a subdirectory of scripts/ is not a hook the
+    # boot path runs, and the convention says nothing about its name.
+    scripts = {path[len("scripts/"):] for path in tracked
+               if path.startswith("scripts/") and path.count("/") == 1}
+    classified = lists["SHARED_START_PATH"] | lists["PER_INVOCATION"] | lists["HOST_ONLY"]
+    for script in sorted(scripts):
+        # Longest service name prefixing it, the rule services.sh applies to
+        # bootstraps so beszel-agent-* does not also read as beszel's.
+        if any(script.startswith(f"{service}-") for service in services):
+            continue
+        if script in classified:
+            continue
+        messages.append(
+            f"scripts/{script} is prefixed by no service name, so every change to it restarts the whole "
+            "stack; rename it <service>-*, or classify it in SHARED_START_PATH / PER_INVOCATION / "
+            "HOST_ONLY in scripts/changed-services.sh"
+        )
+    for script in sorted(classified):
+        if script not in scripts:
+            messages.append(f"scripts/changed-services.sh classifies {script}, which no longer exists")
+    return messages
+
+
 def main():
     repo_dir = sys.argv[1]
     config = json.load(sys.stdin)
@@ -467,6 +577,9 @@ def main():
 
     for message in dependabot_blind_spots(repo_dir):
         report("DEPENDABOT", message)
+
+    for message in recreate_mapping_gaps(repo_dir, services):
+        report("RECREATE", message)
 
     if len(services) < MIN_SERVICES:
         report("FLOOR", f"rendered only {len(services)} services, expected at least {MIN_SERVICES}")

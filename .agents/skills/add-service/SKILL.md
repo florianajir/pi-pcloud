@@ -31,6 +31,10 @@ explicitly which ones you skipped and why.
   service. Skip rc/beta/nightly tags unless the feature we need only exists there, and
   say so if you do. Add a digest for anything security-sensitive.
 - `container_name: pi-<service>`
+- anything the service reads from the host goes in `config/<service>/`, and any
+  script of its own is `scripts/<service>-*.sh` — that naming is what tells
+  `make update` to recreate this container alone instead of the whole stack
+  (step 10)
 - `expose`, not `ports` — everything reaches the LAN through Traefik
 - healthcheck built on an `x-healthcheck-*` anchor; check which tools the image
   actually ships first (curl/wget/bash/nc/python3 vary widely, and `CMD-SHELL`
@@ -133,9 +137,16 @@ so it stays off the dashboard.
 
 Do it in `scripts/<service>-bootstrap.sh` (or `-pre-start.sh`), sourcing
 `scripts/lib.sh`, idempotent and safe on a fresh install, wired into the
-`PRE_START_HOOKS` / `POST_START_HOOKS` list of `scripts/stack-up.sh` as
+`PRE_START_HOOKS` / `POST_START_HOOKS` list of `scripts/run-hooks.sh` as
 `<service>:<script>.sh` (the prefix gates it on `COMPOSE_PROFILES`). That one
 list is what both the systemd unit and `make update` run.
+
+The `<service>-` prefix is not cosmetic: `scripts/changed-services.sh` reads it
+to decide which containers `make update` has to recreate when a pull rewrites
+the script. Same for the config tree — call it `config/<service>/`. A file
+matching neither is answered with "recreate everything", a full-stack down/up on
+every update that touches it, and `tests/compose-invariants.py` fails the build
+rather than let that ship.
 No extra container just to run a script, and no new `.env` keys — reuse
 `ADMIN_USER` / `PASSWORD` and the per-service config files.
 

@@ -61,12 +61,18 @@ Images are refreshed while the stack is still running, so nothing is interrupted
 
 **It usually does not restart the stack.** The last step is `docker compose up -d --remove-orphans`, which recreates only the containers whose image or configuration actually changed — a single new image no longer costs a full-stack outage, and services that did not move are never touched. The whole start sequence (the pre-start hooks that render configuration, the `up`, then the bootstraps) lives in `scripts/stack-up.sh`, which is also `pi-pcloud.service`'s `ExecStart`: an update re-runs exactly what boot runs, so the two cannot drift.
 
-Two cases still take the stack down, both because compose cannot apply them any other way:
+**A changed config file recreates only the services that read it.** `up -d` compares a container's image and spec, not the *contents* of the files bind-mounted into it, so a rewritten `unbound.conf` would sit on disk unread. `scripts/changed-services.sh` names the services a pull obliges the update to recreate, and `make update` does exactly those with `up -d --no-deps --force-recreate`. It needs no table to do it: `config/<service>/` and `scripts/<service>-*.sh` already name their owner, and `tests/compose-invariants.py` fails the build on a file that stops following the convention. `scripts/` counts as config because the generated files (headscale, backrest, headplane, authelia) are gitignored — a pull that re-renders one shows up only as a change to the `*-pre-start.sh` that writes it. (Editing a config by hand is still `make restart`; the update has no way to see it.)
 
-- **The pull changed something under `config/` or `scripts/`.** `up -d` compares a container's image and spec, not the *contents* of the files bind-mounted into it, so a rewritten `unbound.conf` would sit on disk unread. `scripts/` counts because the generated configs (headscale, backrest, headplane, authelia) are gitignored: a pull that re-renders one shows up only as a change to the `*-pre-start.sh` that writes it. (Editing a config by hand is still `make restart` — the update has no way to see it.)
+Two cases still take the whole stack down:
+
+- **A change no single service owns** — `scripts/lib.sh`, `run-hooks.sh`, `stack-up.sh` and the like can alter any rendered config, and the path alone cannot say which. Host-side tooling (`lint.sh`, the `rotate-*` scripts, `pg-major-upgrade.sh`) is explicitly exempt: it is listed in `changed-services.sh` as reaching no running container. Anything the convention does not cover answers "everything", because a config nothing recreates is a config nothing reads.
 - **A network or volume definition moved** — an upstream subnet or driver option. `up -d` refuses outright there; `stack-up.sh` recognises the error, takes the stack down once and brings it back, rather than aborting with the new images already pulled.
 
 `make restart` is still there to force a full restart at any time.
+
+**It waits, and says what did not come up.** After the `up`, `stack-up.sh` polls until every container is running-and-healthy, or 300 s pass, and then names the ones that are not. It is a warning, never a failure: `compose up --wait` would have been the short way to write it, but that exits non-zero on a slow healthcheck, and under systemd a failed `ExecStart` is followed by `ExecStop` — `docker compose down`. One flaky service would take the whole stack down at boot.
+
+**Nothing here is atomic.** `git pull` runs first, and a failure in any later step leaves the checkout on the new commit with the images pulled and the host files applied. There is no rollback; what there is, is the way back printed on failure — `git reset --hard <the previous commit> && make update`.
 
 It also re-runs `install-system`, because a pull can change files this repository copies **outside** itself: the systemd units, the sysctl drop-in, the swap size, the kernel command line, the shell completions. Those copies would otherwise sit stale until the next `make install`. And it validates `.env` against the required-variable list *first*, so a variable added upstream is caught before anything is applied rather than after.
 
