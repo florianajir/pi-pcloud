@@ -186,7 +186,7 @@ def layout_drift(repo_dir):
     messages = []
 
     if re.search(r"^services:", root, re.M):
-        messages.append("compose.yaml declares services of its own; they belong in compose/<domain>.yaml")
+        messages.append("compose.yaml declares services of its own; they belong in compose/compose-<domain>.yaml")
 
     # Entry by entry, not two totals: a count check passes just as happily on an
     # include carrying both keys twice beside one carrying neither.
@@ -194,7 +194,7 @@ def layout_drift(repo_dir):
     for entry in include_entries(root):
         name = re.search(r"^path:\s*\./compose/([A-Za-z0-9_-]+\.yaml)\s*$", entry, re.M)
         if not name:
-            messages.append(f"an include names no ./compose/<domain>.yaml path: {entry.splitlines()[0]}")
+            messages.append(f"an include names no ./compose/compose-<domain>.yaml path: {entry.splitlines()[0]}")
             continue
         name = name.group(1)
         included.add(name)

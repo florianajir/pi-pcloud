@@ -118,11 +118,11 @@ written() {
 
 # --- the exclusive pair is declared, not assumed -----------------------------
 #
-# The whole rule hangs off one label; a rename in compose/media.yaml would otherwise
+# The whole rule hangs off one label; a rename in compose/compose-media.yaml would otherwise
 # turn every guard below into a no-op that still passes.
 
-ok "compose/media.yaml declares the conflict" \
-    "$(grep -c 'pi-pcloud.conflicts-with=stremio' "$WORK/compose/media.yaml")" 1
+ok "compose/compose-media.yaml declares the conflict" \
+    "$(grep -c 'pi-pcloud.conflicts-with=stremio' "$WORK/compose/compose-media.yaml")" 1
 
 # --- "all" is expanded to what it actually covers ----------------------------
 #

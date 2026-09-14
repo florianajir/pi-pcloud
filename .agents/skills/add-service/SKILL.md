@@ -11,11 +11,14 @@ explicitly which ones you skipped and why.
 
 ## 1. Compose basics
 
-- put it in the `compose/<domain>.yaml` it belongs to — `core`, `identity`, `network`,
-  `cloud`, `media`, `knowledge`, `ai`, `monitoring`. The root `compose.yaml` declares
-  no service; it holds `include:`, the networks, the volumes and the canonical `x-`
-  tier anchors, and a new *network* or *volume* goes there, not in the domain file.
-  A new domain file needs an `include:` entry with `project_directory: .`
+- put it in the `compose/compose-<domain>.yaml` it belongs to — `core`, `identity`,
+  `network`, `cloud`, `media`, `knowledge`, `ai`, `monitoring`. The root
+  `compose.yaml` declares no service; it holds `include:`, the networks, the
+  volumes and the canonical `x-` tier anchors, and a new *network* or *volume*
+  goes there, not in the domain file. A new domain file needs an `include:`
+  entry carrying both `project_directory: .` and `env_file: /dev/null`, and the
+  `compose-` prefix is mandatory: Dependabot's fetcher never opens a basename
+  without it, so a `core.yaml` silently stops every image-bump PR.
 
 - `<<: *service-defaults` (journald logging + `restart: unless-stopped`)
 - pinned image tag — look up the newest **stable** release upstream before writing it
@@ -98,9 +101,9 @@ Add the container name to the right group in `GROUPS` in
 ## 8. Backrest
 
 If the service holds state worth keeping, mount its data read-only into backrest as
-`/userdata/<service>` in `compose/monitoring.yaml`. Databases are dumped instead, via a
-`db-backup.sh` hook in `config/backrest/config.json.template`. Add large regenerable
-data (thumbnails, transcodes, model caches) to the plan `excludes`.
+`/userdata/<service>` in `compose/compose-monitoring.yaml`. Databases are dumped
+instead, via a `db-backup.sh` hook in `config/backrest/config.json.template`. Add
+large regenerable data (thumbnails, transcodes, model caches) to the plan `excludes`.
 
 ## 9. Homepage
 

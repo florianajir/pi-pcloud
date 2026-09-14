@@ -10,7 +10,7 @@ set -eu
 
 . "$(dirname "$0")/lib.sh"
 
-# Keep in sync with the llama-cpp image tag in compose/ai.yaml.
+# Keep in sync with the llama-cpp image tag in compose/compose-ai.yaml.
 LLAMA_IMAGE="${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-b10481}"
 FETCH_SCRIPT="$PROJECT_DIR/config/llama-cpp/fetch-models.sh"
 

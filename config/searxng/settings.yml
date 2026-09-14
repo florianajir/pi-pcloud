@@ -1,5 +1,5 @@
 # SearXNG's own configuration. Mounted read-only at /etc/searxng/settings.yml,
-# *inside* a named volume covering /etc/searxng - see compose/knowledge.yaml for why the
+# *inside* a named volume covering /etc/searxng - see compose/compose-knowledge.yaml for why the
 # directory cannot simply be a bind mount.
 #
 # Static, not rendered: everything host-specific is an environment override the

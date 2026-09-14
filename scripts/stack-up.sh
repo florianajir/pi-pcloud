@@ -37,7 +37,7 @@ fi
 # `stremio` and `stremio-lan` are one server in two networking modes, sharing a
 # single data volume and the same Traefik host rules. Compose cannot express
 # mutual exclusion, so refuse the combination before anything starts. The pair
-# is spelled out here rather than read from compose/media.yaml's
+# is spelled out here rather than read from compose/compose-media.yaml's
 # pi-pcloud.conflicts-with label (which is what services.sh and the picker use),
 # so the boot path stays a plain string check.
 profiles_have() {

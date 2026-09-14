@@ -188,7 +188,7 @@ cp "$REPO_DIR/compose.yaml" "$drifted/compose.yaml"
 cp "$REPO_DIR"/compose/*.yaml "$drifted/compose/"
 cp "$REPO_DIR/config/postgres/init-databases.sh" "$drifted/config/postgres/"
 sed -i 's/^x-cpu-prio-batch: &cpu-prio-batch .*$/x-cpu-prio-batch: \&cpu-prio-batch 999/' \
-    "$drifted/compose/media.yaml"
+    "$drifted/compose/compose-media.yaml"
 drift_hits="$(printf '%s' '{"services": {"a": {"image": "x:1", "mem_limit": "64m"}}}' \
     | python3 "$TESTS_DIR/compose-invariants.py" "$drifted" | grep -c '^LAYOUT ' || true)"
 rm -rf "$drifted"

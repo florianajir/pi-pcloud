@@ -317,7 +317,7 @@ a media server that serves files, not this.
 
 ## DNS inside containers
 
-Containers use Docker's embedded resolver (`127.0.0.11`), which forwards to the host's configuration. Two exceptions pin public resolvers directly in `compose/media.yaml` (`dns: 1.1.1.1`): **`prowlarr`** and **`flaresolverr`**, so indexer lookups neither depend on nor are filtered by Pi-hole.
+Containers use Docker's embedded resolver (`127.0.0.11`), which forwards to the host's configuration. Two exceptions pin public resolvers directly in `compose/compose-media.yaml` (`dns: 1.1.1.1`): **`prowlarr`** and **`flaresolverr`**, so indexer lookups neither depend on nor are filtered by Pi-hole.
 
 **`ddns-updater` is a third**, at the application level (`RESOLVER_ADDRESS: 1.1.1.1:53`) since only the names in its own settings need it. It looks a name up *before* writing it, so the first AAAA publication seeds a `NODATA` into the router's negative cache, and its healthcheck — which verifies each record by resolving it — then reports a mismatch on a correct record. Measured: `any.<HOST_NAME>` returned nothing through the router and the right address at `1.1.1.1`, five failed checks before the resolver was pinned.
 

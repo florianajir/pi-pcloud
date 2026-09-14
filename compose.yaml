@@ -32,6 +32,15 @@
 # defaults it to <project_directory>/.env), behind the back of --env-file. That
 # is how `docker compose --env-file /dev/null config` in tests/compose-test.sh
 # got .env's values back: the flag stops the CLI, not the include.
+#
+# The compose- prefix on every filename stutters against the directory it sits
+# in, and is kept anyway. Dependabot owns every upstream image pin under
+# compose/; its fetcher matches basenames against
+# /(docker-)?compose(-[\w]+)?(?>\.[\w-]+)?\.ya?ml/i and follows neither
+# `include:` nor subdirectories, so a file named core.yaml is one it never
+# opens - and the way that fails is silence, not an error.
+# .github/dependabot.yml naming /compose beside / is the other half, and
+# tests/compose-invariants.py fails the build if either half is undone.
 
 x-service-defaults: &service-defaults
   logging:
@@ -97,28 +106,28 @@ x-healthcheck-fast: &healthcheck-fast
   start_period: 10s
 
 include:
-  - path: ./compose/core.yaml
+  - path: ./compose/compose-core.yaml
     project_directory: .
     env_file: /dev/null
-  - path: ./compose/identity.yaml
+  - path: ./compose/compose-identity.yaml
     project_directory: .
     env_file: /dev/null
-  - path: ./compose/network.yaml
+  - path: ./compose/compose-network.yaml
     project_directory: .
     env_file: /dev/null
-  - path: ./compose/cloud.yaml
+  - path: ./compose/compose-cloud.yaml
     project_directory: .
     env_file: /dev/null
-  - path: ./compose/media.yaml
+  - path: ./compose/compose-media.yaml
     project_directory: .
     env_file: /dev/null
-  - path: ./compose/knowledge.yaml
+  - path: ./compose/compose-knowledge.yaml
     project_directory: .
     env_file: /dev/null
-  - path: ./compose/ai.yaml
+  - path: ./compose/compose-ai.yaml
     project_directory: .
     env_file: /dev/null
-  - path: ./compose/monitoring.yaml
+  - path: ./compose/compose-monitoring.yaml
     project_directory: .
     env_file: /dev/null
 

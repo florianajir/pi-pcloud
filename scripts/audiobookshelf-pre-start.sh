@@ -23,7 +23,7 @@ ensure_dir() {
 }
 
 # The uid/gid the services writing here actually run as: every PUID/PGID in
-# compose/media.yaml is 1000. Deliberately not fix_ownership's "whoever owns the
+# compose/compose-media.yaml is 1000. Deliberately not fix_ownership's "whoever owns the
 # project directory" - that exists so generated files stay readable to the
 # person running the stack, which is a different question from who must be able
 # to *write* into a handoff folder. On the usual install both are 1000; where

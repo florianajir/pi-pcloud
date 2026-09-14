@@ -114,7 +114,7 @@ main() {
     # Authelia binds to lldap as its admin, whose password is PASSWORD.
     write_password_secret ldap_password
 
-    # The credential Authelia actually reads; AUTHELIA_DB_PASSWORD in compose/identity.yaml
+    # The credential Authelia actually reads; AUTHELIA_DB_PASSWORD in compose/compose-identity.yaml
     # is not.
     write_password_secret db_password
 

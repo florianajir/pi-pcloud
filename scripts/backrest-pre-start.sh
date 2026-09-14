@@ -57,7 +57,7 @@ BACKREST_INSTANCE="$(env_value BACKREST_INSTANCE)"
 LOCAL_REPO_ID="usb"
 LOCAL_PLAN_ID="usb-env"
 # Container-side path. ${DATA_LOCATION}/backrest/repos is bind-mounted at
-# /repos in compose/monitoring.yaml, so restic sees a plain local repository here.
+# /repos in compose/compose-monitoring.yaml, so restic sees a plain local repository here.
 LOCAL_REPO_URI="/repos/env"
 
 # Trailing slash stripped so the host paths below don't come out with "//" in

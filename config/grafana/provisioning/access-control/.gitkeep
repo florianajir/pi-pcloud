@@ -1,4 +1,4 @@
-Deliberately empty. The mount in compose/monitoring.yaml replaces the image's whole
+Deliberately empty. The mount in compose/compose-monitoring.yaml replaces the image's whole
 /etc/grafana/provisioning tree, and Grafana logs an error-level line on every
 start for each of its six subdirectories that is then missing - alerting and
 plugins do so today, the other two are here so a version that starts checking

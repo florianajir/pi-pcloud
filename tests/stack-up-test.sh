@@ -130,8 +130,8 @@ done
 # Matched literally, one assertion per side, because that is the point: a
 # refactor that moves any of the three should stop here and be re-checked
 # against the other two rather than pass on a pattern that still fits.
-contains "compose/ai.yaml prefixes the key it hands Open WebUI" \
-    "$(grep -o 'OPENAI_API_KEY=[^;]*' "$REPO_DIR/compose/ai.yaml")" \
+contains "compose/compose-ai.yaml prefixes the key it hands Open WebUI" \
+    "$(grep -o 'OPENAI_API_KEY=[^;]*' "$REPO_DIR/compose/compose-ai.yaml")" \
     'OPENAI_API_KEY=sk-$(cat /run/secrets/agentgateway_llm_key)'
 contains "the hook prefixes the key it writes for the gateway" \
     "$(grep -o 'llm_api_key="[^"]*"[^"]*"' "$REPO_DIR/scripts/agentgateway-pre-start.sh")" \

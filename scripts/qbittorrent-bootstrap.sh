@@ -20,7 +20,7 @@ NTFY_ENV_FILE="$PROJECT_DIR/config/ntfy/ntfy.env"
 NTFY_COMPLETE_URL="http://ntfy/downloads"
 # The categories that route a release to a library, "<name>:<save path>". Each save
 # path is a folder compose mounts into a reader, so this list must stay in step with
-# the kavita and audiobookshelf volumes in compose/media.yaml, with scripts/kavita-pre-start.sh
+# the kavita and audiobookshelf volumes in compose/compose-media.yaml, with scripts/kavita-pre-start.sh
 # and with scripts/audiobookshelf-pre-start.sh. Prowlarr maps its grabs onto books,
 # manga and audiobooks (scripts/prowlarr-bootstrap.sh); all four double as the
 # categories to pick by hand when adding a torrent, which is the only way a manual add
@@ -40,7 +40,7 @@ NTFY_COMPLETE_URL="http://ntfy/downloads"
 #
 # shelfmark-audiobooks is staging, not a library: it shares /downloads/shelfmark with
 # the plain shelfmark category so a raw release tree never reaches a reader, and exists
-# only so qBittorrent's list shows which staged grab is an audiobook (compose/media.yaml's
+# only so qBittorrent's list shows which staged grab is an audiobook (compose/compose-media.yaml's
 # QBITTORRENT_CATEGORY_AUDIOBOOK). Its save path has to be set explicitly - left empty,
 # AutoTMM would derive /downloads/shelfmark-audiobooks from the name and split the tree.
 # The plain shelfmark category is deliberately absent: its empty save path already

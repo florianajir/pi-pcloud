@@ -8,7 +8,7 @@
 # Usage: pg-major-upgrade.sh --to <image> [--apply] [--keep-dumps] [--rehearse]
 #   --to <image>   target image, e.g.
 #                  ghcr.io/immich-app/postgres:18-vectorchord1.1.1@sha256:...
-#   --apply        rewrite compose/core.yaml's postgres image and data mount on
+#   --apply        rewrite compose/compose-core.yaml's postgres image and data mount on
 #                  success (otherwise the two edits are printed for review)
 #   --keep-dumps   do not delete the dump directory afterwards
 #   --rehearse     dry-run against the live cluster: dump and restore for real
@@ -69,7 +69,7 @@ done
 
 [ -n "$TARGET_IMAGE" ] || die "--to <image> is required"
 if [ "$REHEARSE" = "1" ]; then
-    [ "$APPLY" = "0" ] || die "--rehearse and --apply are contradictory: a rehearsal must not edit compose/core.yaml"
+    [ "$APPLY" = "0" ] || die "--rehearse and --apply are contradictory: a rehearsal must not edit compose/compose-core.yaml"
     log "REHEARSAL: nothing will be stopped; the live cluster is only read"
 fi
 command -v jq >/dev/null 2>&1 || die "jq is required"
@@ -295,7 +295,7 @@ sort -o "$DUMP_DIR/counts.after" "$DUMP_DIR/counts.after"
 if ! counts_diff="$(diff "$DUMP_DIR/counts.before" "$DUMP_DIR/counts.after")"; then
     log "row counts differ (< before, > after):"
     printf '%s\n' "$counts_diff" | head -n 40 >&2
-    die "$NEW_DIR is suspect. The old cluster at $OLD_DIR is untouched: leave compose/core.yaml as it is and 'make start' to bring the stopped services back on it."
+    die "$NEW_DIR is suspect. The old cluster at $OLD_DIR is untouched: leave compose/compose-core.yaml as it is and 'make start' to bring the stopped services back on it."
 fi
 log "row counts match exactly: $(wc -l < "$DUMP_DIR/counts.after") tables across $(printf '%s' "$DATABASES" | wc -w) databases"
 
@@ -316,11 +316,11 @@ if [ "$REHEARSE" = "1" ]; then
     exit 0
 fi
 
-# The postgres service lives in compose/core.yaml since compose.yaml became
+# The postgres service lives in compose/compose-core.yaml since compose.yaml became
 # `include:` plus the networks and volumes. Resolved once, and asserted, so a
 # service that moves domain files fails here instead of silently matching
 # nothing and leaving compose pointed at the old major's directory.
-PG_COMPOSE_FILE="$PROJECT_DIR/compose/core.yaml"
+PG_COMPOSE_FILE="$PROJECT_DIR/compose/compose-core.yaml"
 [ -f "$PG_COMPOSE_FILE" ] || die "$PG_COMPOSE_FILE is missing; the postgres service has moved - find it under compose/ and re-run"
 
 old_image_line="$(grep -n 'image: ghcr.io/immich-app/postgres:' "$PG_COMPOSE_FILE" | head -n1)"
@@ -349,7 +349,7 @@ if [ "$APPLY" = "1" ]; then
 else
     cat <<EOF
 
-Data is migrated. Two edits remain in compose/core.yaml (postgres service):
+Data is migrated. Two edits remain in compose/compose-core.yaml (postgres service):
 
   image: $TARGET_IMAGE
   volumes:

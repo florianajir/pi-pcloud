@@ -82,7 +82,7 @@ def need_met(rows, service):
 
     A conflicts-with pair is one service in two modes, so whatever needs one
     mode is served by the other: comet is a stremio addon and runs against
-    stremio or stremio-lan indifferently (compose/media.yaml gives stremio-lan its own
+    stremio or stremio-lan indifferently (compose/compose-media.yaml gives stremio-lan its own
     extra_hosts entry for exactly that). Without this, comet's companion-of
     would make it a hard dependant of the VPN mode alone, and the picker would
     be the one place unable to express a setup the rest of the stack supports.

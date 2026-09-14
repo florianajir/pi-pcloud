@@ -41,7 +41,7 @@ OPENROUTER_URL="http://agentgateway:4000/openrouter/v1"
 # disagree with it. Hex, which is what makes it safe to splice into SQL.
 GATEWAY_KEY_FILE="$(resolve_data_location_path)/agentgateway/secrets/llm_api_key"
 # Must match the model `name` in config/agentgateway/config.yaml, which is in
-# turn LLAMA_ARG_ALIAS in compose/ai.yaml.
+# turn LLAMA_ARG_ALIAS in compose/compose-ai.yaml.
 LLAMA_MODEL="gemma-4-e2b-it"
 # Each settings group carries its own marker row, so it is seeded once and never
 # re-imposed - anything changed afterwards in Admin Settings stays changed. Bump
@@ -82,7 +82,7 @@ STT_BASE_URL="http://parakeet:8000/v1"
 STT_MODEL="parakeet-tdt-0.6b-v3"
 WEB_SEARCH_MARKER="pi-pcloud.web_search"
 WEB_SEARCH_VERSION='"1"'
-# Must match SEARXNG_QUERY_URL on the open-webui service in compose/ai.yaml.
+# Must match SEARXNG_QUERY_URL on the open-webui service in compose/compose-ai.yaml.
 WEB_SEARCH_URL="http://searxng:8080/search"
 LOCALE_MARKER="pi-pcloud.default_locale"
 LOCALE_VERSION="\"1-$DEFAULT_LANGUAGE\""
@@ -495,7 +495,7 @@ SQL
 #
 # An empty engine selects the built-in whisper, which runs inside the open-webui
 # container: `base`, 20.2% WER on read French, and no room under that container's
-# 1g for anything better. See the parakeet service in compose/ai.yaml.
+# 1g for anything better. See the parakeet service in compose/compose-ai.yaml.
 apply_stt_defaults() {
     psql_owui -q <<SQL
 INSERT INTO config (key, value, updated_at) VALUES
@@ -541,7 +541,7 @@ DELETE FROM model WHERE id = '$STALE_MODEL_ID' AND base_model_id IS NULL;
 SQL
 }
 
-# DEFAULT_USER_ROLE is PersistentConfig: the value in compose/ai.yaml only applies
+# DEFAULT_USER_ROLE is PersistentConfig: the value in compose/compose-ai.yaml only applies
 # to an instance that has never started, so the database still holds "pending".
 # Accounts already parked had passed Authelia, so release them too.
 #

@@ -3,7 +3,7 @@
 #
 # Included by compose.yaml, which declares the networks and volumes named
 # below and supplies the .env this file interpolates. Not startable on its
-# own: `docker compose -f compose/network.yaml` resolves every relative
+# own: `docker compose -f compose/compose-network.yaml` resolves every relative
 # path against compose/ instead of the project root.
 
 # --- shared preamble: identical in every compose/*.yaml ---

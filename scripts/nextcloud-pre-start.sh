@@ -2,11 +2,11 @@
 # Pre-start: let Nextcloud organise the media libraries it mounts, not just
 # share them.
 #
-# Making those bind mounts read-write in compose/cloud.yaml is necessary but not
+# Making those bind mounts read-write in compose/compose-cloud.yaml is necessary but not
 # sufficient. Nextcloud's PHP runs as uid 33 (www-data) while everything under
 # DATA_LOCATION belongs to uid/gid 1000 in mode 0755, so uid 33 would still get
 # r-x and could not create, move or delete anything - the Files app would show
-# a permission error on every attempt. compose/cloud.yaml puts the container in gid
+# a permission error on every attempt. compose/compose-cloud.yaml puts the container in gid
 # 1000 via `group_add`; this hook is the other half, granting that gid write
 # access to the tree.
 #

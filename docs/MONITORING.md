@@ -104,7 +104,7 @@ The group decides the check interval, the retry budget and the ntfy priority:
 
 `ntfy` sits in **Core** because it delivers every other alert. A container in `compose/*.yaml` but in no group above is monitored under **Tools & Observability**.
 
-`agentgateway` is the one service where this container monitor is the *only* check. Its image is distroless — `/app/agentgateway`, `ld.so` and a CA bundle, no shell and no HTTP client — so `compose/ai.yaml` can declare no healthcheck for it, and Docker reports it `running` rather than `healthy`.
+`agentgateway` is the one service where this container monitor is the *only* check. Its image is distroless — `/app/agentgateway`, `ld.so` and a CA bundle, no shell and no HTTP client — so `compose/compose-ai.yaml` can declare no healthcheck for it, and Docker reports it `running` rather than `healthy`.
 
 **Where the notification is attached matters as much as the priority.** A Kuma group is a worst-of-children aggregate whose down message lists the failing children. Groups marked *the group only* have silent children, so a gluetun outage sends one `Child monitors down: qbittorrent, prowlarr, …` push instead of six. Groups marked *each monitor* alert individually, for the tiers where the exact failing component matters.
 
@@ -188,7 +188,7 @@ If OIDC ever breaks and locks you out, the escape hatch is a query parameter, tw
 # 1. Reach the login page without being bounced into the broken OIDC flow:
 #    https://grafana.<HOST_NAME>/login?disableAutoLogin
 # 2. Give yourself something to log in *with* — add `- GF_AUTH_BASIC_ENABLED=true`
-#    to grafana's environment in compose/monitoring.yaml, then:
+#    to grafana's environment in compose/compose-monitoring.yaml, then:
 docker compose up -d grafana
 docker exec pi-grafana grafana cli admin reset-admin-password '<new password>'
 ```
@@ -222,7 +222,7 @@ Every target already serves `/metrics` natively or does so behind a single flag.
 
 | Job | Endpoint | What turned it on |
 |-----|----------|-------------------|
-| `traefik` | `traefik:8080/metrics` | `--metrics.prometheus=true` in `compose/core.yaml`. It lands on the implicit `traefik` entrypoint, beside `api@internal` — *not* on `websecure`, where `/metrics` is a 404. `--metrics.prometheus.addRoutersLabels=true` beside it is what makes the rate readable per site; router labels are off by default |
+| `traefik` | `traefik:8080/metrics` | `--metrics.prometheus=true` in `compose/compose-core.yaml`. It lands on the implicit `traefik` entrypoint, beside `api@internal` — *not* on `websecure`, where `/metrics` is a 404. `--metrics.prometheus.addRoutersLabels=true` beside it is what makes the rate readable per site; router labels are off by default |
 | `authelia` | `authelia:9959/metrics` | `telemetry.metrics` in `config/authelia/configuration.yml.template`, with the address spelled out rather than defaulted. Its own listener, so `auth.<HOST_NAME>/metrics` stays a 404 |
 | `headscale` | `headscale:9090/metrics` | nothing — `metrics_listen_addr` was already set and the port already exposed |
 | `agentgateway` | `agentgateway:15020/metrics` | nothing — the stats listener is on by default; only the `expose` is new |

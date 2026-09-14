@@ -2,7 +2,7 @@
 #
 # Speech-to-text for open-webui's microphone button, split out of the open-webui
 # container so the model is sized against its own limit rather than that
-# container's 1g - see the parakeet service in compose/ai.yaml for the numbers that
+# container's 1g - see the parakeet service in compose/compose-ai.yaml for the numbers that
 # ruled out the bundled faster-whisper.
 FROM python:3.14-slim
 
