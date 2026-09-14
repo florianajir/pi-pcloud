@@ -34,10 +34,6 @@
                     - abbr: IN
                       href: https://www.linkedin.com
                       icon: si-linkedin
-          - X:
-                    - abbr: X
-                      href: https://x.com
-                      icon: si-x
           - AliExpress:
                     - abbr: AE
                       href: https://www.aliexpress.com
