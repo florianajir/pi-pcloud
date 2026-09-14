@@ -27,7 +27,7 @@
         url: https://search.{{HOMEPAGE_VAR_HOST_NAME}}/search?q=
         suggestionUrl: http://searxng:8080/autocompleter?q=
         showSearchSuggestions: true
-        target: _blank
+        target: _self
 
 - resources:
         cpu: true
