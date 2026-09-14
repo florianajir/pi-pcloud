@@ -39,11 +39,7 @@
                       href: https://x.com
                       icon: si-x
           # The upstream tmux wiki page that lists the default key bindings.
-          - tmux keys:
+          - tmux wiki:
                     - abbr: TM
                       href: https://github.com/tmux/tmux/wiki/Getting-Started
-                      icon: si-tmux
-          - oh-my-tmux:
-                    - abbr: OM
-                      href: https://github.com/gpakosz/.tmux
                       icon: si-tmux
