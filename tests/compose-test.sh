@@ -208,11 +208,12 @@ fi
 
 # DEPENDABOT reads the repository too, so it takes the same treatment: a tree
 # holding one image pin, broken once per way the fetcher can be blinded.
-blind() {
-    _label="$1"
-    _name="$2"
-    _drop="$3"
-    _tree="$(mktemp -d)"
+# The control tree every DEPENDABOT fixture starts from: a repository the
+# checker passes on, so the one defect each fixture introduces is the only
+# thing it can be reporting. Building it short - omitting the Dockerfiles, say -
+# makes the reverse check fire on every tree and every fixture vacuous.
+dependabot_tree() {
+    _tree="$1"
     mkdir -p "$_tree/compose" "$_tree/.github" "$_tree/config/postgres"
     # The other categories read these two and would stop on a tree without them.
     cp "$REPO_DIR/compose.yaml" "$_tree/compose.yaml"
@@ -221,21 +222,46 @@ blind() {
     # too - compose.yaml pins nothing, and without this the root could stop
     # being listed with nothing here noticing.
     cp "$REPO_DIR/compose.test.yaml" "$_tree/compose.test.yaml"
-    printf 'services:\n  x:\n    image: foo:1\n' > "$_tree/compose/$_name"
-    if [ -n "$_drop" ]; then
-        grep -vF -e "$_drop" "$REPO_DIR/.github/dependabot.yml" > "$_tree/.github/dependabot.yml"
-    else
-        cp "$REPO_DIR/.github/dependabot.yml" "$_tree/.github/dependabot.yml"
-    fi
+    for _f in "$REPO_DIR"/config/*/Dockerfile; do
+        _d="$_tree/config/$(basename "$(dirname "$_f")")"
+        mkdir -p "$_d" && cp "$_f" "$_d/"
+    done
+}
+
+# Asserts on the message, not on a count of the category. A fixture that merely
+# counts `^DEPENDABOT ` lines stops testing anything the moment a new sub-check
+# reports unconditionally - which is exactly how the three fixtures below were
+# silently neutered when the Dockerfile half was added.
+dependabot_says() {
+    _label="$1"
+    _tree="$2"
+    _expect="$3"
     _hits="$(printf '%s' '{"services": {"a": {"image": "x:1", "mem_limit": "64m"}}}' \
-        | python3 "$TESTS_DIR/compose-invariants.py" "$_tree" | grep -c '^DEPENDABOT ' || true)"
+        | python3 "$TESTS_DIR/compose-invariants.py" "$_tree" \
+        | grep -cF -e "DEPENDABOT $_expect" || true)"
     rm -rf "$_tree"
     if [ "$_hits" -gt 0 ]; then
         pass=$((pass + 1))
     else
         fail=$((fail + 1))
-        printf 'FAIL %s (the checker reported nothing)\n' "$_label"
+        printf 'FAIL %s (no finding said: %s)\n' "$_label" "$_expect"
     fi
+}
+
+blind() {
+    _label="$1"
+    _name="$2"
+    _drop="$3"
+    _expect="$4"
+    _t="$(mktemp -d)"
+    dependabot_tree "$_t"
+    printf 'services:\n  x:\n    image: foo:1\n' > "$_t/compose/$_name"
+    if [ -n "$_drop" ]; then
+        grep -vF -e "$_drop" "$REPO_DIR/.github/dependabot.yml" > "$_t/.github/dependabot.yml"
+    else
+        cp "$REPO_DIR/.github/dependabot.yml" "$_t/.github/dependabot.yml"
+    fi
+    dependabot_says "$_label" "$_t" "$_expect"
 }
 
 # The same blind spot one ecosystem over: `docker` reads a directory the same
@@ -245,44 +271,46 @@ blind_docker() {
     _label="$1"
     _new_dockerfile="$2"   # a directory that gains a Dockerfile, or empty
     _new_entry="$3"        # a directory added to the docker update, or empty
-    _tree="$(mktemp -d)"
-    mkdir -p "$_tree/compose" "$_tree/.github" "$_tree/config/postgres"
-    # A tree the compose half passes on, so the only finding is the docker one.
-    cp "$REPO_DIR/compose.yaml" "$REPO_DIR/compose.test.yaml" "$_tree/"
-    cp "$REPO_DIR"/compose/*.yaml "$_tree/compose/"
-    cp "$REPO_DIR/config/postgres/init-databases.sh" "$_tree/config/postgres/"
-    for _f in "$REPO_DIR"/config/*/Dockerfile; do
-        _d="$_tree/config/$(basename "$(dirname "$_f")")"
-        mkdir -p "$_d" && cp "$_f" "$_d/"
-    done
+    _expect="$4"
+    _t="$(mktemp -d)"
+    dependabot_tree "$_t"
+    cp "$REPO_DIR"/compose/*.yaml "$_t/compose/"
     if [ -n "$_new_entry" ]; then
         awk -v dir="$_new_entry" '{ print }
             /- "\/config\/backrest"/ { printf "      - \"%s\"\n", dir }' \
-            "$REPO_DIR/.github/dependabot.yml" > "$_tree/.github/dependabot.yml"
+            "$REPO_DIR/.github/dependabot.yml" > "$_t/.github/dependabot.yml"
     else
-        cp "$REPO_DIR/.github/dependabot.yml" "$_tree/.github/dependabot.yml"
+        cp "$REPO_DIR/.github/dependabot.yml" "$_t/.github/dependabot.yml"
     fi
     if [ -n "$_new_dockerfile" ]; then
-        mkdir -p "$_tree/$_new_dockerfile"
-        printf 'FROM alpine:3.22\n' > "$_tree/$_new_dockerfile/Dockerfile"
+        mkdir -p "$_t/$_new_dockerfile"
+        printf 'FROM alpine:3.22\n' > "$_t/$_new_dockerfile/Dockerfile"
     fi
-    _hits="$(printf '%s' '{"services": {"a": {"image": "x:1", "mem_limit": "64m"}}}' \
-        | python3 "$TESTS_DIR/compose-invariants.py" "$_tree" | grep -c '^DEPENDABOT ' || true)"
-    rm -rf "$_tree"
-    if [ "$_hits" -gt 0 ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s (the checker reported nothing)\n' "$_label"
-    fi
+    dependabot_says "$_label" "$_t" "$_expect"
 }
 
-blind_docker "a new Dockerfile no docker update names" config/newthing ''
-blind_docker "a docker update naming a directory with no Dockerfile" '' /config/ghost
+# The control itself: the tree every fixture starts from must be clean, or the
+# fixtures below prove nothing. This is the assertion the Dockerfile half broke.
+control="$(mktemp -d)"
+dependabot_tree "$control"
+cp "$REPO_DIR"/compose/*.yaml "$control/compose/"
+cp "$REPO_DIR/.github/dependabot.yml" "$control/.github/dependabot.yml"
+control_hits="$(printf '%s' '{"services": {"a": {"image": "x:1", "mem_limit": "64m"}}}' \
+    | python3 "$TESTS_DIR/compose-invariants.py" "$control" | grep -c '^DEPENDABOT ' || true)"
+rm -rf "$control"
+ok "the tree the DEPENDABOT fixtures start from is itself clean" "$control_hits" 0
 
-blind "a domain file renamed to one Dependabot never fetches" core.yaml ''
-blind "a /compose that no docker-compose update names" compose-core.yaml '- "/compose"'
-blind "a / that no docker-compose update names" compose-core.yaml '- "/"'
+blind_docker "a new Dockerfile no docker update names" config/newthing '' \
+    "/config/newthing holds a Dockerfile but no docker update names"
+blind_docker "a docker update naming a directory with no Dockerfile" '' /config/ghost \
+    "a docker update names /config/ghost, which holds no Dockerfile"
+
+blind "a domain file renamed to one Dependabot never fetches" core.yaml '' \
+    "compose/core.yaml pins images under a name Dependabot never fetches"
+blind "a /compose that no docker-compose update names" compose-core.yaml '- "/compose"' \
+    "images are pinned under /compose but no docker-compose update names"
+blind "a / that no docker-compose update names" compose-core.yaml '- "/"' \
+    "images are pinned under / but no docker-compose update names"
 
 # --- and it must never echo a value it was handed ---------------------------
 #

@@ -13,9 +13,11 @@ literal, and pipes straight into this script so the raw render never lands in
 a shell variable.
 """
 
+import fnmatch
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -304,7 +306,8 @@ def dependabot_blind_spots(repo_dir):
         return messages
     config = config_path.read_text()
 
-    for directory in sorted(needed - dependabot_directories(config, "docker-compose")):
+    compose_named = dependabot_directories(config, "docker-compose")
+    for directory in sorted(d for d in needed if not covers(compose_named, d)):
         messages.append(
             f"images are pinned under {directory} but no docker-compose update names that "
             f"directory, so nothing bumps them"
@@ -317,17 +320,56 @@ def dependabot_blind_spots(repo_dir):
     # here and a first one would need this widened.)
     named = dependabot_directories(config, "docker")
     present = dockerfile_dirs(repo_dir)
-    for directory in sorted(present - named):
+    for directory in sorted(d for d in present if not covers(named, d)):
         messages.append(
             f"{directory} holds a Dockerfile but no docker update names that directory, "
             f"so its base image never bumps"
         )
-    for directory in sorted(named - present):
+    for entry in sorted(e for e in named if not any(covers({e}, d) for d in present)):
         messages.append(
-            f"a docker update names {directory}, which holds no Dockerfile; Dependabot "
+            f"a docker update names {entry}, which holds no Dockerfile; Dependabot "
             f"errors on that entry instead of skipping it"
         )
     return messages
+
+
+def as_directory(entry):
+    """One `directories:` scalar, normalised for comparison.
+
+    Dependabot accepts "/config/piper" and "/config/piper/" alike; comparing the
+    literal scalars would fail the build twice over on the trailing slash - once
+    for an uncovered Dockerfile and once for an entry naming nothing.
+    """
+    trimmed = entry.rstrip("/")
+    return trimmed or "/"
+
+
+def covers(named, directory):
+    """Whether a set of `directories:` entries covers one directory.
+
+    Entries may be globs (`/config/*`), which is exactly the edit someone makes
+    to stop hand-maintaining five of them - a guard that rejected it would block
+    the simplification it argues for.
+    """
+    return any(fnmatch.fnmatch(directory, entry) for entry in named)
+
+
+def tracked_files(repo_dir):
+    """Every path git tracks, or None when this is not a checkout.
+
+    Dependabot reads the repository, not the working tree: a gitignored
+    .venv-lint, a scratch Dockerfile.bak or a worktree checked out inside the
+    tree are all invisible to it. The walk below is the fallback for the
+    synthetic trees the tests build, which are not git repositories.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(repo_dir), "ls-files", "-z"],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return [path for path in done.stdout.split("\0") if path]
 
 
 def dockerfile_dirs(repo_dir):
@@ -339,6 +381,16 @@ def dockerfile_dirs(repo_dir):
     """
     root = Path(repo_dir)
     found = set()
+
+    tracked = tracked_files(root)
+    if tracked is not None:
+        for path in tracked:
+            if not DEPENDABOT_DOCKERFILE_NAME.search(os.path.basename(path)):
+                continue
+            rel = os.path.dirname(path)
+            found.add("/" + rel if rel else "/")
+        return found
+
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [
             d for d in dirnames
@@ -365,11 +417,18 @@ def dependabot_directories(config, ecosystem):
     for block in re.split(r"^[ \t]*-[ \t]+(?=[A-Za-z_-]+:)", config, flags=re.M)[1:]:
         # Anchored at both ends: unanchored, "docker" also matches the
         # "docker-compose" entry and each would inherit the other's directories.
-        if not re.search(rf'^\s*package-ecosystem:\s*"?{name}"?\s*$', block, re.M):
+        # The trailing `(\s+#.*)?` matters in a file where every other line is
+        # annotated: without it `package-ecosystem: "docker"  # base images`
+        # stops matching and every Dockerfile reads as uncovered.
+        if not re.search(rf'^\s*package-ecosystem:\s*"?{name}"?\s*(#.*)?$', block, re.M):
             continue
-        covered.update(re.findall(r'^\s*directory:\s*"?([^"\s]+)"?\s*$', block, re.M))
+        covered.update(
+            as_directory(d) for d in re.findall(r'^\s*directory:\s*"?([^"\s]+)"?\s*$', block, re.M)
+        )
         for inline in re.findall(r"^\s*directories:\s*\[([^\]]*)\]\s*$", block, re.M):
-            covered.update(item.strip().strip("\"'") for item in inline.split(",") if item.strip())
+            covered.update(
+                as_directory(item.strip().strip("\"'")) for item in inline.split(",") if item.strip()
+            )
         listing = False
         for line in block.split("\n"):
             if re.match(r"^\s*directories:\s*$", line):
@@ -379,7 +438,7 @@ def dependabot_directories(config, ecosystem):
                 continue
             item = re.match(r'^\s*-\s*"?([^"\s]+)"?\s*$', line)
             if item:
-                covered.add(item.group(1))
+                covered.add(as_directory(item.group(1)))
             elif line.strip() and not line.lstrip().startswith("#"):
                 listing = False
     return covered
