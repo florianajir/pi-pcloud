@@ -11,6 +11,10 @@ explicitly which ones you skipped and why.
 
 ## 1. Compose basics
 
+- if the service builds from a Dockerfile rather than pulling an image, add its
+  directory to the `docker` update in `.github/dependabot.yml`. Nothing else
+  reminds you, and without it the base image is never bumped;
+  `tests/compose-invariants.py` fails the build until you do.
 - put it in the `compose/compose-<domain>.yaml` it belongs to — `core`, `identity`,
   `network`, `cloud`, `media`, `knowledge`, `ai`, `monitoring`. The root
   `compose.yaml` declares no service; it holds `include:`, the networks, the

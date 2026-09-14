@@ -23,7 +23,12 @@ updates:
       prefix: "chore"
       include: "scope"
 
-  # Base images in custom Dockerfiles
+  # Base images in custom Dockerfiles. Same fetcher shape as above - one
+  # directory listing, no descent - so every config/<svc>/Dockerfile needs its
+  # own entry here or its base image is never bumped, silently.
+  # tests/compose-invariants.py compares this list against the Dockerfiles on
+  # disk in both directions, a stale entry included: Dependabot errors on a
+  # directory holding no Dockerfile rather than skipping it.
   - package-ecosystem: "docker"
     directories:
       - "/config/backrest"
