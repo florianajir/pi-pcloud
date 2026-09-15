@@ -1,13 +1,55 @@
 ---
 name: add-service
-description: Add a new service to the pi-pcloud docker compose stack, wiring the standard integrations (Traefik, Authelia OIDC, Postgres, Redis, ntfy, Uptime Kuma, Backrest, Homepage, systemd bootstrap). Use whenever a new container is added to compose/, or when auditing an existing service for missing integrations.
+description: Vet a candidate upstream project (still maintained, arm64, resource footprint, open-source alternatives) and add it to the pi-pcloud docker compose stack, wiring the standard integrations (Traefik, Authelia OIDC, Postgres, Redis, ntfy, Uptime Kuma, Backrest, Homepage, systemd bootstrap). Use whenever a new container is added to compose/, or when auditing an existing service for missing integrations.
 ---
 
 # Adding a service to the stack
 
-Copy the closest existing service in `compose/` as a template, then work through
-every integration below and skip only the ones that genuinely do not apply. Say
-explicitly which ones you skipped and why.
+Step 0 comes first and is never skipped. After it, copy the closest existing
+service in `compose/` as a template, then work through every integration below
+and skip only the ones that genuinely do not apply. Say explicitly which ones you
+skipped and why.
+
+## 0. Vet the candidate first
+
+Before writing a line of compose, answer these four, with evidence, in your
+response. A "no" is a reason to stop and come back to the user, not something to
+work around quietly.
+
+**Is the project alive?** Read the upstream repo, not the Docker Hub page: date
+of the latest release, commits over the last six months, whether issues get
+answered. Red flags are an archived or read-only repo, no tagged release in over
+a year (which also means step 1 has no stable tag to pin), a lone maintainer with
+no merged outside contributions, and an open unpatched advisory. Check the
+licence in the same pass — source-available (BUSL, SSPL, Elastic) is not open
+source and can be relicensed out from under a self-hoster.
+
+**Does it run on arm64?** `docker buildx imagetools inspect <image>:<tag>` must
+list `linux/arm64`. Necessary, not sufficient: multi-arch images regularly ship
+x86-64 helpers inside — Kapowarr's bundled `rar`, the browsers a scraper drives.
+If the service shells out to a bundled binary, downloads a platform-specific
+plugin at runtime, or wants a GPU, verify that path specifically. Never paper
+over a gap with `platform: linux/amd64`; qemu emulation on this Pi is slow enough
+to be useless.
+
+**What does it cost to run?** The host is a 16 GB Pi 5 already running ~46
+containers with ~9 GB in use, so a newcomer competes for what is left. Start the
+image once and read `docker stats` at idle and under one realistic action, then
+set `mem_limit` from that with headroom — most services here live in 128m–512m.
+Anything above ~1 GB idle, or that keeps a core busy on a background job, needs a
+stated reason it is worth the slot. Things to spot before measuring: a JVM or
+Electron runtime, a bundled Elasticsearch/Mongo/Chromium, its own Postgres or
+Redis where steps 4 and 5 would share ours, and a model download on first boot.
+
+**Is an open-source competitor a better fit?** Name at least one and say why this
+one wins, on the axes that decide it here: arm64 support, idle footprint, OIDC
+(no SSO means one more password — see step 3), reuse of the shared Postgres and
+Redis, and whether it duplicates something the stack already runs. Favour a
+project the stack already depends on over a new one. If the alternative wins,
+propose it instead of implementing this one.
+
+Put the verdict in the PR body. It is what gets re-read the day the service is
+replaced, and it is the only place these trade-offs are recorded.
 
 ## 1. Compose basics
 
