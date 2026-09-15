@@ -150,6 +150,12 @@ rather than let that ship.
 No extra container just to run a script, and no new `.env` keys — reuse
 `ADMIN_USER` / `PASSWORD` and the per-service config files.
 
+If all the hook does is put one or more generated secrets in an env file, do not
+write it — call lib.sh `ensure_env_secrets <file> <KEY>...`. It keeps values that
+are already there, mints only the missing ones, repairs the directory a bind
+mount leaves behind, writes 0600 and hands the file back to the project owner.
+See `scripts/n8n-pre-start.sh` for the whole shape.
+
 Anything the hook generates on the host has to end with lib.sh `fix_ownership`:
 the unit runs it as root, and a root-owned `0600` file is one the next non-root
 `make update` cannot read and `docker compose up` cannot load as an `env_file`.

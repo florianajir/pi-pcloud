@@ -117,6 +117,7 @@ print-required-vars:
 test:
 	@sh tests/install-test.sh
 	@sh tests/check-env-test.sh
+	@sh tests/lib-test.sh
 	@sh tests/cli-test.sh
 	@sh tests/services-test.sh
 	@sh tests/stack-up-test.sh
