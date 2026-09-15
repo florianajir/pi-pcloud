@@ -120,16 +120,27 @@ ok "the managed one survives"     "$(value_of "$FILE" ONE_TOKEN)" "$BEFORE"
 # Dropped, but not lost. A secret cannot be regenerated from nothing, so the one
 # case that says the caller's key list is wrong must not also be the case that
 # destroys the evidence.
-aside="$(ls "$(dirname "$FILE")" | grep '\.bak\.' | head -1)"
+aside=""
+for candidate in "$FILE".bak.*; do
+    if [ -f "$candidate" ]; then
+        aside="$candidate"
+        break
+    fi
+done
 ok "and a copy is kept"           "$([ -n "$aside" ] && echo yes)" yes
-ok "holding the dropped value"    "$(value_of "$(dirname "$FILE")/$aside" HAND_EDITED)" keepme
-ok "readable only by its owner"   "$(stat -c %a "$(dirname "$FILE")/$aside")" 600
+ok "holding the dropped value"    "$(value_of "$aside" HAND_EDITED)" keepme
+ok "readable only by its owner"   "$(stat -c %a "$aside")" 600
 
 # And the common case stays quiet: a file holding exactly what was asked for
 # leaves no copies behind, or every start would litter config/.
-rm -f "$(dirname "$FILE")"/*.bak.*
+rm -f "$FILE".bak.*
 ensure_env_secrets "$FILE" ONE_TOKEN >/dev/null 2>&1
-ok "no copy when nothing is dropped" "$(ls "$(dirname "$FILE")" | grep -c '\.bak\.')" 0
+copies=0
+for candidate in "$FILE".bak.*; do
+    [ -f "$candidate" ] || continue
+    copies=$((copies + 1))
+done
+ok "no copy when nothing is dropped" "$copies" 0
 
 printf '\nlib-test.sh: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

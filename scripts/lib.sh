@@ -292,6 +292,17 @@ ensure_env_secrets() {
     ensure_config_target_is_file "$_file" || return 1
     mkdir -p "$(dirname "$_file")" || return 1
 
+    # An existing file we cannot read reads back as "no value at all", and the
+    # loop below would then mint a fresh secret over a perfectly good one -
+    # silently, because the running container froze the old value at creation
+    # and only fails auth somewhere else. This is exactly the state a root-run
+    # hook leaves behind when fix_ownership had nothing to hand back to (a
+    # root-owned PROJECT_DIR), so refuse instead of rotating blind.
+    if [ -e "$_file" ] && [ ! -r "$_file" ]; then
+        log "ERROR: $_file exists but is not readable - refusing to overwrite it with new secrets"
+        return 1
+    fi
+
     for _key in "$@"; do
         _value="$(read_env_value_from_file "$_file" "$_key")"
         if [ -z "$_value" ]; then

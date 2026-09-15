@@ -20,6 +20,13 @@
 /config/shelfmark/shelfmark.env
 /config/comet/comet.env
 /config/n8n/n8n.env
+# lib.sh's ensure_env_secrets copies a generated env file aside as
+# <file>.bak.<timestamp> before dropping a key no caller claims. The copy holds
+# the same plaintext secrets as the original, and unlike rotate-secret.sh's it
+# is never cleaned up - so it must not be an untracked file `git add -A` sweeps
+# into a commit. One line per file the helper owns; add one with each new caller.
+/config/comet/comet.env.bak.*
+/config/n8n/n8n.env.bak.*
 /config/backrest/backrest.env
 /config/agentgateway/agentgateway.env
 /config/searxng/searxng.env
