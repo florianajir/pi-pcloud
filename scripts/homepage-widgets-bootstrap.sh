@@ -185,9 +185,8 @@ sync_audiobookshelf_key() {
 }
 
 # --- changedetection.io: copy out the token its datastore generated ---
-# Nothing mints this one: it is created on the service's first start and only
-# read back. The widget calls /api/v1/watch, which obeys `api_access_token` even
-# though no password is set on the instance.
+# Nothing mints this one. The widget's /api/v1/watch call obeys
+# `api_access_token` even though no password is set on the instance.
 sync_changedetection_key() {
     key="$(changedetection_api_key)"
 

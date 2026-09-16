@@ -387,87 +387,57 @@ services:
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
 
-  # Watches web pages and tells you what changed. Beside FreshRSS because it is
-  # the same job for the sites that publish no feed - a price, a stock status, a
-  # school menu - and it emits an RSS feed of its own for the ones that do.
+  # Beside FreshRSS because it is the same job for the sites that publish no
+  # feed: a price, a stock status, a school menu.
   changedetection:
     <<: *service-defaults
-    # ghcr rather than docker.io: same image, published by the project's own CI.
     image: ghcr.io/dgtlmoon/changedetection.io:0.60.6@sha256:eb4a9f718801004e006ffef0ce35171f42ec8d45c9b5d20da572bc5febe107ff
     container_name: pi-changedetection
     profiles: ["changedetection", "all"]
     networks:
-      # frontend for Traefik, and for the fetches themselves: outbound HTTP to
-      # arbitrary hosts *is* the job here, so an internal-only segment would
-      # break it. Same reasoning as freshrss and searxng.
+      # Not just for Traefik: outbound HTTP to arbitrary hosts *is* the job, so
+      # an internal-only segment would break it. Same as freshrss and searxng.
       #
-      # This is also the *only* network it gets. ntfy is on frontend too, so the
-      # Apprise URL scripts/changedetection-bootstrap.sh seeds - which names
-      # `ntfy`, not ntfy.$HOST_NAME, so nothing hairpins back through Traefik -
-      # resolves here, exactly as shelfmark's Apprise URL and prowlarr's
-      # http://ntfy webhook already do from this same network.
-      # Joining the internal `ntfy` segment would buy nothing and cost a lot:
-      # that segment exists to let backrest and dockhand reach ntfy *without*
-      # being on frontend (see compose-monitoring.yaml), so putting the one
-      # container whose job is fetching attacker-chosen URLs on it would hand a
-      # foothold there backrest's :9898 - the restic password and the S3 keys -
-      # and dockhand's :3000, neither of which frontend can reach at all.
+      # It is also the only one. ntfy is on frontend too, so the Apprise URL the
+      # bootstrap seeds resolves here as shelfmark's does; the `ntfy` segment is how
+      # backrest and dockhand reach ntfy *without* frontend, and this is the
+      # last container that should be given their :9898 and :3000.
       - frontend
     expose:
       - 5000
     environment:
-      # Read at startup, and by the scheduler for every "check at HH:MM" rule.
       - TZ=${TIMEZONE:-Europe/Paris}
-      # The link each notification carries back to the diff. Notifications are
-      # the whole point of the service, so this is not cosmetic.
+      # Only used for the link a notification carries back to the diff.
       - BASE_URL=https://changes.${HOST_NAME:-pi.lan}
-      # The image's default is DEBUG, which is ~15 journald lines per page
-      # fetched (fetch, mime guess, checksum, two brotli compressions, commit).
+      # The image defaults to DEBUG: ~15 journald lines per page fetched.
       - LOGGER_LEVEL=INFO
-      # Parallel fetchers; upstream's default is 5 and its own comment says
-      # lower is better on a slow connection. Each one holds a whole page plus
-      # the lxml tree it parses, and this box has four cores shared with
-      # Postgres and a model server.
+      # Upstream's default is 5. Each worker holds a page plus the lxml tree it
+      # parses, on four cores shared with Postgres and a model server.
       - FETCH_WORKERS=3
-      # Monitored sites otherwise see this stack's hostname in the Referer of
-      # every check.
+      # Monitored sites would otherwise see this stack's hostname in the Referer.
       - HIDE_REFERER=true
       - DISABLE_VERSION_CHECK=true
-      # The SSRF gate, and the reason a service that fetches arbitrary URLs is
-      # allowed to sit on `frontend` at all: with this false, a watch whose
-      # hostname resolves to a private, loopback, link-local or otherwise
-      # non-globally-reachable address is refused - on the fetch, not only when
-      # it is saved - so no watch can be pointed at a neighbouring container or
-      # at the router's admin page. It is already upstream's default; stated
-      # because a default is not a guarantee and flipping this one is what would
-      # make this container a way into the LAN. The ntfy route below is
-      # unaffected: Apprise's own ntfy:// plugin does not go through this check.
-      # See docs/SECURITY.md.
+      # The SSRF gate, and what makes a fetcher of arbitrary URLs safe on
+      # `frontend`: a watch resolving to a private address is refused, on the
+      # fetch and not only when saved. Upstream's default, pinned because
+      # flipping it is what would open the LAN. See docs/SECURITY.md.
       - ALLOW_IANA_RESTRICTED_ADDRESSES=false
-      # No LLM provider is configured, so the price/restock "ask a model"
-      # features would offer a button that always errors. Wiring them to
-      # agentgateway would take a virtual key of their own, as Trilium's
-      # assistant has (LLM_MODEL / LLM_API_BASE / LLM_API_KEY) - and an
-      # LLM_API_BASE on this network is refused by the same SSRF gate as a
-      # watch URL (is_llm_api_base_safe), so it would cost the line above too.
-      # Until then this keeps the UI honest rather than showing a dead button.
+      # No provider configured, and pointing one at agentgateway would mean
+      # opening the gate above - llm.api_base goes through it too. Off rather
+      # than a button that always errors.
       - LLM_FEATURES_DISABLED=true
     volumes:
-      # Settings, the watch list and the compressed history snapshots. No
-      # database and no PUID: the container runs as root and owns this tree.
+      # No database: settings, the watch list and the brotli history snapshots.
+      # No PUID either - the container runs as root and owns this tree.
       - ${DATA_LOCATION:-./data}/changedetection:/datastore
       - ./config/changedetection/healthcheck.py:/healthcheck.py:ro
     healthcheck:
       <<: *healthcheck-relaxed
-      # python3 is the only client in the image - no curl, no wget, no nc - and
-      # the probe asserts the fetch workers are alive, not just that Flask
-      # answers: a dead worker pool is this service silently not watching
-      # anything. See the script for why it is a file rather than a `python3 -c`.
+      # python3 is the only HTTP client in the image, and the probe asserts the
+      # fetch workers are alive: the watch list answers 200 with the pool dead.
       test: ["CMD", "python3", "/healthcheck.py"]
       start_period: 40s
     labels:
-      # Beside FreshRSS and SearXNG: all three are ways into the open web
-      # rather than into something this stack stores.
       - "homepage.group=News"
       - "homepage.name=changedetection.io"
       - "homepage.icon=changedetection.png"
@@ -475,23 +445,20 @@ services:
       - "homepage.description=Web page change monitoring and alerts"
       - "homepage.widget.type=changedetectionio"
       - "homepage.widget.url=http://pi-changedetection:5000"
-      # The datastore's own api_access_token, copied into the secrets directory
-      # by scripts/homepage-widgets-bootstrap.sh.
+      # The datastore's own token, copied out by homepage-widgets-bootstrap.sh.
       - "homepage.widget.key={{HOMEPAGE_FILE_CHANGEDETECTION_API_KEY}}"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
       - "traefik.http.routers.changedetection.rule=Host(`changes.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.changedetection.entrypoints=websecure"
-      # Forward-auth, not its own login: changedetection.io has no OIDC and its
-      # password is a single shared one stored in the datastore, so Authelia is
-      # the better gate. Nothing programmatic is on this router - the Homepage
-      # widget dials :5000 over `frontend` with the API key instead.
+      # No OIDC upstream and its own password is a single shared one, so
+      # forward-auth is the gate - which needs changes.__HOST_NAME__ in
+      # config/authelia/configuration.yml.template, or every request 403s.
       - "traefik.http.routers.changedetection.middlewares=frame-deny@docker,lan@docker,authelia@docker"
       - "traefik.http.routers.changedetection.tls=true"
       - "traefik.http.services.changedetection.loadbalancer.server.port=5000"
     cpu_shares: *cpu-prio-batch
-    # 110 MiB idle with three workers on this host, 141 MiB peak while fetching
-    # and brotli-compressing two pages. The headroom is for the lxml tree of
-    # whatever a watch points at.
+    # 110 MiB idle with three workers here, 141 MiB peak while fetching and
+    # compressing two pages. The headroom is for one page's lxml tree.
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize

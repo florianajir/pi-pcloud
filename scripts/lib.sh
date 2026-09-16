@@ -592,18 +592,14 @@ kavita_token() {
         2>/dev/null | jq -r '.token // empty'
 }
 
-# Echo changedetection.io's API access token, or nothing. It is minted into the
-# datastore on the very first start and has no environment equivalent, so it can
-# only be read back out - by scripts/changedetection-bootstrap.sh to seed the
-# notification route, and by the Homepage widget bootstrap. Read from inside the
-# container: on the host the file is a root-owned 0600 under DATA_LOCATION, which
-# a non-root `make update` could not open.
+# Echo changedetection.io's API access token, or nothing. Minted into the
+# datastore on its first start with no environment equivalent, so reading it back
+# is the only way to get it. From inside the container: on the host that file is
+# a root-owned 0600 a non-root `make update` could not open.
 #
-# Empty output, never a failing status: a caller's `key="$(changedetection_api_key)"`
-# is an assignment, which `set -e` does not exempt, so returning docker exec's
-# status would kill the hook before it could log its own warning - the datastore
-# is legitimately absent for the first moments of a fresh install. Same contract
-# as kavita_admin_api_key above.
+# Empty output, never a failing status - same contract as kavita_admin_api_key:
+# callers assign it, and `set -e` does not exempt an assignment, so a failing
+# status here would kill the hook before it could log its own warning.
 # Usage: changedetection_api_key [container]
 changedetection_api_key() {
     local container="${1:-pi-changedetection}"

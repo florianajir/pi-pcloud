@@ -3,12 +3,7 @@
 
 /worker-health rather than `GET /`: the watch list renders from memory and
 answers 200 with every fetch worker dead, which is this service silently not
-watching anything. That endpoint reports the pool and restarts what it finds
-missing, so `degraded` here means the restart also failed.
-
-A file rather than a `python3 -c` one-liner because of the /login branch below,
-which is three lines of its own and needs explaining. python3 is the only HTTP
-client in the image - it ships neither curl nor wget nor nc.
+watching anything. python3 is the only HTTP client in the image.
 """
 
 import json
@@ -27,9 +22,7 @@ except (urllib.error.URLError, OSError) as exc:
     sys.exit(f"{URL} did not answer: {exc}")
 
 # A password set in Settings > General sends every non-API route to the login
-# page, this one included, so the JSON is gone while the app is up and
-# watching. Authelia is the gate on this router and that password is redundant,
-# but it is one checkbox away and must not read as an outage.
+# page, this one included, so the JSON is gone while the app is up and watching.
 if landed_on == "/login":
     sys.exit(0)
 
@@ -38,8 +31,7 @@ try:
 except (ValueError, KeyError, TypeError) as exc:
     sys.exit(f"unexpected /worker-health payload: {exc}")
 
-# `repaired` is upstream's word for "some were dead and this very request
-# restarted them", which is the endpoint doing its job - only `degraded`, where
-# the restart itself failed, is an outage.
+# `repaired` means this very request restarted the dead workers, which is the
+# endpoint doing its job; only `degraded` is a restart that failed.
 if status not in ("healthy", "repaired"):
     sys.exit(f"fetch workers {status}: {payload.decode(errors='replace')}")

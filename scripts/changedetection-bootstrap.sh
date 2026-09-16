@@ -1,16 +1,12 @@
 #!/bin/sh
-# Post-start: point changedetection.io's default notifications at ntfy, so a
-# page that changes reaches a phone instead of only the web UI.
+# Post-start: point changedetection.io's default notifications at ntfy.
 #
-# The notification URL list is a datastore setting with no environment
-# equivalent, and the one API that writes it wants the datastore's own API
-# token - minted on the first start, which is why this cannot be a pre-start
-# render like scripts/shelfmark-pre-start.sh's ADMIN_NOTIFICATION_ROUTES.
+# Post-start and not a pre-start render, because the notification URL list is a
+# datastore setting with no environment equivalent and the only API that writes
+# it wants the token the datastore mints on its first start.
 #
-# It seeds the *system default* only, the one a new watch inherits with
-# "Notifications > use system defaults"; a per-watch URL still wins. Additive
-# and never destructive: POST /api/v1/notifications appends and de-duplicates,
-# so a list an operator has edited by hand keeps every entry it had.
+# The *system default* only, the one a new watch inherits; a per-watch URL still
+# wins. POST appends and de-duplicates, so a hand-edited list keeps its entries.
 #
 # A post-start hook (scripts/run-hooks.sh). Idempotent.
 
@@ -23,17 +19,15 @@ CHANGEDETECTION_URL="${CHANGEDETECTION_URL:-http://changedetection:5000}"
 NTFY_ENV_FILE="${NTFY_ENV_FILE:-$PROJECT_DIR/config/ntfy/ntfy.env}"
 
 # Apprise's ntfy plugin reads the token out of the userinfo field; mode and auth
-# are spelled out rather than left to its hostname/`tk_` heuristics, as in
-# scripts/shelfmark-pre-start.sh. The host is the container, not
-# ntfy.$HOST_NAME: both sit on `frontend`, so nothing hairpins out through
-# Traefik and back.
+# are spelled out rather than left to its heuristics, as in
+# scripts/shelfmark-pre-start.sh. Both containers are on `frontend`, so the host
+# is `ntfy` and nothing hairpins out through Traefik and back.
 ntfy_notification_url() {
     local token="" topic=""
 
     token="$(read_env_value_from_file "$NTFY_ENV_FILE" NTFY_CHANGEDETECTION_TOKEN)"
     [ -n "$token" ] || return 1
-    # Read rather than hardcoded: scripts/ntfy-pre-start.sh owns the topic names
-    # and the ACL that grants this user write access to exactly one of them.
+    # scripts/ntfy-pre-start.sh owns the topic names and the matching ACL.
     topic="$(read_env_value_from_file "$NTFY_ENV_FILE" NTFY_WATCHES_TOPIC)"
     [ -n "$topic" ] || return 1
 
@@ -64,11 +58,9 @@ seed_notification_url() {
         return 0
     fi
 
-    # The one failure that is reported rather than swallowed: everything above is
-    # a prerequisite that can legitimately not be there yet, but a POST refused
-    # by a service that just answered the GET is a bug. The hook phase decides
-    # what happens next - tolerant on boot (logged, retried next start), blocking
-    # in CI, where an unfinishable bootstrap is the thing under test.
+    # The one failure reported rather than swallowed: everything above can
+    # legitimately not be there yet, but a POST refused by a service that just
+    # answered the GET is a bug. Tolerated on boot, fatal in CI.
     jq -cn --arg u "$url" '{notification_urls: [$u]}' \
         | docker_curl_stdin -X POST -H "x-api-key: $key" -H 'Content-Type: application/json' \
             "$CHANGEDETECTION_URL/api/v1/notifications" >/dev/null 2>&1 || {
@@ -87,9 +79,7 @@ main() {
         return 0
     }
 
-    # Flask answers well before the first healthcheck probe says so, and the API
-    # token only exists once the datastore has been written - which on a fresh
-    # install is part of that same first start.
+    # Flask answers well before the first healthcheck probe says so.
     wait_for_http_endpoint "$CHANGEDETECTION_URL/" "changedetection.io" 30 2 || {
         log "WARNING: changedetection.io did not answer in time; retrying next start"
         return 0

@@ -31,9 +31,8 @@ BCRYPT_IMAGE="${BCRYPT_IMAGE:-pi-backrest:local}"
 NTFY_MONITORING_TOPIC="monitoring"
 NTFY_DOWNLOADS_TOPIC="downloads"
 NTFY_SECURITY_TOPIC="security"
-# Its own topic rather than monitoring: what arrives here is a price drop or a
-# restock at any hour of the day, not a service that broke, and the split is
-# what lets the phone give each one its own do-not-disturb rule.
+# Its own topic rather than monitoring: a price drop at any hour is not a
+# service that broke, and only a separate topic can be muted on its own.
 NTFY_WATCHES_TOPIC="watches"
 
 hash_password() {
@@ -215,9 +214,8 @@ main() {
         log "Generated NTFY_CHANGEDETECTION_PASSWORD for changedetection ntfy user"
     fi
 
-    # A token for the same reason as shelfmark's: it travels inside an Apprise
-    # URL's userinfo field (scripts/changedetection-bootstrap.sh), where
-    # generate_password's base64 would need percent-encoding to survive.
+    # A token for the same reason as shelfmark's above: it travels inside an
+    # Apprise URL's userinfo field, where base64 would need percent-encoding.
     if [ -z "$NTFY_CHANGEDETECTION_TOKEN_VALUE" ]; then
         NTFY_CHANGEDETECTION_TOKEN_VALUE="$(generate_token)"
         log "Generated NTFY_CHANGEDETECTION_TOKEN for changedetection ntfy user"
