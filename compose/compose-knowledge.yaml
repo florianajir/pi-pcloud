@@ -400,11 +400,19 @@ services:
       # frontend for Traefik, and for the fetches themselves: outbound HTTP to
       # arbitrary hosts *is* the job here, so an internal-only segment would
       # break it. Same reasoning as freshrss and searxng.
+      #
+      # This is also the *only* network it gets. ntfy is on frontend too, so the
+      # Apprise URL scripts/changedetection-bootstrap.sh seeds - which names
+      # `ntfy`, not ntfy.$HOST_NAME, so nothing hairpins back through Traefik -
+      # resolves here, exactly as shelfmark's Apprise URL and prowlarr's
+      # http://ntfy webhook already do from this same network.
+      # Joining the internal `ntfy` segment would buy nothing and cost a lot:
+      # that segment exists to let backrest and dockhand reach ntfy *without*
+      # being on frontend (see compose-monitoring.yaml), so putting the one
+      # container whose job is fetching attacker-chosen URLs on it would hand a
+      # foothold there backrest's :9898 - the restic password and the S3 keys -
+      # and dockhand's :3000, neither of which frontend can reach at all.
       - frontend
-      # Its notifications go to ntfy directly on this segment - the Apprise URL
-      # scripts/changedetection-bootstrap.sh seeds names `ntfy`, not
-      # ntfy.$HOST_NAME, so nothing hairpins back through Traefik.
-      - ntfy
     expose:
       - 5000
     environment:
@@ -416,7 +424,7 @@ services:
       # The image's default is DEBUG, which is ~15 journald lines per page
       # fetched (fetch, mime guess, checksum, two brotli compressions, commit).
       - LOGGER_LEVEL=INFO
-      # Parallel fetchers; upstream's default is 10 and its own comment says
+      # Parallel fetchers; upstream's default is 5 and its own comment says
       # lower is better on a slow connection. Each one holds a whole page plus
       # the lxml tree it parses, and this box has four cores shared with
       # Postgres and a model server.

@@ -209,9 +209,13 @@ Two things keep that from being a server-side request forgery primitive:
 
 The ntfy route is the one private target that does work, and deliberately: it goes
 through Apprise's built-in `ntfy://` plugin, which the SSRF check above does not cover,
-over the internal `ntfy` segment. Its credential is a per-service ntfy token with `rw`
-on the `watches` topic and nothing else, so this container cannot publish a fake outage
-or security alert.
+over `frontend`, where ntfy also sits. It is deliberately **not** put on the internal
+`ntfy` segment: that segment exists so backrest and dockhand can reach ntfy *without*
+joining `frontend`, so joining it would hand the one container built to fetch
+attacker-chosen URLs backrest's `:9898` — the restic password and the S3 keys — and
+dockhand's `:3000`, neither of which `frontend` can reach at all. Its credential is a
+per-service ntfy token with `rw` on the `watches` topic and nothing else, so this
+container cannot publish a fake outage or security alert.
 
 The same gate is why the LLM features are switched off with `LLM_FEATURES_DISABLED=true`
 rather than pointed at the stack's own models: `llm.api_base` goes through it too

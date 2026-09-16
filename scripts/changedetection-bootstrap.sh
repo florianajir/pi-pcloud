@@ -25,8 +25,8 @@ NTFY_ENV_FILE="${NTFY_ENV_FILE:-$PROJECT_DIR/config/ntfy/ntfy.env}"
 # Apprise's ntfy plugin reads the token out of the userinfo field; mode and auth
 # are spelled out rather than left to its hostname/`tk_` heuristics, as in
 # scripts/shelfmark-pre-start.sh. The host is the container, not
-# ntfy.$HOST_NAME: both sit on the internal `ntfy` segment, so nothing hairpins
-# out through Traefik and back.
+# ntfy.$HOST_NAME: both sit on `frontend`, so nothing hairpins out through
+# Traefik and back.
 ntfy_notification_url() {
     local token="" topic=""
 
