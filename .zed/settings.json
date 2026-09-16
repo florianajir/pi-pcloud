@@ -1,0 +1,12 @@
+{
+  "context_servers": {
+    "github": {
+      "enabled": true,
+      "url": "https://api.githubcopilot.com/mcp/"
+    },
+    "context7": {
+      "enabled": true,
+      "url": "https://mcp.context7.com/mcp"
+    }
+  }
+}
