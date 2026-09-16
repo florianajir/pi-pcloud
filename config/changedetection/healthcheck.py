@@ -38,5 +38,8 @@ try:
 except (ValueError, KeyError, TypeError) as exc:
     sys.exit(f"unexpected /worker-health payload: {exc}")
 
-if status != "healthy":
+# `repaired` is upstream's word for "some were dead and this very request
+# restarted them", which is the endpoint doing its job - only `degraded`, where
+# the restart itself failed, is an outage.
+if status not in ("healthy", "repaired"):
     sys.exit(f"fetch workers {status}: {payload.decode(errors='replace')}")

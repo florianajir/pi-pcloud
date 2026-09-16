@@ -598,6 +598,12 @@ kavita_token() {
 # notification route, and by the Homepage widget bootstrap. Read from inside the
 # container: on the host the file is a root-owned 0600 under DATA_LOCATION, which
 # a non-root `make update` could not open.
+#
+# Empty output, never a failing status: a caller's `key="$(changedetection_api_key)"`
+# is an assignment, which `set -e` does not exempt, so returning docker exec's
+# status would kill the hook before it could log its own warning - the datastore
+# is legitimately absent for the first moments of a fresh install. Same contract
+# as kavita_admin_api_key above.
 # Usage: changedetection_api_key [container]
 changedetection_api_key() {
     local container="${1:-pi-changedetection}"
@@ -606,7 +612,7 @@ changedetection_api_key() {
 
     docker exec "$container" python3 -c \
         'import json; print(json.load(open("/datastore/changedetection.json"))["settings"]["application"].get("api_access_token", ""), end="")' \
-        2>/dev/null
+        2>/dev/null || true
 }
 
 # Where scripts/audiobookshelf-bootstrap.sh persists the API key every later
