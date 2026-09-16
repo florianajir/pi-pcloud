@@ -386,3 +386,104 @@ services:
     # on an import or a full-text reindex.
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
+
+  # Watches web pages and tells you what changed. Beside FreshRSS because it is
+  # the same job for the sites that publish no feed - a price, a stock status, a
+  # school menu - and it emits an RSS feed of its own for the ones that do.
+  changedetection:
+    <<: *service-defaults
+    # ghcr rather than docker.io: same image, published by the project's own CI.
+    image: ghcr.io/dgtlmoon/changedetection.io:0.60.6@sha256:eb4a9f718801004e006ffef0ce35171f42ec8d45c9b5d20da572bc5febe107ff
+    container_name: pi-changedetection
+    profiles: ["changedetection", "all"]
+    networks:
+      # frontend for Traefik, and for the fetches themselves: outbound HTTP to
+      # arbitrary hosts *is* the job here, so an internal-only segment would
+      # break it. Same reasoning as freshrss and searxng.
+      - frontend
+      # Its notifications go to ntfy directly on this segment - the Apprise URL
+      # scripts/changedetection-bootstrap.sh seeds names `ntfy`, not
+      # ntfy.$HOST_NAME, so nothing hairpins back through Traefik.
+      - ntfy
+    expose:
+      - 5000
+    environment:
+      # Read at startup, and by the scheduler for every "check at HH:MM" rule.
+      - TZ=${TIMEZONE:-Europe/Paris}
+      # The link each notification carries back to the diff. Notifications are
+      # the whole point of the service, so this is not cosmetic.
+      - BASE_URL=https://changes.${HOST_NAME:-pi.lan}
+      # The image's default is DEBUG, which is ~15 journald lines per page
+      # fetched (fetch, mime guess, checksum, two brotli compressions, commit).
+      - LOGGER_LEVEL=INFO
+      # Parallel fetchers; upstream's default is 10 and its own comment says
+      # lower is better on a slow connection. Each one holds a whole page plus
+      # the lxml tree it parses, and this box has four cores shared with
+      # Postgres and a model server.
+      - FETCH_WORKERS=3
+      # Monitored sites otherwise see this stack's hostname in the Referer of
+      # every check.
+      - HIDE_REFERER=true
+      - DISABLE_VERSION_CHECK=true
+      # The SSRF gate, and the reason a service that fetches arbitrary URLs is
+      # allowed to sit on `frontend` at all: with this false, a watch whose
+      # hostname resolves to a private, loopback, link-local or otherwise
+      # non-globally-reachable address is refused - on the fetch, not only when
+      # it is saved - so no watch can be pointed at a neighbouring container or
+      # at the router's admin page. It is already upstream's default; stated
+      # because a default is not a guarantee and flipping this one is what would
+      # make this container a way into the LAN. The ntfy route below is
+      # unaffected: Apprise's own ntfy:// plugin does not go through this check.
+      # See docs/SECURITY.md.
+      - ALLOW_IANA_RESTRICTED_ADDRESSES=false
+      # No LLM provider is configured, so the price/restock "ask a model"
+      # features would offer a button that always errors. Wiring them to
+      # agentgateway would take a virtual key of their own, as Trilium's
+      # assistant has (LLM_MODEL / LLM_API_BASE / LLM_API_KEY) - and an
+      # LLM_API_BASE on this network is refused by the same SSRF gate as a
+      # watch URL (is_llm_api_base_safe), so it would cost the line above too.
+      # Until then this keeps the UI honest rather than showing a dead button.
+      - LLM_FEATURES_DISABLED=true
+    volumes:
+      # Settings, the watch list and the compressed history snapshots. No
+      # database and no PUID: the container runs as root and owns this tree.
+      - ${DATA_LOCATION:-./data}/changedetection:/datastore
+      - ./config/changedetection/healthcheck.py:/healthcheck.py:ro
+    healthcheck:
+      <<: *healthcheck-relaxed
+      # python3 is the only client in the image - no curl, no wget, no nc - and
+      # the probe asserts the fetch workers are alive, not just that Flask
+      # answers: a dead worker pool is this service silently not watching
+      # anything. See the script for why it is a file rather than a `python3 -c`.
+      test: ["CMD", "python3", "/healthcheck.py"]
+      start_period: 40s
+    labels:
+      # Beside FreshRSS and SearXNG: all three are ways into the open web
+      # rather than into something this stack stores.
+      - "homepage.group=News"
+      - "homepage.name=changedetection.io"
+      - "homepage.icon=changedetection.png"
+      - "homepage.href=https://changes.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Web page change monitoring and alerts"
+      - "homepage.widget.type=changedetectionio"
+      - "homepage.widget.url=http://pi-changedetection:5000"
+      # The datastore's own api_access_token, copied into the secrets directory
+      # by scripts/homepage-widgets-bootstrap.sh.
+      - "homepage.widget.key={{HOMEPAGE_FILE_CHANGEDETECTION_API_KEY}}"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.changedetection.rule=Host(`changes.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.changedetection.entrypoints=websecure"
+      # Forward-auth, not its own login: changedetection.io has no OIDC and its
+      # password is a single shared one stored in the datastore, so Authelia is
+      # the better gate. Nothing programmatic is on this router - the Homepage
+      # widget dials :5000 over `frontend` with the API key instead.
+      - "traefik.http.routers.changedetection.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.changedetection.tls=true"
+      - "traefik.http.services.changedetection.loadbalancer.server.port=5000"
+    cpu_shares: *cpu-prio-batch
+    # 110 MiB idle with three workers on this host, 141 MiB peak while fetching
+    # and brotli-compressing two pages. The headroom is for the lxml tree of
+    # whatever a watch points at.
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize

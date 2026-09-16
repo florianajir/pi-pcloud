@@ -27,9 +27,14 @@ BCRYPT_IMAGE="${BCRYPT_IMAGE:-pi-backrest:local}"
 #   monitoring - service health: uptime-kuma, beszel, dockhand, backrest
 #   downloads  - grabs and completed downloads: prowlarr, qbittorrent, shelfmark
 #   security   - authelia failed logins and regulation bans
+#   watches    - changes on a watched web page: changedetection
 NTFY_MONITORING_TOPIC="monitoring"
 NTFY_DOWNLOADS_TOPIC="downloads"
 NTFY_SECURITY_TOPIC="security"
+# Its own topic rather than monitoring: what arrives here is a price drop or a
+# restock at any hour of the day, not a service that broke, and the split is
+# what lets the phone give each one its own do-not-disturb rule.
+NTFY_WATCHES_TOPIC="watches"
 
 hash_password() {
     _password="$1"
@@ -101,9 +106,12 @@ main() {
     NTFY_AUTHELIA_PASSWORD_VALUE=""
     NTFY_SHELFMARK_PASSWORD_VALUE=""
     NTFY_SHELFMARK_TOKEN_VALUE=""
+    NTFY_CHANGEDETECTION_PASSWORD_VALUE=""
+    NTFY_CHANGEDETECTION_TOKEN_VALUE=""
     STORED_ADMIN_HASH=""; STORED_BACKREST_HASH=""; STORED_BESZEL_HASH=""
     STORED_DOCKHAND_HASH=""; STORED_UPTIME_KUMA_HASH=""; STORED_PROWLARR_HASH=""
     STORED_QBITTORRENT_HASH=""; STORED_AUTHELIA_HASH=""; STORED_SHELFMARK_HASH=""
+    STORED_CHANGEDETECTION_HASH=""
 
     if [ -f "$OUTPUT_FILE" ]; then
         NTFY_BACKREST_PASSWORD_VALUE=$(read_env_value_from_file "$OUTPUT_FILE" NTFY_BACKREST_PASSWORD)
@@ -122,8 +130,10 @@ main() {
         NTFY_AUTHELIA_PASSWORD_VALUE=$(read_env_value_from_file "$OUTPUT_FILE" NTFY_AUTHELIA_PASSWORD)
         NTFY_SHELFMARK_PASSWORD_VALUE=$(read_env_value_from_file "$OUTPUT_FILE" NTFY_SHELFMARK_PASSWORD)
         NTFY_SHELFMARK_TOKEN_VALUE=$(read_env_value_from_file "$OUTPUT_FILE" NTFY_SHELFMARK_TOKEN)
+        NTFY_CHANGEDETECTION_PASSWORD_VALUE=$(read_env_value_from_file "$OUTPUT_FILE" NTFY_CHANGEDETECTION_PASSWORD)
+        NTFY_CHANGEDETECTION_TOKEN_VALUE=$(read_env_value_from_file "$OUTPUT_FILE" NTFY_CHANGEDETECTION_TOKEN)
 
-        for _u in ADMIN BACKREST BESZEL DOCKHAND UPTIME_KUMA PROWLARR QBITTORRENT AUTHELIA SHELFMARK; do
+        for _u in ADMIN BACKREST BESZEL DOCKHAND UPTIME_KUMA PROWLARR QBITTORRENT AUTHELIA SHELFMARK CHANGEDETECTION; do
             eval "STORED_${_u}_HASH=\"\$(unescape_compose_env_value \"\$(read_env_value_from_file \"\$OUTPUT_FILE\" NTFY_${_u}_HASH)\")\""
         done
     fi
@@ -200,6 +210,19 @@ main() {
         log "Generated NTFY_SHELFMARK_TOKEN for shelfmark ntfy user"
     fi
 
+    if [ -z "$NTFY_CHANGEDETECTION_PASSWORD_VALUE" ]; then
+        NTFY_CHANGEDETECTION_PASSWORD_VALUE="$(generate_password)"
+        log "Generated NTFY_CHANGEDETECTION_PASSWORD for changedetection ntfy user"
+    fi
+
+    # A token for the same reason as shelfmark's: it travels inside an Apprise
+    # URL's userinfo field (scripts/changedetection-bootstrap.sh), where
+    # generate_password's base64 would need percent-encoding to survive.
+    if [ -z "$NTFY_CHANGEDETECTION_TOKEN_VALUE" ]; then
+        NTFY_CHANGEDETECTION_TOKEN_VALUE="$(generate_token)"
+        log "Generated NTFY_CHANGEDETECTION_TOKEN for changedetection ntfy user"
+    fi
+
     log "Resolving bcrypt hashes for ntfy predefined users"
     USER_HASH="$(hash_password_cached "$STORED_ADMIN_HASH" "$PASSWORD_VALUE")"
     BACKREST_HASH="$(hash_password_cached "$STORED_BACKREST_HASH" "$NTFY_BACKREST_PASSWORD_VALUE")"
@@ -210,12 +233,13 @@ main() {
     QBITTORRENT_HASH="$(hash_password_cached "$STORED_QBITTORRENT_HASH" "$NTFY_QBITTORRENT_PASSWORD_VALUE")"
     AUTHELIA_HASH="$(hash_password_cached "$STORED_AUTHELIA_HASH" "$NTFY_AUTHELIA_PASSWORD_VALUE")"
     SHELFMARK_HASH="$(hash_password_cached "$STORED_SHELFMARK_HASH" "$NTFY_SHELFMARK_PASSWORD_VALUE")"
+    CHANGEDETECTION_HASH="$(hash_password_cached "$STORED_CHANGEDETECTION_HASH" "$NTFY_CHANGEDETECTION_PASSWORD_VALUE")"
 
     mkdir -p "$OUTPUT_DIR"
 
-    AUTH_USERS_VALUE="${USER_VALUE}:${USER_HASH}:admin,backrest:${BACKREST_HASH}:user,beszel:${BESZEL_HASH}:user,dockhand:${DOCKHAND_HASH}:user,uptime-kuma:${UPTIME_KUMA_HASH}:user,prowlarr:${PROWLARR_HASH}:user,qbittorrent:${QBITTORRENT_HASH}:user,authelia:${AUTHELIA_HASH}:user,shelfmark:${SHELFMARK_HASH}:user"
-    AUTH_ACCESS_VALUE="backrest:${NTFY_MONITORING_TOPIC}:rw,beszel:${NTFY_MONITORING_TOPIC}:rw,dockhand:${NTFY_MONITORING_TOPIC}:rw,uptime-kuma:${NTFY_MONITORING_TOPIC}:rw,prowlarr:${NTFY_DOWNLOADS_TOPIC}:rw,qbittorrent:${NTFY_DOWNLOADS_TOPIC}:rw,authelia:${NTFY_SECURITY_TOPIC}:rw,shelfmark:${NTFY_DOWNLOADS_TOPIC}:rw"
-    AUTH_TOKENS_VALUE="uptime-kuma:${NTFY_UPTIME_KUMA_TOKEN_VALUE}:Uptime Kuma notification token,qbittorrent:${NTFY_QBITTORRENT_TOKEN_VALUE}:qBittorrent download notifications,shelfmark:${NTFY_SHELFMARK_TOKEN_VALUE}:Shelfmark download notifications"
+    AUTH_USERS_VALUE="${USER_VALUE}:${USER_HASH}:admin,backrest:${BACKREST_HASH}:user,beszel:${BESZEL_HASH}:user,dockhand:${DOCKHAND_HASH}:user,uptime-kuma:${UPTIME_KUMA_HASH}:user,prowlarr:${PROWLARR_HASH}:user,qbittorrent:${QBITTORRENT_HASH}:user,authelia:${AUTHELIA_HASH}:user,shelfmark:${SHELFMARK_HASH}:user,changedetection:${CHANGEDETECTION_HASH}:user"
+    AUTH_ACCESS_VALUE="backrest:${NTFY_MONITORING_TOPIC}:rw,beszel:${NTFY_MONITORING_TOPIC}:rw,dockhand:${NTFY_MONITORING_TOPIC}:rw,uptime-kuma:${NTFY_MONITORING_TOPIC}:rw,prowlarr:${NTFY_DOWNLOADS_TOPIC}:rw,qbittorrent:${NTFY_DOWNLOADS_TOPIC}:rw,authelia:${NTFY_SECURITY_TOPIC}:rw,shelfmark:${NTFY_DOWNLOADS_TOPIC}:rw,changedetection:${NTFY_WATCHES_TOPIC}:rw"
+    AUTH_TOKENS_VALUE="uptime-kuma:${NTFY_UPTIME_KUMA_TOKEN_VALUE}:Uptime Kuma notification token,qbittorrent:${NTFY_QBITTORRENT_TOKEN_VALUE}:qBittorrent download notifications,shelfmark:${NTFY_SHELFMARK_TOKEN_VALUE}:Shelfmark download notifications,changedetection:${NTFY_CHANGEDETECTION_TOKEN_VALUE}:changedetection.io page-change notifications"
 
     {
         printf '# Managed by scripts/ntfy-pre-start.sh\n'
@@ -230,9 +254,12 @@ main() {
         printf 'NTFY_AUTHELIA_PASSWORD=%s\n' "$(escape_compose_env_value "$NTFY_AUTHELIA_PASSWORD_VALUE")"
         printf 'NTFY_SHELFMARK_PASSWORD=%s\n' "$(escape_compose_env_value "$NTFY_SHELFMARK_PASSWORD_VALUE")"
         printf 'NTFY_SHELFMARK_TOKEN=%s\n' "$(escape_compose_env_value "$NTFY_SHELFMARK_TOKEN_VALUE")"
+        printf 'NTFY_CHANGEDETECTION_PASSWORD=%s\n' "$(escape_compose_env_value "$NTFY_CHANGEDETECTION_PASSWORD_VALUE")"
+        printf 'NTFY_CHANGEDETECTION_TOKEN=%s\n' "$(escape_compose_env_value "$NTFY_CHANGEDETECTION_TOKEN_VALUE")"
         printf 'NTFY_MONITORING_TOPIC=%s\n' "$(escape_compose_env_value "$NTFY_MONITORING_TOPIC")"
         printf 'NTFY_DOWNLOADS_TOPIC=%s\n' "$(escape_compose_env_value "$NTFY_DOWNLOADS_TOPIC")"
         printf 'NTFY_SECURITY_TOPIC=%s\n' "$(escape_compose_env_value "$NTFY_SECURITY_TOPIC")"
+        printf 'NTFY_WATCHES_TOPIC=%s\n' "$(escape_compose_env_value "$NTFY_WATCHES_TOPIC")"
         printf 'NTFY_AUTHELIA_TOPIC=%s\n' "$(escape_compose_env_value "$NTFY_SECURITY_TOPIC")"
         printf 'NTFY_BESZEL_TOPIC=%s\n' "$(escape_compose_env_value "$NTFY_MONITORING_TOPIC")"
         printf 'NTFY_DOCKHAND_TOPIC=%s\n' "$(escape_compose_env_value "$NTFY_MONITORING_TOPIC")"
@@ -248,6 +275,7 @@ main() {
         printf 'NTFY_QBITTORRENT_HASH=%s\n' "$(escape_compose_env_value "$QBITTORRENT_HASH")"
         printf 'NTFY_AUTHELIA_HASH=%s\n' "$(escape_compose_env_value "$AUTHELIA_HASH")"
         printf 'NTFY_SHELFMARK_HASH=%s\n' "$(escape_compose_env_value "$SHELFMARK_HASH")"
+        printf 'NTFY_CHANGEDETECTION_HASH=%s\n' "$(escape_compose_env_value "$CHANGEDETECTION_HASH")"
         printf 'NTFY_AUTH_USERS=%s\n' "$(escape_compose_env_value "$AUTH_USERS_VALUE")"
         printf 'NTFY_AUTH_ACCESS=%s\n' "$(escape_compose_env_value "$AUTH_ACCESS_VALUE")"
         printf 'NTFY_AUTH_TOKENS=%s\n' "$(escape_compose_env_value "$AUTH_TOKENS_VALUE")"

@@ -592,6 +592,23 @@ kavita_token() {
         2>/dev/null | jq -r '.token // empty'
 }
 
+# Echo changedetection.io's API access token, or nothing. It is minted into the
+# datastore on the very first start and has no environment equivalent, so it can
+# only be read back out - by scripts/changedetection-bootstrap.sh to seed the
+# notification route, and by the Homepage widget bootstrap. Read from inside the
+# container: on the host the file is a root-owned 0600 under DATA_LOCATION, which
+# a non-root `make update` could not open.
+# Usage: changedetection_api_key [container]
+changedetection_api_key() {
+    local container="${1:-pi-changedetection}"
+
+    container_is_running "$container" || return 0
+
+    docker exec "$container" python3 -c \
+        'import json; print(json.load(open("/datastore/changedetection.json"))["settings"]["application"].get("api_access_token", ""), end="")' \
+        2>/dev/null
+}
+
 # Where scripts/audiobookshelf-bootstrap.sh persists the API key every later
 # script authenticates with. Inside /config rather than beside it so Backrest's
 # read-only mount of that directory carries it off-site: local logins are

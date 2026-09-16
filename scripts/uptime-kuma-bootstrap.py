@@ -123,6 +123,9 @@ GROUPS = [
             "pi-audiobookshelf",
             "pi-freshrss",
             "pi-trilium",
+            # Beside FreshRSS: down, it quietly stops watching, and what is lost
+            # is a notification nobody knows to expect.
+            "pi-changedetection",
             "pi-backrest",
         ],
     },

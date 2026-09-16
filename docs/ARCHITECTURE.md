@@ -83,6 +83,7 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **FreshRSS** | RSS/Atom reader; per-account subscriptions and read state in Postgres, refreshed by its own cron | users, and Google Reader API clients |
 | **SearXNG** | Metasearch: forwards a query to ~270 upstream engines and merges the answers; keeps no index and no accounts | users (browser and Homepage), and Open WebUI's web search |
 | **Trilium** | Personal knowledge base: a single-owner note tree in SQLite, edited in the browser | the owner, plus the Web Clipper and ETAPI scripts |
+| **changedetection.io** | Watches web pages and notifies on what changed; keeps its own compressed snapshot history and publishes an RSS feed of the diffs | users, and the ntfy `watches` topic |
 | **Stremio + Comet** | Streaming server and its debrid addon | users |
 | **AIOStreams** | Stremio super-addon: fans a title out to upstream addons and the debrid service, then filters and ranks the results (its "SEL" expressions). Streams only — it serves no catalogue. Its built-in Prowlarr scraper is pointed at **our** Prowlarr by `scripts/aiostreams-pre-start.sh`, which is the only way the French trackers this stack indexes reach a Stremio result list — no public Torrentio or MediaFusion instance knows them | users, through Stremio |
 | **AIOMetadata** | The other half: catalogs and metadata for Stremio (TMDB/TVDB/MAL/MDBList), with its own artwork proxy and disk cache. Installed alongside AIOStreams, not inside it | users, through Stremio |
@@ -453,6 +454,35 @@ That password lands in two places a rotation has to reach together — the `fres
 Postgres role and `data/config.php`, written once at install — which is the same shape
 as Nextcloud's `dbpassword`, and handled the same way: `cli/reconfigure.php` first,
 `ALTER ROLE` second.
+
+### Pages that publish no feed
+
+changedetection.io covers the other half of the same need: a price, a stock status, a
+school menu, a page that changes without ever announcing it. It has no database — the
+watch list, the settings and the brotli-compressed snapshot history are plain files
+under `${DATA_LOCATION}/changedetection`, so Backrest's read-only mount of that
+directory is the whole backup and there is no `db-backup.sh` hook for it.
+
+It sits on `frontend`, like FreshRSS and SearXNG, because fetching arbitrary hosts *is*
+the job. What makes that safe is `ALLOW_IANA_RESTRICTED_ADDRESSES=false`: a watch URL
+whose hostname resolves to a private, loopback or link-local address is refused, so a
+watch cannot be aimed at a neighbouring container or at the router's admin page. The
+exception is what makes the ntfy route below work, and it is narrow — see
+[Security](SECURITY.md#changedetectionio-fetches-whatever-it-is-told-to). It is upstream's default, pinned explicitly because
+flipping it is what would turn this container into a path into the LAN.
+
+Notifications go to the ntfy `watches` topic. The Apprise URL is seeded as the *system
+default* by `scripts/changedetection-bootstrap.sh` — the list is a datastore setting
+with no environment equivalent, so it can only be written through the API, with the
+token the datastore mints on its first start. A per-watch URL still overrides it, and
+the hook only ever appends, so a list edited by hand keeps its entries.
+
+**One real limit:** only the plain-HTTP fetcher is available. The image carries the
+Playwright *client* but the browser itself is a second container (`sockpuppetbrowser`,
+Chrome) that is not deployed here — a headless Chrome per check is not what the
+remaining RAM on this box is for. Pages that render their content in JavaScript
+therefore cannot be watched, and the browser-step and visual-selector features are
+inert.
 
 **Recommended layout:** clone onto the SSD and symlink it into place, so systemd and the docs agree on one path.
 

@@ -467,6 +467,9 @@ services:
       # Backrest API credential is no longer ${PASSWORD}, and this widget is the
       # only other thing that holds it.
       - HOMEPAGE_FILE_BACKREST_PASSWORD=/app/config/secrets/backrest_password
+      # changedetection.io mints this into its own datastore on the first start;
+      # the widgets bootstrap copies it out rather than creating one.
+      - HOMEPAGE_FILE_CHANGEDETECTION_API_KEY=/app/config/secrets/changedetection_api_key
     extra_hosts:
       # So the widget's https:// call passes Nextcloud's trusted-domains check.
       - "nextcloud.${HOST_NAME:-pi.lan}:172.30.11.250"
@@ -640,6 +643,11 @@ services:
       # data/config.php (the system settings) and data/users/*/config.php.
       - ${DATA_LOCATION:-./data}/freshrss:/userdata/freshrss:ro
       - ${DATA_LOCATION:-./data}/trilium:/userdata/trilium:ro
+      # The watch list, the settings and the compressed history snapshots - none
+      # of it regenerable, and all of it small. The `*.html.br` raw copies in
+      # there are pruned to the last two per watch by the app itself, so there is
+      # nothing to exclude.
+      - ${DATA_LOCATION:-./data}/changedetection:/userdata/changedetection:ro
       # Writable so the db-backup.sh hook can drop its pg_dump here, like lldap's.
       - ${DATA_LOCATION:-./data}/freshrss/backups:/userdata/freshrss/backups
       - ${DATA_LOCATION:-./data}/authelia-config:/userdata/authelia-config
