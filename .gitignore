@@ -31,6 +31,7 @@
 /config/agentgateway/agentgateway.env
 /config/searxng/searxng.env
 /config/aiostreams/aiostreams.env
+/config/aiostreams/addons-config.env
 /config/aiometadata/aiometadata.env
 /config/aiometadata/api-keys.env
 # write_file_atomic's mktemp sits beside the destination and is only cleaned up

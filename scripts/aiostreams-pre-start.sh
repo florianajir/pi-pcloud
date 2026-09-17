@@ -31,6 +31,9 @@
 # the value - still non-empty, so write_file_atomic reports success - and the
 # next `up -d` recreates the container with SSO silently gone.
 #
+# It also seeds config/aiostreams/addons-config.env once, for the one value only
+# stremio-addons.net can issue.
+#
 # A pre-start hook (scripts/run-hooks.sh), after authelia-pre-start.sh, which
 # mints oidc_aiostreams_secret.txt. Idempotent.
 
@@ -40,6 +43,7 @@ set -eu
 
 CONFIG_DIR="$PROJECT_DIR/config/aiostreams"
 OUTPUT_FILE="$CONFIG_DIR/aiostreams.env"
+ADDONS_CONFIG_FILE="$CONFIG_DIR/addons-config.env"
 
 # What the previous render left behind, for the fallbacks below.
 previous_value() {
@@ -135,6 +139,38 @@ render() {
     write_prowlarr
 }
 
+# Written once and never rewritten: stremio-addons.net issues this JWT against a
+# claimed manifest URL, so it is not something this stack can mint. Ships
+# commented out - an empty signature suppresses the manifest field exactly as an
+# absent one does, so a blank line here would look configured and do nothing.
+addons_config_template() {
+    cat << 'EOF'
+# STREMIO_ADDONS_CONFIG_SIGNATURE for AIOStreams. NOT managed by any script -
+# yours to edit.
+#
+# The manifest only advertises the stremio-addons.net verification badge when
+# this is set alongside STREMIO_ADDONS_CONFIG_ISSUER, which
+# compose/compose-media.yaml already pins. To get it: sign in at
+# https://stremio-addons.net, claim this instance by its manifest URL, and paste
+# the signed JWT it hands back.
+#
+# After editing: `docker compose up -d aiostreams`, never `restart` - env_file
+# values are frozen at container creation.
+
+#STREMIO_ADDONS_CONFIG_SIGNATURE=
+EOF
+}
+
+seed_addons_config() {
+    [ -e "$ADDONS_CONFIG_FILE" ] && return 0
+
+    addons_config_template | write_secret_file "$ADDONS_CONFIG_FILE" \
+        || die "Failed to seed $ADDONS_CONFIG_FILE"
+    safe_chmod 600 "$ADDONS_CONFIG_FILE"
+    fix_ownership "$ADDONS_CONFIG_FILE"
+    log "Seeded $ADDONS_CONFIG_FILE - paste the stremio-addons.net signature there"
+}
+
 main() {
     [ -f "$ENV_FILE" ] || die ".env not found at $ENV_FILE"
 
@@ -159,6 +195,8 @@ main() {
     # the repo owner unable to read their own generated env, and every invariant
     # behind `docker compose config` fails. tests/stack-up-test.sh enforces it.
     fix_ownership "$OUTPUT_FILE"
+    seed_addons_config
+
     log "Rendered AIOStreams env to $OUTPUT_FILE"
 }
 

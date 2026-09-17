@@ -423,16 +423,40 @@ services:
       # AIOSTREAMS_OIDC_DEFAULT_PERMISSIONS unset is what keeps it that way -
       # `admin` there would admit every account Authelia will authenticate.
       - AIOSTREAMS_OIDC_GROUP_PERMISSIONS=admin=admin
+      # SSO only: this gates POST /api/v1/auth/login and nothing else, so
+      # AIOSTREAMS_AUTH stays usable as the HTTP Basic credential the built-in
+      # proxy and usenet engine need - it just stops being a login form.
+      #
+      # It also stops being the way back in, and upstream's own recovery advice
+      # ("set AIOSTREAMS_OIDC_ENABLED=false and restart") does not work here: the
+      # route checks allowLocalLogin alone, with no coupling to oidc.enabled
+      # (packages/server/src/routes/api/auth/index.ts). If Authelia is down, flip
+      # *this* back to true and `up -d`.
+      - AIOSTREAMS_OIDC_ALLOW_LOCAL_LOGIN=false
       # Without it, anyone reaching /stremio/configure can create a
       # configuration, SSO or not. lan@docker already fences the page off; this
       # is the setting that actually locks the instance.
       - AIOSTREAMS_AUTH_REQUIRED=true
+      # The stremio-addons.net verification badge. Emitted into the manifest only
+      # when the issuer *and* the signature are both set
+      # (packages/server/src/routes/stremio/manifest.ts), so this line on its own
+      # changes nothing observable - the signature is a JWT that site issues for
+      # a claimed manifest URL, and it goes in the env file below. Pinned rather
+      # than left to the identical default so the pair is declared in one place.
+      - STREMIO_ADDONS_CONFIG_ISSUER=https://stremio-addons.net
     # SECRET_KEY, AIOSTREAMS_AUTH, the OIDC client secret and the Prowlarr pair,
     # all from scripts/aiostreams-pre-start.sh. Not in `environment:` above,
     # which wins over `env_file:` and would silently shadow them. Frozen at
     # container creation - after a rotation use `up -d`, never `restart`.
     env_file:
       - path: ./config/aiostreams/aiostreams.env
+        required: false
+      # Never rewritten once created: STREMIO_ADDONS_CONFIG_SIGNATURE, which only
+      # stremio-addons.net can issue. Seeded commented out, for the same reason
+      # aiometadata's api-keys.env is - an empty value and an absent one are not
+      # the same thing here, and an empty signature suppresses the manifest field
+      # just as silently as no signature at all.
+      - path: ./config/aiostreams/addons-config.env
         required: false
     volumes:
       - aiostreams_data:/app/data
