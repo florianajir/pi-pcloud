@@ -291,10 +291,23 @@ services:
       - immich
       - nextcloud
       - auth
+      - aiometadata
     cpu_shares: *cpu-prio-critical
-    # Shared by Immich, Nextcloud and Authelia. Peak dataset has been seen at
-    # ~44M; the limit must also cover the BGSAVE fork's copy-on-write pages, so
-    # keep it well above config/redis/valkey.conf's maxmemory (192mb).
+    # Shared by Immich, Nextcloud, Authelia and aiometadata. Peak dataset has
+    # been seen at ~44M; the limit must also cover the BGSAVE fork's
+    # copy-on-write pages, so keep it well above config/redis/valkey.conf's
+    # maxmemory (192mb).
+    #
+    # aiometadata is the one member whose working set has no natural ceiling - a
+    # ~60-catalog config caches every page and meta it renders - and maxmemory is
+    # one global budget with no per-client cap under volatile-lru, so a hot
+    # browse *can* evict another member's keys. Authelia's sessions are the cheap
+    # case: everyone signs in again. Nextcloud's are not - redis.config.php
+    # points memcache.locking here, and an evicted lock is a concurrent write
+    # that thinks it holds one. Kept small by catalog warming being off there, by
+    # its META_COLD_STORE disk L2 (an eviction costs a read, not a refetch), and
+    # by this being a household instance. If it bites, the fix is a valkey of its
+    # own for aiometadata, not a bigger budget here.
     mem_limit: 256m
     mem_reservation: 64m
     oom_score_adj: *oom-score-critical

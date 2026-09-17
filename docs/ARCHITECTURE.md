@@ -84,6 +84,8 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **SearXNG** | Metasearch: forwards a query to ~270 upstream engines and merges the answers; keeps no index and no accounts | users (browser and Homepage), and Open WebUI's web search |
 | **Trilium** | Personal knowledge base: a single-owner note tree in SQLite, edited in the browser | the owner, plus the Web Clipper and ETAPI scripts |
 | **Stremio + Comet** | Streaming server and its debrid addon | users |
+| **AIOStreams** | Stremio super-addon: fans a title out to upstream addons and the debrid service, then filters and ranks the results (its "SEL" expressions). Streams only — it serves no catalogue. Its built-in Prowlarr scraper is pointed at **our** Prowlarr by `scripts/aiostreams-pre-start.sh`, which is the only way the French trackers this stack indexes reach a Stremio result list — no public Torrentio or MediaFusion instance knows them | users, through Stremio |
+| **AIOMetadata** | The other half: catalogs and metadata for Stremio (TMDB/TVDB/MAL/MDBList), with its own artwork proxy and disk cache. Installed alongside AIOStreams, not inside it | users, through Stremio |
 | **stremio-lan** | The same Stremio server on a LAN macvlan address instead of the VPN, for DLNA casting — mutually exclusive with `stremio` | users, LAN renderers |
 | **Open WebUI** | Local AI chat frontend — see [Local AI](AI.md) | users |
 | **Agentgateway** | LLM and MCP gateway in front of llama.cpp: one OpenAI-compatible endpoint, one MCP endpoint, virtual keys and token rate limits | Open WebUI, and any API or MCP client |

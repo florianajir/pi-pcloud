@@ -14,7 +14,10 @@
 # have to create the -shm; see the immutable=1 fallback below. Anything that
 # still fails is logged and skipped, and restic ships the raw files as before.
 #
-# Everything here is small (~35 MB total) and dedupes well between snapshots.
+# Most of these are small and dedupe well between snapshots. The exception is
+# aiostreams' db.sqlite, ~38 MB because AIOStreams keeps its stream cache in the
+# database rather than beside it - so its copy is the one line item here that
+# actually costs something in the bucket.
 # Deliberately NOT listed:
 #   - lldap, open-webui, nextcloud, immich, vaultwarden, authelia - on Postgres
 #     in this stack; db-backup.sh already dumps them. Their leftover .db files
@@ -49,6 +52,8 @@ shelfmark:/userdata/shelfmark/users.db
 audiobookshelf:/userdata/audiobookshelf/absdatabase.sqlite
 agentgateway:/userdata/agentgateway/agentgateway.db
 trilium:/userdata/trilium/document.db
+aiostreams:/userdata/aiostreams/db.sqlite
+aiometadata:/userdata/aiometadata/db.sqlite
 '
 
 mkdir -p "$DEST"

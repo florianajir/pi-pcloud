@@ -8,6 +8,8 @@
 # per-service secrets (NTFY_*_PASSWORD, Comet's config/comet/comet.env, Backrest's
 # config/backrest/backrest.env, the Vaultwarden admin token, OIDC client secrets,
 # S3/backup keys) - those aren't derived from PASSWORD and don't need touching here.
+# AIOStreams' SECRET_KEY is in that set and must *never* rotate: it encrypts every
+# stored addon configuration, so a new one un-resolves every installed addon URL.
 #
 # Lessons baked in from doing this rotation live on this exact stack once:
 #   - The LLDAP admin account's password is NOT "self-healing" on container
@@ -520,6 +522,26 @@ rotate_shelfmark() {
     recreate shelfmark
 }
 
+# --- AIOStreams: PASSWORD is baked into its generated env_file ---
+# AIOSTREAMS_AUTH is "<ADMIN_USER>:<PASSWORD>", the local operator account that
+# is the way back in when OIDC breaks and the only credential its built-in proxy
+# and usenet engine accept. Same shape as Shelfmark above: re-render, then
+# recreate, because a `restart` keeps the environment compose resolved at
+# creation time. SECRET_KEY is carried forward by the hook, so every installed
+# addon URL stays valid across this.
+rotate_aiostreams() {
+    if ! container_is_running "pi-aiostreams"; then
+        note "✘ SKIPPED AIOStreams (pi-aiostreams not running)"
+        return 0
+    fi
+    if ! sh "$PROJECT_DIR/scripts/aiostreams-pre-start.sh" >/dev/null 2>&1; then
+        note "✘ FAILED to re-render config/aiostreams/aiostreams.env"
+        return 0
+    fi
+    note "✔ Re-rendered AIOStreams' local operator account"
+    recreate aiostreams
+}
+
 # --- Audiobookshelf: the root account's password lives in its own database ---
 # scripts/audiobookshelf-bootstrap.sh creates that account once from
 # ADMIN_USER/PASSWORD and never re-derives it, so without this step a rotation
@@ -903,6 +925,7 @@ main() {
         log "=== Live API credential updates (no recreate needed) ==="
         rotate_qbittorrent
         rotate_shelfmark
+        rotate_aiostreams
         rotate_prowlarr
         rotate_kapowarr
         rotate_audiobookshelf

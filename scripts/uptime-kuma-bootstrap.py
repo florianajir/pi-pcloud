@@ -139,6 +139,8 @@ GROUPS = [
             "pi-stremio",
             "pi-stremio-lan",
             "pi-comet",
+            "pi-aiostreams",
+            "pi-aiometadata",
             "pi-prowlarr",
             "pi-kapowarr",
             "pi-flaresolverr",

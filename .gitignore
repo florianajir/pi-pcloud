@@ -30,6 +30,17 @@
 /config/backrest/backrest.env
 /config/agentgateway/agentgateway.env
 /config/searxng/searxng.env
+/config/aiostreams/aiostreams.env
+/config/aiometadata/aiometadata.env
+/config/aiometadata/api-keys.env
+# write_file_atomic's mktemp sits beside the destination and is only cleaned up
+# on the paths that return - a `die` from inside the renderer exits the script
+# and leaves one behind, holding the same plaintext secrets. Same reasoning as
+# the .bak.* lines above: it must not be an untracked file `git add -A` sweeps
+# into a commit.
+/config/aiostreams/aiostreams.env.*
+/config/aiometadata/aiometadata.env.*
+/config/aiometadata/api-keys.env.*
 /config/gluetun/openvpn.ovpn
 /config/homepage/secrets/*
 !/config/homepage/secrets/.gitkeep

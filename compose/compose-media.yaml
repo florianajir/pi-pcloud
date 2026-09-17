@@ -375,6 +375,238 @@ services:
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
 
+  # Two separate Stremio addons, both installed client-side: AIOStreams resolves
+  # streams, AIOMetadata resolves catalogs and metadata. Neither replaces the
+  # other.
+  #
+  # Both on `frontend` rather than in gluetun's namespace, the same call as comet:
+  # with a debrid service nothing peer-to-peer leaves this host, and these two
+  # only ever talk to APIs. Turning on AIOStreams' P2P presets or its built-in
+  # proxy changes that, and would mean moving it behind gluetun - losing its own
+  # Traefik router to the namespace, as stremio already does.
+  aiostreams:
+    <<: *service-defaults
+    image: ghcr.io/viren070/aiostreams:v2.34.1
+    container_name: pi-aiostreams
+    profiles: ["aiostreams", "all"]
+    networks:
+      - frontend
+    extra_hosts:
+      # Reach Authelia's OIDC discovery endpoint through Traefik internally.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 3000
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - PORT=3000
+      # Install URLs, self-scrape detection and the built-in addons' stream URLs
+      # are all generated from it: a wrong value produces a manifest Stremio
+      # installs and then cannot fetch anything from.
+      - BASE_URL=https://aiostreams.${HOST_NAME:-pi.lan}
+      - DATABASE_URI=sqlite://./data/db.sqlite
+      # A *runtime* setting, so pinning it here makes the field read-only in the
+      # dashboard - true of every runtime setting this file sets. The SEL
+      # templates are synced URLs refetched for hotfixes, and `trusted` (the
+      # default) limits a non-trusted user to a whitelist, which on a
+      # single-operator instance only breaks the sync.
+      - SEL_SYNC_ACCESS=all
+      # Operator login only: the dashboard, plus the configuration page via
+      # AIOSTREAMS_AUTH_REQUIRED. /stremio/<uuid>/<password>/* stays a bearer
+      # credential in a URL - Stremio is a headless client with no cookie jar -
+      # and that is exactly what the public router below exposes.
+      - AIOSTREAMS_OIDC_ENABLED=true
+      - AIOSTREAMS_OIDC_ISSUER=https://auth.${HOST_NAME:-pi.lan}
+      - AIOSTREAMS_OIDC_CLIENT_ID=aiostreams
+      # The default omits `groups` (Google and Entra reject it as unknown).
+      - AIOSTREAMS_OIDC_SCOPES=openid profile email groups
+      # Deny-by-default: an identity in no listed group is refused. Leaving
+      # AIOSTREAMS_OIDC_DEFAULT_PERMISSIONS unset is what keeps it that way -
+      # `admin` there would admit every account Authelia will authenticate.
+      - AIOSTREAMS_OIDC_GROUP_PERMISSIONS=admin=admin
+      # Without it, anyone reaching /stremio/configure can create a
+      # configuration, SSO or not. lan@docker already fences the page off; this
+      # is the setting that actually locks the instance.
+      - AIOSTREAMS_AUTH_REQUIRED=true
+    # SECRET_KEY, AIOSTREAMS_AUTH, the OIDC client secret and the Prowlarr pair,
+    # all from scripts/aiostreams-pre-start.sh. Not in `environment:` above,
+    # which wins over `env_file:` and would silently shadow them. Frozen at
+    # container creation - after a rotation use `up -d`, never `restart`.
+    env_file:
+      - path: ./config/aiostreams/aiostreams.env
+        required: false
+    volumes:
+      - aiostreams_data:/app/data
+    labels:
+      - "homepage.group=Video"
+      - "pi-pcloud.companion-of=stremio"
+      - "homepage.name=AIOStreams"
+      - "homepage.href=https://aiostreams.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Stream aggregator and filtering for Stremio"
+      - "homepage.icon=stremio.png"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # Two routers on one host, the same split comet uses. The catch-all is
+      # LAN/tailnet only, and carries no authelia@docker: forward-auth would 401
+      # the Stremio client, and the operator pages have Authelia through OIDC.
+      - "traefik.http.routers.aiostreams.rule=Host(`aiostreams.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.aiostreams.entrypoints=websecure"
+      - "traefik.http.routers.aiostreams.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.aiostreams.tls=true"
+      - "traefik.http.routers.aiostreams.priority=10"
+      # The public half, so an addon installed on a Stremio account keeps
+      # resolving off-tailnet - a TV on mobile data cannot join it. Only the
+      # addon protocol goes out: /stremio/<uuid>/<encryptedPassword>/*, whose URL
+      # is itself the credential. /stremio/configure is carved back out, and
+      # /api/v1/* is not matched at all.
+      #
+      # Fails closed: a typo 403s from outside while still working from the LAN,
+      # so any change here has to be validated off-tailnet.
+      - "traefik.http.routers.aiostreams-public.rule=Host(`aiostreams.${HOST_NAME:-pi.lan}`) && PathPrefix(`/stremio/`) && !PathPrefix(`/stremio/configure`)"
+      - "traefik.http.routers.aiostreams-public.entrypoints=websecure"
+      # Not about auth here: every stream request fans out to a dozen upstream
+      # addons and a debrid API from the Pi's own WAN IP, so an unmetered public
+      # endpoint is an outbound amplifier. comet's reasoning.
+      - "traefik.http.routers.aiostreams-public.middlewares=frame-deny@docker,rate-limit-auth@docker"
+      - "traefik.http.routers.aiostreams-public.tls=true"
+      - "traefik.http.routers.aiostreams-public.priority=20"
+      - "traefik.http.routers.aiostreams-public.service=aiostreams"
+      - "traefik.http.services.aiostreams.loadbalancer.server.port=3000"
+    healthcheck:
+      <<: *healthcheck-default
+      # busybox /bin/wget, no curl. --spider would send HEAD, which this route
+      # does not answer, so fetch and discard instead.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/v1/status"]
+      # First boot fetches the anime id-mapping/manami/anitrakt databases before
+      # the API serves; ~50s on this Pi from cold.
+      start_period: 120s
+    cpu_shares: *cpu-prio-normal
+    # Measured: 137 MiB peak under a burst. Node 24 sizes its heap from the
+    # cgroup, so the limit is also what keeps it there - uncapped this container
+    # idles at 434 MiB because nothing makes it collect.
+    mem_limit: 384m
+    oom_score_adj: *oom-score-deprioritize
+
+  aiometadata:
+    <<: *service-defaults
+    # No semver tags on ghcr (only `latest` and v.testing.*), so pin latest -
+    # currently v2.17.2 - by digest, as comet does.
+    image: ghcr.io/cedya77/aiometadata:latest@sha256:89f61077d895ffc12055e65435c5dd98dc680724fcb95cf1b0566afc455cbd31
+    container_name: pi-aiometadata
+    profiles: ["aiometadata", "all"]
+    networks:
+      - frontend
+      - aiometadata
+    extra_hosts:
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 3232
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - PORT=3232
+      - NODE_ENV=production
+      # The addon's own variable, and it wants a full URL - the name collides
+      # with the stack's HOST_NAME, which is what ${HOST_NAME} interpolates.
+      # Same role as AIOStreams' BASE_URL: the redirect URI derives from it.
+      - HOST_NAME=https://aiometadata.${HOST_NAME:-pi.lan}
+      - DATABASE_URI=sqlite://addon/data/db.sqlite
+      # Addon routes (manifest, catalog, meta, artwork) are deliberately
+      # untouched and stay open to whoever holds the URL - Stremio carries no
+      # session. AUTH_REQUIRE_SIGNIN gates who may *configure*, not who may use.
+      - OIDC_ENABLED=true
+      - OIDC_ISSUER=https://auth.${HOST_NAME:-pi.lan}
+      - OIDC_CLIENT_ID=aiometadata
+      - OIDC_GROUPS_CLAIM=groups
+      # Deny-by-default: OIDC_DEFAULT_PERMISSIONS stays unset.
+      - OIDC_GROUP_PERMISSIONS=admin=admin|createConfig
+      - AUTH_REQUIRE_SIGNIN=true
+      # Sign-in rate limiting reads the client address this many entries back
+      # from the end of X-Forwarded-For. One reverse proxy sits in front; too
+      # low and every visitor shares one bucket.
+      - TRUST_PROXY_HOPS=1
+      # Every warmer off, and it is the most consequential setting here: a
+      # ~60-catalog config on `comprehensive` walks up to 100 pages per catalog
+      # every 24h, burning the free MDBList allowance (1000/day) in one pass.
+      # Catalogs fill on first view instead. `essential` if cold browsing is too
+      # slow - never `comprehensive` on this host.
+      - ENABLE_CACHE_WARMING=false
+      - CACHE_WARMUP_ON_STARTUP=false
+      - TMDB_POPULAR_WARMING_ENABLED=false
+      - MAL_WARMUP_ENABLED=false
+      # Disk L2 for metadata that provably never changes (released films, ended
+      # series). What makes sharing the Redis budget tolerable: an eviction costs
+      # a disk read rather than a refetch from TMDB/TVDB/MAL. Well under the 2gb
+      # default - payloads are lz4'd and this is a household instance.
+      - META_COLD_STORE_ENABLED=true
+      - META_COLD_STORE_PATH=/app/addon/data/metacache.sqlite
+      - META_COLD_STORE_MAX_BYTES=512m
+      # Artwork cached on this addon's own port rather than proxied on every
+      # render - a catalog page is one poster per tile, so it is the biggest
+      # single win for browsing. Lives in the data volume already mounted; 2g
+      # rather than the 10g default, and excluded from the Backrest plan.
+      - ENABLE_BUILTIN_POSTER_CACHE=true
+      - POSTER_CACHE_MAX_SIZE=2g
+      # Art URL patterns are user-supplied; nothing here serves art from the
+      # LAN, so refuse rather than let the proxy follow one inward.
+      - POSTER_PROXY_ALLOW_PRIVATE=false
+    # REDIS_URL (the shared valkey needs a password and this addon has no *_FILE
+    # variant), the OIDC client secret and ADMIN_KEY, from
+    # scripts/aiometadata-pre-start.sh. Same precedence note as aiostreams.
+    env_file:
+      - path: ./config/aiometadata/aiometadata.env
+        required: false
+      # Never rewritten once created: the server-side provider keys
+      # (BUILT_IN_TMDB_API_KEY and friends). Seeded commented-out, because an
+      # empty value and an absent one are not the same thing to this addon.
+      - path: ./config/aiometadata/api-keys.env
+        required: false
+    volumes:
+      - aiometadata_data:/app/addon/data
+    labels:
+      - "homepage.group=Video"
+      - "pi-pcloud.companion-of=stremio"
+      - "homepage.name=AIOMetadata"
+      - "homepage.href=https://aiometadata.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Catalogs and metadata addon for Stremio"
+      - "homepage.icon=stremio.png"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # Same two-router split as aiostreams and comet; no authelia@docker,
+      # because the operator pages already redirect to Authelia through OIDC.
+      - "traefik.http.routers.aiometadata.rule=Host(`aiometadata.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.aiometadata.entrypoints=websecure"
+      - "traefik.http.routers.aiometadata.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.aiometadata.tls=true"
+      - "traefik.http.routers.aiometadata.priority=10"
+      # The public half: the addon protocol only. Stremio addresses this addon
+      # as /<uuid>/<resource>/..., so the prefix is the config uuid rather than a
+      # fixed path - hence a regexp on the resource names. /configure, /api/* and
+      # /dashboard are not matched and stay behind lan@docker.
+      #
+      # Fails closed, same as the others: validate any change off-tailnet.
+      - "traefik.http.routers.aiometadata-public.rule=Host(`aiometadata.${HOST_NAME:-pi.lan}`) && PathRegexp(`^/[^/]+/(manifest\\.json|catalog|meta|poster|logo|background|poster-cache)(/.*)?$$`)"
+      - "traefik.http.routers.aiometadata-public.entrypoints=websecure"
+      # Every catalog page is a fan-out to TMDB/TVDB/MDBList, and MDBList's free
+      # tier is 1000 calls a day: unmetered, this is a way to burn the allowance.
+      - "traefik.http.routers.aiometadata-public.middlewares=frame-deny@docker,rate-limit-auth@docker"
+      - "traefik.http.routers.aiometadata-public.tls=true"
+      - "traefik.http.routers.aiometadata-public.priority=20"
+      - "traefik.http.routers.aiometadata-public.service=aiometadata"
+      - "traefik.http.services.aiometadata.loadbalancer.server.port=3232"
+    healthcheck:
+      <<: *healthcheck-default
+      # /health/live, not /health: the latter answers before Redis and the
+      # database are usable.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3232/health/live"]
+      start_period: 90s
+    cpu_shares: *cpu-prio-normal
+    # Measured: 236 MiB under a burst with the warmers off. Uncapped it idles at
+    # 979 MiB - Node growing its heap because nothing constrains it, not a leak.
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize
+
   prowlarr:
     <<: *service-defaults
     image: lscr.io/linuxserver/prowlarr:2.5.2

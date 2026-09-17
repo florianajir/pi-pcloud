@@ -98,7 +98,7 @@ The group decides the check interval, the retry budget and the ntfy priority:
 | **Remote Access** | headscale, headplane, tailscale, gluetun, VPN public IP | 60 s | 4 (high) | each monitor |
 | **External Chain** | route checks, TLS certificate | 120 s | 4 (high) | each monitor |
 | **Personal Data** | immich, immich-ml, nextcloud, vaultwarden, kavita, audiobookshelf, freshrss, trilium, backrest, backup freshness | 120 s | 3 | each monitor |
-| **Media & Downloads** | qbittorrent, stremio, stremio-lan, comet, prowlarr, kapowarr, flaresolverr, shelfmark, route qbittorrent | 300 s | 2 (low) | the group only |
+| **Media & Downloads** | qbittorrent, stremio, stremio-lan, comet, aiostreams, aiometadata, prowlarr, kapowarr, flaresolverr, shelfmark, route qbittorrent | 300 s | 2 (low) | the group only |
 | **Tools & Observability** | homepage, beszel, beszel-agent, dockhand, prometheus, grafana | 300 s | 2 (low) | the group only |
 | **Automation & AI** | n8n, n8n-runners, open-webui, llama-cpp, piper, searxng, agentgateway | 300 s | 2 (low) | the group only |
 

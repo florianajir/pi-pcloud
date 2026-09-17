@@ -94,6 +94,13 @@ get_env_value_clean() {
     unquote_env_value "$(get_env_value "$1")"
 }
 
+# Compose interpolates env_file values, so a literal '$' has to be doubled or it
+# would be eaten as the start of a variable reference. Every hook that renders a
+# generated env_file puts its values through this.
+escape_compose_env_value() {
+    printf '%s' "$1" | sed 's/[$]/$$/g'
+}
+
 # --- Data location ---
 
 # Normalise one data root: strip trailing slashes, then make it absolute
@@ -409,6 +416,15 @@ compose() {
     (cd "$PROJECT_DIR" && docker compose "$@")
 }
 
+# Is <service> in COMPOSE_PROFILES? run-if-enabled.sh's test mode is the single
+# answer to that question - it is what the systemd units and run-hooks.sh ask -
+# so hooks that render a block only when another service exists call it through
+# here rather than re-deriving the selection.
+# Usage: service_enabled <service>[,<service>...]
+service_enabled() {
+    /bin/sh "$SCRIPT_DIR/run-if-enabled.sh" "$1"
+}
+
 # Export COMPOSE_PROFILES the way the boot path resolves it, unless the caller
 # already set one. systemd supplies it (EnvironmentFile=.env, falling back to
 # its own Environment=all for installs predating per-service profiles); under
@@ -490,6 +506,20 @@ wait_for_health() {
 container_is_running() {
     local name="$1"
     docker ps --format '{{.Names}}' | grep -q "^${name}$"
+}
+
+# Prowlarr's API key, from the host copy of its config.xml rather than through
+# `docker exec`: the callers are pre-start hooks, so on a cold boot no container
+# is up yet and a container read would come back empty - and a hook would then
+# rewrite its env file *without* the Prowlarr block, dropping a source that was
+# working. prowlarr-pre-start.sh runs earlier in the same sequence and is what
+# puts the key in that file. Empty when it cannot be read; every caller checks.
+prowlarr_api_key() {
+    local config_file=""
+    config_file="$(resolve_data_location_path)/prowlarr/config.xml"
+    [ -r "$config_file" ] || return 0
+    grep -oE '<ApiKey>[^<]+</ApiKey>' "$config_file" 2>/dev/null \
+        | sed -e 's|<ApiKey>||' -e 's|</ApiKey>||' | tr -d '\r\n'
 }
 
 # Mint a 1-year Headscale API key. Headscale's json output moved the key
