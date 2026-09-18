@@ -22,6 +22,17 @@
 #                them makes both dashboard fields read-only - the point, for a
 #                discovered credential.
 #
+#                Two things these cannot do, because both are per-user config
+#                rather than instance settings: the Prowlarr addon still has to
+#                be added in Dashboard -> Addons (the values here only prefill
+#                it), and its "Timeout (ms)" has to be raised off the 7000 ms
+#                DEFAULT_TIMEOUT. Measured here, a live tracker search is 11-13s
+#                once AIOStreams expands a request into season-pack, episode and
+#                alternative-title queries - so at 7000 the fetcher aborts before
+#                Prowlarr answers and Stremio gets zero streams, with the only
+#                symptom a "timeout" line in the log. 30000 is comfortable; the
+#                UI ceiling is MAX_TIMEOUT (50000).
+#
 # Not lib.sh's ensure_env_secrets, which is otherwise this hook's shape: only
 # SECRET_KEY is generated. The rest are derived, and have to be reapplied every
 # run so a rotation propagates - the opposite of what that helper does.
