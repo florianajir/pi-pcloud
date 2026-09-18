@@ -93,6 +93,37 @@ jobs:
       - name: Run installer test suites
         run: make test
 
+  # The other jobs run on amd64 runners, so nothing they do says whether an
+  # image exists for the architecture the stack runs on. Dependabot's patch and
+  # minor bumps merge themselves on those checks, and an image published for
+  # amd64 alone would surface only at the next `make update` on the Pi.
+  image-architectures:
+    name: Image Architectures
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Nothing to compare against on a push. Skipped is a pass for a required
+    # check, so listing this one alongside the others does not wedge main.
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        # The diff is taken against the base commit, which a shallow clone does
+        # not have.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0
+
+      # Pathspecs rather than the whole tree: `image:` also appears in
+      # homepage's configs and in documentation, where it names nothing a
+      # registry could resolve.
+      - name: Check the added images run on arm64
+        run: |
+          set -euo pipefail
+          git diff "${BASE_SHA}...HEAD" -- \
+            compose.yaml compose.test.yaml compose/ ':(glob)config/*/Dockerfile' \
+            | python3 tests/image-architectures.py
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
   smoke-test:
     name: Smoke Test Stack Startup
     runs-on: ubuntu-latest

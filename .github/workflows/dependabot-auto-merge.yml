@@ -9,8 +9,10 @@ name: Dependabot auto-merge
 # `ci-excluded` - gluetun, qbittorrent, kapowarr, stremio, tailscale, headplane,
 # beszel-agent, ddns-updater, llama-cpp, piper, parakeet - is dropped by
 # tests/ci-profiles.py before `docker compose pull` runs, and Validate Compose
-# never contacts a registry. Those bumps merge on four green checks that never
-# fetched the image; a missing arm64 manifest surfaces at the next `make update`.
+# never contacts a registry. Image Architectures does resolve them, so the tag
+# is known to publish an arm64 manifest; what merges unverified is everything
+# that only shows once the container runs - a changed entrypoint, a config
+# format bumped under it, a health check that no longer answers.
 on: pull_request
 
 # Dependabot-triggered workflows get a read-only GITHUB_TOKEN whatever the
