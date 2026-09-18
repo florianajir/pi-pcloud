@@ -84,12 +84,18 @@ private address is not routable from outside anyway.
 **Never do this on the wildcard.** `headscale.<HOST_NAME>` must keep resolving to the WAN address —
 it is how remote nodes reach the control plane to enrol and reconnect from outside the tailnet.
 
-**Nor on `comet.<HOST_NAME>`, `aiostreams.<HOST_NAME>` or `aiometadata.<HOST_NAME>`.** Each of the
-three carries a second, `lan@docker`-free router over the addon protocol only — `comet-public@docker`
-on `/s/<PUBLIC_API_TOKEN>/`, `aiostreams-public@docker` on `/stremio/<uuid>/<encryptedPassword>/`,
-`aiometadata-public@docker` on `/stremio/<uuid>/` — precisely so an addon installed on a Stremio
+**Nor on `aiostreams.<HOST_NAME>` or `aiometadata.<HOST_NAME>`.** Each carries a second,
+`lan@docker`-free router over the addon protocol and its playback path —
+`aiostreams-public@docker` on `/stremio/<uuid>/<encryptedPassword>/` plus
+`/api/v1/debrid/playback/`, `aiometadata-public@docker` on `/stremio/<uuid>/`.
+`comet.<HOST_NAME>` is **not** in this list any more: nothing installs Comet directly, AIOStreams
+wraps it as a scraper over `frontend`, and its public router was deleted. AIOStreams and AIOMetadata each carry a *third*
+`lan@docker`-free router for the paths that cost nothing upstream and only want a looser limiter:
+`aiostreams-catalog@docker` (catalogues, metadata, the manifest, and `/static/` — the small .mp4
+status clips the playback route redirects to) and `aiometadata-art@docker` (artwork). All of it is
+published precisely so an addon installed on a Stremio
 account keeps resolving off-tailnet; a specific record aimed at `HOST_LAN_IP` hands the internet a
-private address and silently un-publishes all three. The record is unnecessary here anyway: a cast
+private address and silently un-publishes both. The record is unnecessary here anyway: a cast
 receiver that hairpins to the WAN address now reaches the addon endpoints through the public router
 instead of the `403` this section exists to avoid. Only the configure, dashboard and admin paths stay
 LAN-only, and none of them is something a TV opens.
