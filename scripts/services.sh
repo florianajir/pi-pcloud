@@ -333,6 +333,20 @@ run_shared_pre_start_hooks() {
     run_pre_start_hook authelia-pre-start.sh
 }
 
+# Postgres' own hook, run here *before* the container it is about to start, not
+# after like everywhere else: config/postgres/init-databases.sh only runs on a
+# fresh PGDATA, so a service enabled later has no role and cannot authenticate
+# at all - `make enable freshrss` started a container whose only option was to
+# crash-loop. Postgres is core and already up by the time anything can be
+# enabled, which is what makes running its post-start hook early work at all.
+#
+# Tolerant (run_hook, not run_pre_start_hook): it talks to a database, and
+# "could not read the roles" must not abort an enable that has nothing to do
+# with Postgres.
+run_shared_db_hook() {
+    run_hook postgres-bootstrap.sh
+}
+
 # The same idea after the start: Homepage's hook is where every optional
 # service's widget key is minted, so without it `make enable changedetection`
 # left HOMEPAGE_FILE_CHANGEDETECTION_API_KEY pointing at a file nothing would
@@ -804,6 +818,7 @@ cmd_enable() {
     for _svc in $newly_on; do
         run_pre_start_hook "$_svc-pre-start.sh"
     done
+    run_shared_db_hook
     echo "🚀 Starting$newly_on..."
     # shellcheck disable=SC2086 # service names, split on purpose
     run_compose_up_with "$new" up -d $newly_on
@@ -928,6 +943,7 @@ cmd_config() {
         for svc in $newly_on; do
             run_pre_start_hook "$svc-pre-start.sh"
         done
+        run_shared_db_hook
         echo "🚀 Starting$newly_on..."
         # shellcheck disable=SC2086 # service names, split on purpose
         run_compose_up_with "$new_profiles" up -d $newly_on

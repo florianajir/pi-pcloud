@@ -106,6 +106,8 @@ If it reads `t`, the bootstrap hook did not run (check `make logs`) and the fix 
 docker exec pi-postgres psql -U postgres -c 'ALTER ROLE immich WITH NOSUPERUSER;'
 ```
 
+The same hook creates the role and database of any service the source cluster did not have, for the same reason: a service added to the stack after that cluster was initialised is never covered by `init-databases.sh` either. It only ever creates, so a password rotated since is left alone.
+
 The same applies to the extension versions, for a cluster that came from a restore rather than this script:
 
 ```sh

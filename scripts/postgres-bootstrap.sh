@@ -1,10 +1,16 @@
 #!/bin/sh
 # Keep the shared cluster in the shape config/postgres/init-databases.sh creates
-# it: the immich role without SUPERUSER, and the immich database's extensions at
-# the versions the running postgres image ships. A post-start hook
-# (scripts/stack-up.sh). Idempotent, cheap, and safe on every boot.
+# it: one role and database per Postgres-backed service, the immich role without
+# SUPERUSER, and the immich database's extensions at the versions the running
+# postgres image ships. A post-start hook (scripts/stack-up.sh), and a pre-start
+# one on `make enable` (scripts/services.sh). Idempotent, cheap, and safe on
+# every boot.
 #
-# It repairs two things nothing else can:
+# It repairs three things nothing else can:
+#
+#   * a service whose role init-databases.sh never created, because that script
+#     only runs on a fresh PGDATA and the service joined the stack (or
+#     COMPOSE_PROFILES) afterwards. Without this it cannot authenticate at all.
 #
 #   * init-databases.sh only ever runs on a *fresh* PGDATA, from
 #     docker-entrypoint-initdb.d. A cluster restored from a dump, or migrated by
@@ -51,6 +57,116 @@ psql_postgres() {
 
 psql_immich() {
     docker exec -i "$PG_CONTAINER" psql -U postgres -d immich -v ON_ERROR_STOP=1 -Atq "$@"
+}
+
+# --- A service enabled after the cluster was created has no role ---
+#
+# config/postgres/init-databases.sh runs once, from docker-entrypoint-initdb.d
+# on a *fresh* PGDATA. A Postgres-backed service added to the stack later, or
+# left out of COMPOSE_PROFILES until now, therefore finds neither role nor
+# database and cannot authenticate at all - `make enable freshrss` on an
+# existing install started a container that could only crash-loop.
+#
+# CREATE, never ALTER: the password of an existing role belongs to
+# scripts/rotate-password.sh, and re-asserting PASSWORD here would undo a
+# rotation on the next boot. A new role gets PASSWORD because that is what the
+# service is handed in its environment - the same value both sides read.
+
+# The one list, read from the script that owns it rather than restated here.
+postgres_backed_services() {
+    sed -n 's/^SERVICES="\([^"]*\)".*/\1/p' \
+        "$PROJECT_DIR/config/postgres/init-databases.sh"
+}
+
+# The SQL init-databases.sh runs for one service, minus its ELSE ALTER branch.
+# Heredoc on stdin, never argv: the host's process table is world-readable.
+create_role_and_database() {
+    service="$1"
+    password_sql="$2"
+
+    docker exec -i "$PG_CONTAINER" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -Atq <<EOF
+DO \$\$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$service') THEN
+        CREATE USER "$service" WITH ENCRYPTED PASSWORD '$password_sql';
+    END IF;
+END
+\$\$;
+SELECT 'CREATE DATABASE "$service"'
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '$service')
+\gexec
+GRANT ALL PRIVILEGES ON DATABASE "$service" TO "$service";
+ALTER DATABASE "$service" OWNER TO "$service";
+
+\connect "$service"
+GRANT ALL ON SCHEMA public TO "$service";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "$service";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "$service";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO "$service";
+EOF
+}
+
+# Separate connection: the database this installs into has just been created,
+# so the heredoc above could not have reached it.
+create_immich_extensions() {
+    docker exec -i "$PG_CONTAINER" psql -U postgres -d immich -v ON_ERROR_STOP=1 -Atq <<'EOF'
+CREATE EXTENSION IF NOT EXISTS vchord CASCADE;
+CREATE EXTENSION IF NOT EXISTS earthdistance CASCADE;
+EOF
+}
+
+ensure_service_roles() {
+    services="$(postgres_backed_services)"
+    # An empty parse is a renamed variable, not a cluster with no services, and
+    # would silently turn this whole pass into a no-op.
+    if [ -z "$services" ]; then
+        log "WARNING: no SERVICES list in config/postgres/init-databases.sh; skipping role check"
+        return 0
+    fi
+
+    # One round-trip for the whole list: the `docker exec` around it costs far
+    # more than the query, and this runs on every boot. Role *and* database, so
+    # an interrupted first run that left one without the other is repaired too.
+    existing="$(psql_postgres -c \
+        "SELECT rolname FROM pg_roles INTERSECT SELECT datname FROM pg_database;")" \
+        || { log "WARNING: could not list the roles in this cluster"; return 0; }
+
+    missing=""
+    for service in $services; do
+        # Interpolated into SQL below, so it is checked rather than trusted.
+        # Being [a-z0-9-] only, it is also a literal grep pattern.
+        case "$service" in
+            *[!a-z0-9-]*)
+                log "WARNING: ignoring unexpected service name '$service' in the SERVICES list"
+                continue
+                ;;
+        esac
+        printf '%s\n' "$existing" | grep -qx -- "$service" || missing="$missing $service"
+    done
+
+    [ -n "$missing" ] || return 0
+
+    password="$(get_env_value PASSWORD)"
+    if [ -z "$password" ]; then
+        log "WARNING: PASSWORD is empty, cannot create the missing role(s):$missing"
+        return 0
+    fi
+    password_sql="$(sql_escape "$password")"
+
+    for service in $missing; do
+        if ! create_role_and_database "$service" "$password_sql" >/dev/null; then
+            log "WARNING: could not create the $service role and database"
+            continue
+        fi
+        log "$service: created the missing role/database (it joined this cluster after it was initialised)"
+        # vchord.control sets `superuser = true` and the immich role
+        # deliberately is not one, so init-databases.sh pre-creates its
+        # extensions as postgres. Without them immich-server's first migration
+        # fails on "permission denied to create extension".
+        if [ "$service" = immich ] && ! create_immich_extensions >/dev/null; then
+            log "WARNING: could not create the immich extensions (vchord, earthdistance)"
+        fi
+    done
 }
 
 # --- The immich role must not be a superuser ---
@@ -138,5 +254,6 @@ update_immich_extensions() {
     fi
 }
 
+ensure_service_roles
 ensure_immich_not_superuser
 update_immich_extensions

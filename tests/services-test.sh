@@ -209,6 +209,18 @@ ok "  after the container is removed" \
         | grep -nE 'uptime-kuma-bootstrap\.sh|docker compose rm' \
         | head -n1 | grep -c 'docker compose rm')" 1
 
+# config/postgres/init-databases.sh only runs on a fresh PGDATA, so a
+# Postgres-backed service enabled later has no role and cannot authenticate at
+# all. Its hook has to run *before* the container it would otherwise leave
+# crash-looping - the one place a post-start hook is run early.
+run_rc beszel enable freshrss
+ok       "enable freshrss succeeds"             "$rc" 0
+contains "  runs the postgres hook"             "$out" "postgres-bootstrap.sh"
+ok "  before the container is created" \
+    "$(printf '%s\n' "$out" \
+        | grep -nE 'postgres-bootstrap\.sh|docker compose up -d' \
+        | head -n1 | grep -c 'postgres-bootstrap')" 1
+
 # --- the two networking modes stay exclusive ---------------------------------
 
 # "all" already runs stremio, so this must not silently start a second server

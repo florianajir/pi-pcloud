@@ -460,5 +460,22 @@ ok       "and fatal when the caller asks for blocking" "$rc" 1
 contains "and named"                                   "$out" "pihole-bootstrap.sh failed"
 printf '#!/bin/sh\necho "HOOK pihole-bootstrap.sh"\n' >"$WORK/scripts/pihole-bootstrap.sh"
 
+# --- the roles a later enable needs are read from one list -------------------
+#
+# postgres-bootstrap.sh creates the role and database of a service that joined
+# the stack after the cluster was initialised, and takes the list of those
+# services out of config/postgres/init-databases.sh rather than keeping a second
+# copy. A rename on either side leaves that parse empty - a pass that silently
+# creates nothing, and a service that cannot authenticate with no hint why.
+services_from_hook="$({
+    sed -n '/^postgres_backed_services()/,/^}$/p' "$REPO_DIR/scripts/postgres-bootstrap.sh"
+    echo postgres_backed_services
+} | PROJECT_DIR="$REPO_DIR" sh)"
+ok "the hook reads the services init-databases.sh declares" \
+    "$services_from_hook" \
+    "$(sed -n 's/^SERVICES="\([^"]*\)".*/\1/p' "$REPO_DIR/config/postgres/init-databases.sh")"
+ok "  and that list is not empty" \
+    "$([ -n "$services_from_hook" ] && echo yes || echo no)" yes
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 [ "$fail" -eq 0 ]
