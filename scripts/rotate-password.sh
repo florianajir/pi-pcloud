@@ -91,7 +91,7 @@ confirm() {
     else
         echo "⚠️  This will rotate PASSWORD everywhere it's persisted:"
         echo "   Postgres roles (postgres, immich, nextcloud, authelia, lldap, open-webui,"
-        echo "   vaultwarden, freshrss), the LLDAP admin account (LDAP password-modify, not env),"
+        echo "   vaultwarden, freshrss, forgejo), the LLDAP admin account (LDAP password-modify, not env),"
         echo "   Authelia's ldap_password + db_password secrets, Nextcloud (DB + admin"
         echo "   login), Pi-hole, Beszel, ntfy, qBittorrent, Prowlarr, Kapowarr, Trilium,"
         echo "   Dockhand,"
@@ -188,7 +188,7 @@ rotate_postgres_roles() {
     if ! container_is_running "pi-postgres"; then
         note "✘ SKIPPED all postgres roles (pi-postgres not running)"
         IMMICH_ROLE_OK=0; AUTHELIA_ROLE_OK=0; LLDAP_ROLE_OK=0; OPEN_WEBUI_ROLE_OK=0
-        VAULTWARDEN_ROLE_OK=0; FRESHRSS_ROLE_OK=0
+        VAULTWARDEN_ROLE_OK=0; FRESHRSS_ROLE_OK=0; FORGEJO_ROLE_OK=0
         return 0
     fi
     rotate_postgres_role postgres postgres
@@ -197,6 +197,7 @@ rotate_postgres_roles() {
     rotate_postgres_role lldap lldap            && LLDAP_ROLE_OK=1      || LLDAP_ROLE_OK=0
     rotate_postgres_role open-webui open-webui  && OPEN_WEBUI_ROLE_OK=1 || OPEN_WEBUI_ROLE_OK=0
     rotate_postgres_role vaultwarden vaultwarden && VAULTWARDEN_ROLE_OK=1 || VAULTWARDEN_ROLE_OK=0
+    rotate_postgres_role forgejo forgejo        && FORGEJO_ROLE_OK=1     || FORGEJO_ROLE_OK=0
     # nextcloud is rotated in rotate_nextcloud_db_password() and freshrss in
     # rotate_freshrss(), each after its own config.php is updated - see the
     # ordering notes there.
@@ -890,6 +891,11 @@ main() {
         # applies the new role password. Its ADMIN_TOKEN is independent of PASSWORD
         # and deliberately untouched here - see scripts/vaultwarden-pre-start.sh.
         if [ "$VAULTWARDEN_ROLE_OK" = "1" ]; then recreate vaultwarden; else note "… Skipped recreating vaultwarden - its Postgres role didn't rotate"; fi
+        # Same shape as vaultwarden: FORGEJO__database__PASSWD is env, so the
+        # recreate is what applies the new role password. Its OIDC client secret
+        # is independent of PASSWORD and untouched here - see
+        # scripts/forgejo-oidc-bootstrap.sh.
+        if [ "$FORGEJO_ROLE_OK" = "1" ]; then recreate forgejo; else note "… Skipped recreating forgejo - its Postgres role didn't rotate"; fi
         # agentgateway holds no Postgres role and reads no PASSWORD: its state is
         # SQLite, and its cookie secret and LLM API key are generated files this
         # deliberately never touches - see scripts/agentgateway-pre-start.sh.
@@ -912,6 +918,7 @@ main() {
         [ "$VAULTWARDEN_ROLE_OK" = "1" ] || _stale_dumps="$_stale_dumps vaultwarden"
         [ "$IMMICH_ROLE_OK" = "1" ]      || _stale_dumps="$_stale_dumps immich"
         [ "$FRESHRSS_ROLE_OK" = "1" ]    || _stale_dumps="$_stale_dumps freshrss"
+        [ "$FORGEJO_ROLE_OK" = "1" ]     || _stale_dumps="$_stale_dumps forgejo"
         if [ -n "$_stale_dumps" ]; then
             note "⚠ backrest now holds the new PASSWORD, but these roles did not rotate:$_stale_dumps"
             note "  Their db-backup.sh dumps will fail until the role is fixed. nextcloud and"

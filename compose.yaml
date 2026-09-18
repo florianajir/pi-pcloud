@@ -260,6 +260,13 @@ networks:
     driver: bridge
     name: vault
     internal: true
+  # Forgejo and postgres only. Forgejo reaches the internet over `frontend`
+  # (OIDC discovery, repository mirrors, outbound mail), so this segment carries
+  # nothing but its database traffic - the same split as vault, rss and immich.
+  forge:
+    driver: bridge
+    name: forge
+    internal: true
   # FreshRSS and postgres only. FreshRSS reaches the internet over `frontend`
   # (it fetches feeds), so this segment carries nothing but its database
   # traffic - the same split as vault, immich, nextcloud and ai.

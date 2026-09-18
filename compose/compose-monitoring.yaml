@@ -600,6 +600,11 @@ services:
       - FRESHRSS_DB_PASSWORD=${PASSWORD}
       - FRESHRSS_SQL_BACKUP_DIR=/userdata/freshrss/backups
       - FRESHRSS_SQL_BACKUP_KEEP=7
+      - FORGEJO_DB_NAME=forgejo
+      - FORGEJO_DB_USER=forgejo
+      - FORGEJO_DB_PASSWORD=${PASSWORD}
+      - FORGEJO_SQL_BACKUP_DIR=/userdata/forgejo/backups
+      - FORGEJO_SQL_BACKUP_KEEP=7
       - RESTIC_PACK_SIZE=32
       - GOMEMLIMIT=1200MiB
       # Backrest's API serves the repo password and S3 keys to anyone who can reach
@@ -648,8 +653,15 @@ services:
       # there are pruned to the last two per watch by the app itself, so there is
       # nothing to exclude.
       - ${DATA_LOCATION:-./data}/changedetection:/userdata/changedetection:ro
+      # The bare repositories themselves, plus LFS objects, avatars and
+      # attachments. Unlike every other mount here this is not a second copy of
+      # something: a branch pushed only to this forge exists nowhere else. The
+      # issues, pull requests and releases are in Postgres and come in through
+      # the db-backup.sh hook instead.
+      - ${DATA_LOCATION:-./data}/forgejo:/userdata/forgejo:ro
       # Writable so the db-backup.sh hook can drop its pg_dump here, like lldap's.
       - ${DATA_LOCATION:-./data}/freshrss/backups:/userdata/freshrss/backups
+      - ${DATA_LOCATION:-./data}/forgejo/backups:/userdata/forgejo/backups
       - ${DATA_LOCATION:-./data}/authelia-config:/userdata/authelia-config
       - ${DATA_LOCATION:-./data}/open-webui/backups:/userdata/open-webui/backups
       # The only copy of the models, providers and MCP targets added through its

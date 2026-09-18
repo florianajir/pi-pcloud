@@ -95,6 +95,7 @@ tailscale-post-start.sh
 beszel-agent:beszel-agent-bootstrap.py
 dockhand:dockhand-oidc-bootstrap.sh
 nextcloud:nextcloud-oidc-bootstrap.sh
+forgejo:forgejo-oidc-bootstrap.sh
 pihole-bootstrap.sh
 qbittorrent:qbittorrent-bootstrap.sh
 prowlarr:prowlarr-bootstrap.sh

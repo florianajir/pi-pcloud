@@ -402,6 +402,164 @@ services:
     mem_reservation: 32m
     oom_score_adj: *oom-score-important
 
+  # A git forge: repositories, issues, pull requests and releases, self-hosted.
+  # It is the one service here whose data is not a copy of something else - a
+  # repository pushed only to this host exists nowhere but this host, which is
+  # why it is dumped (Postgres) *and* mirrored (the bare repos) by backrest.
+  forgejo:
+    <<: *service-defaults
+    # Forgejo, not Gitea: same codebase originally, but Forgejo is GPLv3 and
+    # governed by Codeberg e.V. (a non-profit) rather than by Gitea Ltd. under a
+    # CLA that can relicense contributions. See the PR body for the rest of the
+    # comparison. The digest pins the multi-arch index, not one platform's
+    # manifest, so it resolves on arm64 here and on amd64 in CI.
+    image: codeberg.org/forgejo/forgejo:16.0.5@sha256:cf5f5ae6acf2ababca0ee3d255705b83a47f35b25e07fc931d694d60664053fe
+    container_name: pi-forgejo
+    profiles: ["forgejo", "all"]
+    networks:
+      # frontend for Traefik, and for what Forgejo itself reaches out to:
+      # Authelia's discovery document, repository mirrors, and the SMTP relay.
+      - frontend
+      # postgres is on internal segments only; this is Forgejo's own.
+      - forge
+    extra_hosts:
+      # Authelia's discovery document, fetched through Traefik. Forgejo
+      # validates the URL when the auth source is *created*, so
+      # scripts/forgejo-oidc-bootstrap.sh fails outright without this - it is
+      # not only the sign-in path.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 3000
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      # The image chowns /data to these and drops to them. 1000:1000 is the
+      # host's own user here, so ${DATA_LOCATION}/forgejo stays readable to a
+      # non-root `make update` and to backrest's bind mount.
+      - USER_UID=1000
+      - USER_GID=1000
+      # Everything below lands in /data/gitea/conf/app.ini through the image's
+      # FORGEJO__<section>__<KEY> expansion, re-applied on every start - so this
+      # file stays the source of truth and an edit in the web UI's admin panel
+      # is reverted by the next recreate. The OIDC auth source is the deliberate
+      # exception: it lives in the database, because Forgejo has no ini key for
+      # it (see scripts/forgejo-oidc-bootstrap.sh).
+      - FORGEJO__database__DB_TYPE=postgres
+      - FORGEJO__database__HOST=postgres:5432
+      - FORGEJO__database__NAME=forgejo
+      - FORGEJO__database__USER=forgejo
+      - FORGEJO__database__PASSWD=${PASSWORD}
+      - FORGEJO__server__DOMAIN=git.${HOST_NAME:-pi.lan}
+      - FORGEJO__server__ROOT_URL=https://git.${HOST_NAME:-pi.lan}/
+      - FORGEJO__server__HTTP_PORT=3000
+      # No git-over-SSH. It needs a published host port, which every service
+      # here deliberately does without (Traefik is the only ingress), and :22 on
+      # this host is the Pi's own sshd. Clones and pushes go over HTTPS with a
+      # Forgejo access token as the password - which is also why
+      # ENABLE_BASIC_AUTHENTICATION is left at its default of true.
+      - FORGEJO__server__DISABLE_SSH=true
+      - FORGEJO__server__LFS_START_SERVER=true
+      # Install wizard skipped: the settings it would ask for are all above, and
+      # an unlocked instance serves /install to the first caller instead.
+      - FORGEJO__security__INSTALL_LOCK=true
+      # Traefik's address alone, matching FreshRSS's TRUSTED_PROXY and Immich's
+      # IMMICH_TRUSTED_PROXIES. Forgejo defaults this to 127.0.0.0/8 - so
+      # without it X-Forwarded-For is never honoured and every sign-in, audit
+      # entry and rate-limit bucket is attributed to the proxy. A wider range
+      # would be worse than the default: it would let any container on
+      # `frontend` choose the address Forgejo records.
+      - FORGEJO__security__REVERSE_PROXY_TRUSTED_PROXIES=172.30.11.250/32
+      # Accounts come from LLDAP through Authelia and from nowhere else: the
+      # sign-up form is gone, and the OIDC source creates the account on first
+      # sign-in. DISABLE_REGISTRATION would have blocked that too - it stops
+      # external registration as well as the form.
+      - FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION=true
+      # This router carries no authelia@docker (see the labels below), so
+      # without this every account on the tailnet - and every request the LAN
+      # allowlist admits - could browse the repositories anonymously. The
+      # healthcheck endpoint is exempt, verified against v16.0.5.
+      - FORGEJO__service__REQUIRE_SIGNIN_VIEW=true
+      - FORGEJO__service__ENABLE_NOTIFY_MAIL=true
+      # Trust Authelia's verified address rather than mailing a confirmation
+      # link to an identity LLDAP already vouched for.
+      - FORGEJO__service__REGISTER_EMAIL_CONFIRM=false
+      # Forgejo's *other* OpenID support - the 2007 OpenID 2.0 consumer, no
+      # relation to the OIDC source. Off, so the sign-in page offers exactly one
+      # way in.
+      - FORGEJO__openid__ENABLE_OPENID_SIGNIN=false
+      - FORGEJO__openid__ENABLE_OPENID_SIGNUP=false
+      - FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION=true
+      # The LLDAP uid, matching FreshRSS's OIDC_REMOTE_USER_CLAIM. The default is
+      # `nickname`, which Authelia does not send - every account would be named
+      # from the fallback instead.
+      - FORGEJO__oauth2_client__USERNAME=preferred_username
+      - FORGEJO__oauth2_client__ACCOUNT_LINKING=auto
+      - FORGEJO__oauth2_client__UPDATE_AVATAR=false
+      # Forgejo Actions, off: there is no runner on this host and there should
+      # not be one - a CI job is exactly the kind of unbounded CPU consumer the
+      # cpu_shares tiers exist to keep away from DNS and the database. Enabled
+      # it would only add a tab that never runs anything.
+      - FORGEJO__actions__ENABLED=false
+      # The code search indexer, off (it is also the upstream default, stated
+      # here because it is the one setting that would change this service's
+      # memory profile): it builds a bleve index over every file of every
+      # repository, which on a Pi costs more than grep-on-demand is worth.
+      - FORGEJO__indexer__REPO_INDEXER_ENABLED=false
+      - FORGEJO__mailer__ENABLED=true
+      - FORGEJO__mailer__PROTOCOL=smtp+starttls
+      - FORGEJO__mailer__SMTP_ADDR=${SMTP_HOST:-localhost}
+      - FORGEJO__mailer__SMTP_PORT=${SMTP_PORT:-587}
+      - FORGEJO__mailer__USER=${SMTP_USERNAME:-}
+      - FORGEJO__mailer__PASSWD=${SMTP_PASSWORD:-}
+      - FORGEJO__mailer__FROM=${EMAIL:-noreply@localhost}
+    volumes:
+      # Repositories, LFS objects, avatars, attachments, the session store and
+      # the generated app.ini - everything but the database.
+      - ${DATA_LOCATION:-./data}/forgejo:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-default
+      # The image ships no HEALTHCHECK. /api/healthz is a real probe, unlike a
+      # bare GET /: it pings the database and the cache and answers 503 when
+      # either is down. curl is in the image; wget and bash are too.
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
+      start_period: 60s
+    labels:
+      - "homepage.group=Tools"
+      - "homepage.name=Forgejo"
+      - "homepage.icon=forgejo.png"
+      - "homepage.href=https://git.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Self-hosted git forge"
+      # No homepage.widget: there is no forgejo/gitea widget in homepage, and
+      # the gitea one it is sometimes confused with reads a per-account token.
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # No authelia@docker: Forgejo runs the OIDC flow itself (see
+      # scripts/forgejo-oidc-bootstrap.sh), and forward-auth on top would
+      # also cover /<owner>/<repo>.git and /api/v1 - the paths git and every API
+      # client use, which send a token over basic auth and cannot complete an
+      # interactive portal. Same rationale as FreshRSS's greader API and
+      # Kavita's OPDS clients. REQUIRE_SIGNIN_VIEW above is what closes the
+      # anonymous browsing this leaves open.
+      #
+      # frame-deny@docker is not optional here: the entrypoint-wide
+      # security-headers middleware deliberately carries no frame policy, and
+      # Forgejo sends neither X-Frame-Options nor a frame-ancestors CSP of its
+      # own (checked against v16.0.5) - so without it any page can frame a
+      # signed-in session and click through to "Delete repository".
+      - "traefik.http.routers.forgejo.rule=Host(`git.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.forgejo.entrypoints=websecure"
+      - "traefik.http.routers.forgejo.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.forgejo.tls=true"
+      - "traefik.http.services.forgejo.loadbalancer.server.port=3000"
+    cpu_shares: *cpu-prio-batch
+    # Measured on this host at v16.0.5: 132 MiB idle, 191 MiB peak while
+    # pushing and re-cloning this repository. The headroom is for `git gc`,
+    # which the built-in cron forks on the repositories themselves.
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize
+
   n8n:
     <<: *service-defaults
     image: n8nio/n8n:2.39.7

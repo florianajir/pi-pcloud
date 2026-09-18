@@ -59,6 +59,12 @@
         "/userdata/aiometadata/poster-cache",
         "/userdata/aiometadata/metacache.sqlite",
         "/userdata/aiometadata/*.cache",
+        "/userdata/forgejo/gitea/indexers",
+        "/userdata/forgejo/gitea/queues",
+        "/userdata/forgejo/gitea/sessions",
+        "/userdata/forgejo/gitea/repo-archive",
+        "/userdata/forgejo/gitea/tmp",
+        "/userdata/forgejo/gitea/log",
         "/userdata/freshrss/cache",
         "/userdata/freshrss/favicons",
         "/userdata/freshrss/users/*/log.txt",
@@ -158,6 +164,13 @@
           "onError": "ON_ERROR_IGNORE",
           "actionCommand": {
             "command": "/bin/sh /hooks/db-backup.sh freshrss"
+          }
+        },
+        {
+          "conditions": ["CONDITION_SNAPSHOT_START"],
+          "onError": "ON_ERROR_IGNORE",
+          "actionCommand": {
+            "command": "/bin/sh /hooks/db-backup.sh forgejo"
           }
         },
         {

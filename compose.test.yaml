@@ -61,17 +61,23 @@ services:
     # else in the stack depends on it being up.
     profiles: [ci-excluded]
 
-  # --- headscale and agentgateway: trust the CI certificate authority ---
+  # --- headscale, agentgateway and forgejo: trust the CI certificate authority ---
   #
-  # Both fetch Authelia's OIDC discovery document over TLS at startup and exit
-  # when it fails, which is what used to keep them out: the ACME resolver holds
-  # a placeholder token, so Traefik served its own generated certificate.
-  # tests/ci-tls-store.sh files a throwaway leaf in the ACME store instead;
-  # these two only need its root.
+  # All three fetch Authelia's OIDC discovery document over TLS, which is what
+  # used to keep the first two out: the ACME resolver holds a placeholder token,
+  # so Traefik served its own generated certificate. tests/ci-tls-store.sh files
+  # a throwaway leaf in the ACME store instead; these three only need its root.
   #
   # Replacing the system bundle rather than appending to it is safe - nothing
-  # here reaches the public internet - and SSL_CERT_FILE is what both read:
-  # headscale is Go, and agentgateway's own image already sets this variable.
+  # here reaches the public internet - and SSL_CERT_FILE is what they read:
+  # headscale and forgejo are Go, and agentgateway's own image already sets this
+  # variable.
+  #
+  # forgejo fetches it twice over: `forgejo admin auth add-oauth` validates the
+  # URL while creating the source (scripts/forgejo-oidc-bootstrap.sh), and the
+  # server rebuilds its goth providers from it on every start. Without this the
+  # post-start hook fails x509 in CI, and the bootstrap this file exists to
+  # exercise would never be covered at all.
   headscale:
     environment:
       - SSL_CERT_FILE=/ci-tls/ca-cert.pem
@@ -79,6 +85,12 @@ services:
       - ${DATA_LOCATION:-./data}/traefik/ci-tls:/ci-tls:ro
 
   agentgateway:
+    environment:
+      - SSL_CERT_FILE=/ci-tls/ca-cert.pem
+    volumes:
+      - ${DATA_LOCATION:-./data}/traefik/ci-tls:/ci-tls:ro
+
+  forgejo:
     environment:
       - SSL_CERT_FILE=/ci-tls/ca-cert.pem
     volumes:
