@@ -313,15 +313,27 @@ services:
     #
     # aiometadata is the one member whose working set has no natural ceiling - a
     # ~60-catalog config caches every page and meta it renders - and maxmemory is
-    # one global budget with no per-client cap under volatile-lru, so a hot
-    # browse *can* evict another member's keys. Authelia's sessions are the cheap
-    # case: everyone signs in again. Nextcloud's are not - redis.config.php
+    # one global budget with no per-client cap under volatile-lru, so a tenant
+    # that outgrows it evicts another member's keys. Authelia's sessions are the
+    # cheap case: everyone signs in again. Nextcloud's are not - redis.config.php
     # points memcache.locking here, and an evicted lock is a concurrent write
-    # that thinks it holds one. Kept small by catalog warming being off there, by
-    # its META_COLD_STORE disk L2 (an eviction costs a read, not a refetch), and
-    # by this being a household instance. If it bites, the fix is a valkey of its
-    # own for aiometadata, not a bigger budget here.
-    mem_limit: 256m
+    # that thinks it holds one.
+    #
+    # Doubled (192mb -> 384mb, and this limit with it) rather than split off,
+    # because RSS was 118 MiB against a 192mb budget: there was no eviction yet,
+    # only a trajectory. Capacity is the cheap fix and it was the right one to
+    # try first. It does not make the tenants independent - if evicted_keys ever
+    # starts climbing, that is the signal for a valkey of aiometadata's own, and
+    # a third doubling would only buy time.
+    #
+    # Recreating this container needs `docker restart pi-aiometadata` after it.
+    # Authelia, Nextcloud and Immich reconnect on their own; aiometadata's client
+    # does not - it retried for about a minute, logging `getaddrinfo ENOTFOUND
+    # redis` while the container was gone, then went quiet without ever saying it
+    # had reconnected. Its healthcheck is /health/live, which does not test the
+    # cache, so the service reports healthy either way. The only positive signal
+    # is the startup banner: `redis ready`.
+    mem_limit: 512m
     mem_reservation: 64m
     oom_score_adj: *oom-score-critical
 
