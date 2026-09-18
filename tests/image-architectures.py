@@ -28,23 +28,28 @@ LOCAL_SUFFIX = ":local"
 
 IMAGE_LINE = re.compile(r"^\+\s*image:\s*(?P<ref>\S+)")
 FROM_LINE = re.compile(
-    r"^\+\s*FROM\s+(?:--\S+\s+)*(?P<ref>\S+)(?:\s+AS\s+(?P<alias>\S+))?",
+    r"^\+\s*FROM\s+(?:--\S+\s+)*(?P<ref>\S+)",
+    re.IGNORECASE,
+)
+# Read from every line of the diff, added or not: a hunk that rewrites a later
+# stage's `FROM builder` leaves the `... AS builder` that names it as unchanged
+# context, and "builder" resolved against a registry is a red build on a
+# Dockerfile that is perfectly fine.
+STAGE_ALIAS = re.compile(
+    r"^[ +-]?\s*FROM\s+(?:--\S+\s+)*\S+\s+AS\s+(?P<alias>\S+)",
     re.IGNORECASE,
 )
 
 
 def added_refs(diff):
     """Image references added by the diff, in first-seen order."""
+    lines = [line for line in diff.splitlines() if not line.startswith("+++")]
+    aliases = {match.group("alias") for match in map(STAGE_ALIAS.match, lines) if match}
     refs = []
-    aliases = set()
-    for line in diff.splitlines():
-        if line.startswith("+++"):
-            continue
+    for line in lines:
         match = IMAGE_LINE.match(line) or FROM_LINE.match(line)
         if not match:
             continue
-        if match.re is FROM_LINE and match.group("alias"):
-            aliases.add(match.group("alias"))
         ref = match.group("ref")
         if ref.endswith(LOCAL_SUFFIX) or ref in aliases:
             continue
@@ -60,7 +65,12 @@ def inspect(ref, template=None):
         [*argv, ref], capture_output=True, text=True, check=False, timeout=120
     )
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip().splitlines()[-1] if result.stderr else "inspect failed")
+        # Last line only - buildx prints the registry's answer there - but a
+        # stderr holding nothing but whitespace splits to an empty list, and an
+        # IndexError here would abort the run and leave every later reference
+        # unchecked.
+        reported = result.stderr.strip().splitlines()
+        raise RuntimeError(reported[-1] if reported else "inspect failed")
     return json.loads(result.stdout)
 
 
@@ -74,7 +84,7 @@ def platforms(ref):
     manifest = inspect(ref)
     entries = manifest.get("manifests")
     if entries is None:
-        config = inspect(ref, "{{json .Image}}")
+        config = inspect(ref, "{{json .Image}}") or {}
         return [(config.get("os"), config.get("architecture"))]
     found = []
     for entry in entries:
@@ -95,7 +105,9 @@ def main():
     for ref in refs:
         try:
             found = platforms(ref)
-        except (RuntimeError, ValueError, subprocess.SubprocessError) as error:
+        # OSError covers the one every local run hits first: no docker on PATH,
+        # which is a FileNotFoundError, not a SubprocessError.
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
             print(f"UNRESOLVED {ref}: {error}")
             failed = True
             continue
