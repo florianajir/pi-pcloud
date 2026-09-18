@@ -391,6 +391,20 @@ services:
     profiles: ["aiostreams", "all"]
     networks:
       - frontend
+    # Public resolvers, the same call prowlarr already makes below and for the
+    # same reason: Pi-hole's block lists cover torrent indexers, so resolving
+    # through it breaks this service's actual job. Measured - thepiratebay.org
+    # answers 0.0.0.0 from Pi-hole, and Docker's embedded resolver turns that
+    # into 127.0.0.1, which surfaces as "fetch failed" or a connect timeout on
+    # an addon rather than as anything mentioning DNS.
+    #
+    # Not an ALLOW_LISTS entry in scripts/pihole-bootstrap.sh: that list is for
+    # click-redirect collateral, and every device on the tailnet - the family
+    # included - resolves through the same Pi-hole. Narrowing the exception to
+    # this one container is what keeps the household filter intact.
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
     extra_hosts:
       # Reach Authelia's OIDC discovery endpoint through Traefik internally.
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
@@ -523,10 +537,19 @@ services:
       # the API serves; ~50s on this Pi from cold.
       start_period: 120s
     cpu_shares: *cpu-prio-normal
-    # Measured: 137 MiB peak under a burst. Node 24 sizes its heap from the
-    # cgroup, so the limit is also what keeps it there - uncapped this container
-    # idles at 434 MiB because nothing makes it collect.
-    mem_limit: 384m
+    # Measured: 137 MiB peak under a burst, 147 MiB idle with 21 addons
+    # configured. Node 24 sizes its heap from the cgroup, so the limit is also
+    # what keeps it there - uncapped this container idles at 434 MiB because
+    # nothing makes it collect.
+    #
+    # 768m rather than the 384m it shipped with, because that heap was too small
+    # once MAX_ADDONS went to 30: a stream lookup fans out to every addon in
+    # parallel and holds all of their results in memory to filter and rank them,
+    # and 21 upstreams was enough to hit "FATAL ERROR: Reached heap limit". The
+    # container exits and Docker restarts it, so it shows up as a search that
+    # returns nothing rather than as an OOM kill - `oomkilled` stays false,
+    # because V8 gave up before the cgroup did. Raise this alongside MAX_ADDONS.
+    mem_limit: 768m
     oom_score_adj: *oom-score-deprioritize
 
   aiometadata:
