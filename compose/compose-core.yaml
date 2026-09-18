@@ -131,6 +131,19 @@ services:
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.average=10"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.burst=20"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.period=1s"
+      # Artwork, which needs a different order of magnitude: one Stremio home
+      # paint is ~60 catalogues x ~20 tiles, so well over a thousand image
+      # requests from one browser IP in a few seconds. rate-limit-auth's burst of
+      # 20 dropped most of them as 429 and the posters simply did not render.
+      #
+      # Generous rather than absent, because the artwork route embeds an upstream
+      # URL and is therefore an image proxy anyone holding an addon URL can aim
+      # at the internet. The bytes come off a local disk cache, so this bounds
+      # abuse rather than protecting an API quota - the opposite trade from
+      # rate-limit-auth, which exists to stop exactly that quota being burned.
+      - "traefik.http.middlewares.rate-limit-art.ratelimit.average=100"
+      - "traefik.http.middlewares.rate-limit-art.ratelimit.burst=200"
+      - "traefik.http.middlewares.rate-limit-art.ratelimit.period=1s"
       - "traefik.http.routers.traefik.middlewares=frame-deny@docker,lan@docker,authelia@docker"
       - "traefik.http.routers.traefik.entrypoints=websecure"
       - "traefik.http.routers.traefik.rule=Host(`traefik.${HOST_NAME:-pi.lan}`)"

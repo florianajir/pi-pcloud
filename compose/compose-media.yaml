@@ -604,13 +604,21 @@ services:
       - "traefik.http.routers.aiometadata.middlewares=frame-deny@docker,lan@docker"
       - "traefik.http.routers.aiometadata.tls=true"
       - "traefik.http.routers.aiometadata.priority=10"
-      # The public half: the addon protocol only. Stremio addresses this addon
-      # as /<uuid>/<resource>/..., so the prefix is the config uuid rather than a
-      # fixed path - hence a regexp on the resource names. /configure, /api/* and
-      # /dashboard are not matched and stay behind lan@docker.
+      # The public half, split in two because the addon protocol and the artwork
+      # want opposite rate limits. Measured against the real paths rather than
+      # guessed - an earlier regexp here assumed /<uuid>/<resource>, which this
+      # addon does not use, so nothing but artwork was ever public.
+      #
+      #   /stremio/<uuid>/manifest.json, /catalog/..., /meta/...
+      #   /poster-cache/<kind>/<upstream-url>, /poster, /logo, /background
+      #   /logo.png, /missing_poster.png     (the fallback tile - without it a
+      #                                       missing poster renders as nothing)
+      #
+      # /configure, /dashboard and /api/* are all at the root and are matched by
+      # neither, so they stay behind lan@docker on the router above.
       #
       # Fails closed, same as the others: validate any change off-tailnet.
-      - "traefik.http.routers.aiometadata-public.rule=Host(`aiometadata.${HOST_NAME:-pi.lan}`) && PathRegexp(`^/[^/]+/(manifest\\.json|catalog|meta|poster|logo|background|poster-cache)(/.*)?$$`)"
+      - "traefik.http.routers.aiometadata-public.rule=Host(`aiometadata.${HOST_NAME:-pi.lan}`) && PathPrefix(`/stremio/`)"
       - "traefik.http.routers.aiometadata-public.entrypoints=websecure"
       # Every catalog page is a fan-out to TMDB/TVDB/MDBList, and MDBList's free
       # tier is 1000 calls a day: unmetered, this is a way to burn the allowance.
@@ -618,6 +626,15 @@ services:
       - "traefik.http.routers.aiometadata-public.tls=true"
       - "traefik.http.routers.aiometadata-public.priority=20"
       - "traefik.http.routers.aiometadata-public.service=aiometadata"
+      # Artwork, on rate-limit-art instead: these are served off the local disk
+      # cache and a single home paint asks for over a thousand of them, which
+      # rate-limit-auth's burst of 20 answered with 429 for all but the first few.
+      - "traefik.http.routers.aiometadata-art.rule=Host(`aiometadata.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/poster`) || PathPrefix(`/logo`) || PathPrefix(`/background`) || Path(`/missing_poster.png`))"
+      - "traefik.http.routers.aiometadata-art.entrypoints=websecure"
+      - "traefik.http.routers.aiometadata-art.middlewares=frame-deny@docker,rate-limit-art@docker"
+      - "traefik.http.routers.aiometadata-art.tls=true"
+      - "traefik.http.routers.aiometadata-art.priority=30"
+      - "traefik.http.routers.aiometadata-art.service=aiometadata"
       - "traefik.http.services.aiometadata.loadbalancer.server.port=3232"
     healthcheck:
       <<: *healthcheck-default
