@@ -631,6 +631,79 @@ services:
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
 
+  # Stremio's own UI can neither reorder addons nor disable part of one, and both
+  # are needed to put AIOMetadata's catalogs and metadata in front of Cinemeta's.
+  # The community answer is a hosted tool you hand your Stremio password to;
+  # StremThru does the same job on our own host, and with the feature flag below
+  # it does not even persist the credential - `vault` is what would store a
+  # Stremio account server-side, and it is off, so the only login path left puts
+  # the authKey in an HttpOnly cookie in the browser and reads it back per
+  # request (internal/stremio/sidekick/sidekick.go).
+  #
+  # Turn `vault` back on and that stops being true: the account lands in the
+  # SQLite below, encrypted with STREMTHRU_VAULT_SECRET, and this service then
+  # needs a Backrest mount it deliberately does not have today.
+  stremthru:
+    <<: *service-defaults
+    image: ghcr.io/muniftanjim/stremthru:0.105.0
+    container_name: pi-stremthru
+    profiles: ["stremthru", "all"]
+    networks:
+      - frontend
+    expose:
+      - 8080
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      - STREMTHRU_PORT=8080
+      - STREMTHRU_BASE_URL=https://stremthru.${HOST_NAME:-pi.lan}
+      # SQLite, on upstream's own advice: "SQLite is the recommended database for
+      # the vast majority of the users. You don't really need PostgreSQL."
+      # (docs/configuration/database-and-cache.md). With only the addon below
+      # enabled it holds nothing but its own schema.
+      - STREMTHRU_DATABASE_URI=sqlite://./data/stremthru.db
+      # One feature, not fifteen. StremThru ships a debrid proxy, a usenet
+      # engine, a torrent indexer aggregator, a SABnzbd endpoint, a WebDAV share
+      # and five more Stremio addons, all enabled by default - none of which this
+      # stack wants, and several of which overlap AIOStreams. Naming a feature
+      # with no +/- prefix enables *only* it.
+      #
+      # Measured, not assumed: with this set, /stremio/wrap, /stremio/store,
+      # /stremio/torz, /stremio/list, /stremio/newz and /v0/store all answer 404,
+      # and only /stremio/sidekick/ and /v0/health remain.
+      - STREMTHRU_FEATURE=stremio_sidekick
+    volumes:
+      - stremthru_data:/app/data
+    labels:
+      - "homepage.group=Video"
+      - "pi-pcloud.companion-of=stremio"
+      - "homepage.name=StremThru"
+      - "homepage.href=https://stremthru.${HOST_NAME:-pi.lan}/stremio/sidekick/"
+      - "homepage.description=Reorder and edit the Stremio addon collection"
+      - "homepage.icon=stremio.png"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # Forward-auth, unlike the other three Stremio services here, and it is the
+      # feature flag that makes it safe: SideKick is a browser UI with no Stremio
+      # client fetching anything from it, so there is no headless caller to 401.
+      # The product name rather than a function one - this is the tool that edits
+      # the addon collection, not something the household opens daily.
+      - "traefik.http.routers.stremthru.rule=Host(`stremthru.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.stremthru.entrypoints=websecure"
+      - "traefik.http.routers.stremthru.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.stremthru.tls=true"
+      - "traefik.http.services.stremthru.loadbalancer.server.port=8080"
+    healthcheck:
+      <<: *healthcheck-relaxed
+      # busybox wget; the image ships no curl. /v0/health, not / - the latter is
+      # the landing page and answers before the database migrations finish.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/v0/health"]
+      start_period: 30s
+    cpu_shares: *cpu-prio-normal
+    # Measured: 24.6 MiB idle. A Go binary serving one HTMX page, so this is the
+    # stack's floor rather than a number derived from a peak.
+    mem_limit: 128m
+    oom_score_adj: *oom-score-deprioritize
+
   prowlarr:
     <<: *service-defaults
     image: lscr.io/linuxserver/prowlarr:2.5.2

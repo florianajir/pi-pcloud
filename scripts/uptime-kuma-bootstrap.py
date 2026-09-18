@@ -141,6 +141,7 @@ GROUPS = [
             "pi-comet",
             "pi-aiostreams",
             "pi-aiometadata",
+            "pi-stremthru",
             "pi-prowlarr",
             "pi-kapowarr",
             "pi-flaresolverr",

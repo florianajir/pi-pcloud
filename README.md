@@ -54,7 +54,7 @@ Prefer doing it by hand? See the [Installation guide](docs/INSTALLATION.md).
 | **Cloud & storage** | Nextcloud, Immich, Vaultwarden, n8n, ntfy |
 | **Network & access** | Traefik, Authelia, LLDAP, Headscale + Headplane, Tailscale |
 | **DNS & filtering** | Pi-hole, Unbound |
-| **Download & media** | qBittorrent, Prowlarr, Kapowarr, Shelfmark, Kavita, Audiobookshelf, FreshRSS, Stremio + Comet, AIOStreams + AIOMetadata, FlareSolverr, Gluetun |
+| **Download & media** | qBittorrent, Prowlarr, Kapowarr, Shelfmark, Kavita, Audiobookshelf, FreshRSS, Stremio + Comet, AIOStreams + AIOMetadata, StremThru, FlareSolverr, Gluetun |
 | **Notes & knowledge** | Trilium |
 | **Search** | SearXNG |
 | **AI** | Open WebUI, Agentgateway, llama.cpp, Piper (TTS), Parakeet (STT), system-tools |
