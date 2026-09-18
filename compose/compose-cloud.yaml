@@ -535,16 +535,22 @@ services:
       # the gitea one it is sometimes confused with reads a per-account token.
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
-      # lan@docker alone, no authelia@docker: Forgejo runs the OIDC flow itself
-      # (see scripts/forgejo-oidc-bootstrap.sh), and forward-auth on top would
+      # No authelia@docker: Forgejo runs the OIDC flow itself (see
+      # scripts/forgejo-oidc-bootstrap.sh), and forward-auth on top would
       # also cover /<owner>/<repo>.git and /api/v1 - the paths git and every API
       # client use, which send a token over basic auth and cannot complete an
       # interactive portal. Same rationale as FreshRSS's greader API and
       # Kavita's OPDS clients. REQUIRE_SIGNIN_VIEW above is what closes the
       # anonymous browsing this leaves open.
+      #
+      # frame-deny@docker is not optional here: the entrypoint-wide
+      # security-headers middleware deliberately carries no frame policy, and
+      # Forgejo sends neither X-Frame-Options nor a frame-ancestors CSP of its
+      # own (checked against v16.0.5) - so without it any page can frame a
+      # signed-in session and click through to "Delete repository".
       - "traefik.http.routers.forgejo.rule=Host(`git.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.forgejo.entrypoints=websecure"
-      - "traefik.http.routers.forgejo.middlewares=lan@docker"
+      - "traefik.http.routers.forgejo.middlewares=frame-deny@docker,lan@docker"
       - "traefik.http.routers.forgejo.tls=true"
       - "traefik.http.services.forgejo.loadbalancer.server.port=3000"
     cpu_shares: *cpu-prio-batch

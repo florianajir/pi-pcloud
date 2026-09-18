@@ -54,10 +54,52 @@ forgejo_admin_with_secret() {
 }
 
 # Empty when the source does not exist yet. `auth list` prints a header row and
-# then tab-separated id/name/type/enabled.
+# then id/name/type/enabled.
+#
+# The separator is a *run* of tabs, not one: the command renders through Go's
+# text/tabwriter with --pad-char defaulting to '\t' and --tab-width to 8, so a
+# cell narrower than its column by more than a tab stop is followed by two.
+# Today's single row is one tab wide either way, but the header already prints
+# `Name\t\t`, and a second auth source with a longer name would push this one
+# into the same shape - `-F'\t'` would then read $2 as empty, report the source
+# as absent, and send the caller into `add-oauth` on a name that already exists.
 source_id() {
     forgejo_admin auth list 2>/dev/null \
-        | awk -F'\t' -v name="$SOURCE_NAME" 'NR > 1 && $2 == name { print $1; exit }'
+        | awk -F'\t+' -v name="$SOURCE_NAME" 'NR > 1 && $2 == name { print $1; exit }'
+}
+
+# Curl from *inside* Forgejo. This is the only URL a hook here reaches by
+# hostname rather than by container name, and Forgejo is the only container that
+# resolves it: `extra_hosts` pins auth.<HOST_NAME> to Traefik for this container
+# alone. lib.sh's wait_for_http_endpoint would run a throwaway curl on
+# `frontend` instead, which gets whatever public DNS answers - in CI, where
+# HOST_NAME is `test.local`, that is NXDOMAIN for the whole retry budget, twice
+# per run, and the source is never created. Probing here also uses the trust
+# store `forgejo admin` itself will, so a certificate it would reject shows up
+# as an unreachable endpoint rather than as a failed command.
+forgejo_can_reach() {
+    docker exec -u git "$FORGEJO_CONTAINER" sh -ec '
+        url="$1"
+        set -- -fsS --connect-timeout 5 --max-time 30 -o /dev/null
+        [ -z "${SSL_CERT_FILE:-}" ] || set -- "$@" --cacert "$SSL_CERT_FILE"
+        exec curl "$@" "$url"
+    ' sh "$1" >/dev/null 2>&1
+}
+
+# Usage: wait_for_forgejo_discovery <url>
+wait_for_forgejo_discovery() {
+    log "Waiting for Authelia's discovery document, as Forgejo resolves it..."
+    _try=0
+    while [ "$_try" -lt "$MAX_RETRIES" ]; do
+        if forgejo_can_reach "$1"; then
+            log "Authelia OIDC discovery is reachable from $FORGEJO_CONTAINER"
+            return 0
+        fi
+        _try=$((_try + 1))
+        sleep "$RETRY_INTERVAL"
+    done
+    log "ERROR: Authelia OIDC discovery is not reachable from $FORGEJO_CONTAINER"
+    return 1
 }
 
 main() {
@@ -89,7 +131,7 @@ main() {
         log "WARNING: Forgejo did not become healthy; skipping OIDC bootstrap"
         return 0
     }
-    wait_for_http_endpoint "$discovery_url" "Authelia OIDC discovery" "$MAX_RETRIES" "$RETRY_INTERVAL" || {
+    wait_for_forgejo_discovery "$discovery_url" || {
         log "WARNING: Authelia discovery document is not reachable; skipping OIDC bootstrap"
         return 0
     }
@@ -133,19 +175,24 @@ main() {
         }
     fi
 
+    log "Restarting Forgejo to load the OIDC source"
+    if ! compose restart forgejo >/dev/null; then
+        # No fingerprint: the row is in the database but the running instance
+        # has not built a provider from it, and writing the file here would make
+        # every later run short-circuit on "already up to date" and never retry
+        # the restart. Left unwritten, the next pass repeats the (idempotent)
+        # update and the restart with it.
+        log "WARNING: failed to restart Forgejo; the OIDC source is written but not loaded"
+        return 1
+    fi
+    wait_for_health "$FORGEJO_CONTAINER" "$MAX_RETRIES" "$RETRY_INTERVAL" || true
+
     ensure_config_target_is_file "$fingerprint_file" || return 1
     printf '%s\n' "$fingerprint" > "$fingerprint_file"
     safe_chmod 600 "$fingerprint_file"
     # Root-run from the systemd unit, and this lands inside the volume the
     # container (uid 1000) and backrest both read.
     fix_ownership "$fingerprint_file"
-
-    log "Restarting Forgejo to load the OIDC source"
-    if compose restart forgejo >/dev/null; then
-        wait_for_health "$FORGEJO_CONTAINER" "$MAX_RETRIES" "$RETRY_INTERVAL" || true
-    else
-        log "WARNING: failed to restart Forgejo; the OIDC source is written but not loaded"
-    fi
 }
 
 main "$@"
