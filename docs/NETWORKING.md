@@ -87,7 +87,7 @@ it is how remote nodes reach the control plane to enrol and reconnect from outsi
 **Nor on `comet.<HOST_NAME>`, `aiostreams.<HOST_NAME>` or `aiometadata.<HOST_NAME>`.** Each of the
 three carries a second, `lan@docker`-free router over the addon protocol only — `comet-public@docker`
 on `/s/<PUBLIC_API_TOKEN>/`, `aiostreams-public@docker` on `/stremio/<uuid>/<encryptedPassword>/`,
-`aiometadata-public@docker` on `/<uuid>/<resource>` — precisely so an addon installed on a Stremio
+`aiometadata-public@docker` on `/stremio/<uuid>/` — precisely so an addon installed on a Stremio
 account keeps resolving off-tailnet; a specific record aimed at `HOST_LAN_IP` hands the internet a
 private address and silently un-publishes all three. The record is unnecessary here anyway: a cast
 receiver that hairpins to the WAN address now reaches the addon endpoints through the public router

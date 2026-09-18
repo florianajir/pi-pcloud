@@ -52,6 +52,7 @@
         "/userdata/trilium/tmp",
         "/userdata/shelfmark/covers",
         "/userdata/aiostreams/anime-database",
+        "/userdata/aiostreams/cache",
         "/userdata/aiostreams/id-mappings",
         "/userdata/aiostreams/scene-mappings",
         "/userdata/aiostreams/seadex",

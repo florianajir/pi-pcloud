@@ -444,6 +444,17 @@ services:
       # a claimed manifest URL, and it goes in the env file below. Pinned rather
       # than left to the identical default so the pair is declared in one place.
       - STREMIO_ADDONS_CONFIG_ISSUER=https://stremio-addons.net
+      # 15 by default, which the community SEL template alone comes close to
+      # before a single French source is added. Raised rather than curated: the
+      # template's value is breadth, and the SEL filtering downstream is what
+      # turns it back into a short list.
+      #
+      # The cost is real but bounded. Addons are fetched in parallel with no
+      # concurrency cap, so latency stays that of the slowest one rather than
+      # the sum - what grows linearly is outbound requests per stream lookup,
+      # all from the Pi's WAN IP, and peak memory while the results are held for
+      # filtering. Watch mem_limit below if this is raised much further.
+      - MAX_ADDONS=30
     # SECRET_KEY, AIOSTREAMS_AUTH, the OIDC client secret and the Prowlarr pair,
     # all from scripts/aiostreams-pre-start.sh. Not in `environment:` above,
     # which wins over `env_file:` and would silently shadow them. Frozen at
@@ -480,12 +491,20 @@ services:
       # The public half, so an addon installed on a Stremio account keeps
       # resolving off-tailnet - a TV on mobile data cannot join it. Only the
       # addon protocol goes out: /stremio/<uuid>/<encryptedPassword>/*, whose URL
-      # is itself the credential. /stremio/configure is carved back out, and
+      # is itself the credential. Every configure page is carved back out, and
       # /api/v1/* is not matched at all.
+      #
+      # A regexp rather than !PathPrefix(`/stremio/configure`), which was what
+      # shipped first and covered only the instance-level page: the one that
+      # matters is *per user*, at /stremio/<uuid>/<encryptedPassword>/configure,
+      # and it stayed public. Measured, not assumed - /stremio/foo/configure 404s
+      # while /stremio/foo/bar/configure answers 400 (the route matched and only
+      # the credential was rejected). `$$` is compose's escape for a literal `$`,
+      # so Traefik receives `/configure(/|$)`.
       #
       # Fails closed: a typo 403s from outside while still working from the LAN,
       # so any change here has to be validated off-tailnet.
-      - "traefik.http.routers.aiostreams-public.rule=Host(`aiostreams.${HOST_NAME:-pi.lan}`) && PathPrefix(`/stremio/`) && !PathPrefix(`/stremio/configure`)"
+      - "traefik.http.routers.aiostreams-public.rule=Host(`aiostreams.${HOST_NAME:-pi.lan}`) && PathPrefix(`/stremio/`) && !PathRegexp(`/configure(/|$$)`)"
       - "traefik.http.routers.aiostreams-public.entrypoints=websecure"
       # Not about auth here: every stream request fans out to a dozen upstream
       # addons and a debrid API from the Pi's own WAN IP, so an unmetered public
@@ -614,11 +633,16 @@ services:
       #   /logo.png, /missing_poster.png     (the fallback tile - without it a
       #                                       missing poster renders as nothing)
       #
-      # /configure, /dashboard and /api/* are all at the root and are matched by
-      # neither, so they stay behind lan@docker on the router above.
+      # /dashboard and /api/* are at the root and are matched by neither, so they
+      # stay behind lan@docker on the router above. /configure is at the root too,
+      # but it is *also* served per user at /stremio/<uuid>/configure
+      # (addon.get('/stremio/:userUUID/configure') - it 302s rather than 404s),
+      # which PathPrefix(`/stremio/`) would otherwise hand to the internet. Carved
+      # back out with the same regexp aiostreams uses; `$$` is compose's escape
+      # for a literal `$`, so Traefik receives `/configure(/|$)`.
       #
       # Fails closed, same as the others: validate any change off-tailnet.
-      - "traefik.http.routers.aiometadata-public.rule=Host(`aiometadata.${HOST_NAME:-pi.lan}`) && PathPrefix(`/stremio/`)"
+      - "traefik.http.routers.aiometadata-public.rule=Host(`aiometadata.${HOST_NAME:-pi.lan}`) && PathPrefix(`/stremio/`) && !PathRegexp(`/configure(/|$$)`)"
       - "traefik.http.routers.aiometadata-public.entrypoints=websecure"
       # Every catalog page is a fan-out to TMDB/TVDB/MDBList, and MDBList's free
       # tier is 1000 calls a day: unmetered, this is a way to burn the allowance.
