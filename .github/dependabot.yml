@@ -13,6 +13,21 @@ updates:
     directories:
       - "/"
       - "/compose"
+    # Images that must carry their sibling's tag. Ungrouped they arrive as two
+    # pull requests and auto-merge lands them minutes apart; the skew is a
+    # runtime API mismatch, not a startup failure, so the smoke test starts both
+    # halves and says nothing. Patterns match dependency names, which carry no
+    # registry prefix: "ghcr.io/immich-app/..." would match nothing, silently.
+    # immich-app/postgres is left out on purpose - it versions independently.
+    groups:
+      immich:
+        patterns:
+          - "immich-app/immich-server"
+          - "immich-app/immich-machine-learning"
+      n8n:
+        patterns:
+          - "n8nio/n8n"
+          - "n8nio/runners"
     schedule:
       interval: "daily"
       time: "04:00"
