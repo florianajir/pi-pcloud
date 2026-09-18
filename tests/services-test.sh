@@ -189,7 +189,25 @@ lacks    "  and not Uptime Kuma's, which is off" "$out" "uptime-kuma-bootstrap.s
 # Uptime Kuma pauses the monitors of services COMPOSE_PROFILES leaves out, so
 # the newly enabled one stays paused until its bootstrap reconciles them.
 run_rc beszel,uptime-kuma enable changedetection
-contains "the monitors are reconciled when Uptime Kuma runs" "$out" "uptime-kuma-bootstrap.sh"
+ok       "enable with Uptime Kuma on succeeds"                "$rc" 0
+contains "the monitors are reconciled when Uptime Kuma runs"  "$out" "uptime-kuma-bootstrap.sh"
+
+# ...and exactly once when Uptime Kuma is itself the service being enabled: its
+# own post-start hook already ran it, and it is the most expensive hook here (a
+# throwaway container that pip-installs its client).
+run_rc beszel,uptime-kuma enable uptime-kuma
+ok "its own bootstrap is not run twice" \
+    "$(printf '%s\n' "$out" | grep -c 'uptime-kuma-bootstrap\.sh')" 1
+
+# The same reconciliation on the way out: a monitor left active against a
+# container that was just removed alerts as down until something pauses it.
+run_rc changedetection,uptime-kuma disable changedetection
+ok       "disable changedetection succeeds"          "$rc" 0
+contains "  reconciles the monitors too"             "$out" "uptime-kuma-bootstrap.sh"
+ok "  after the container is removed" \
+    "$(printf '%s\n' "$out" \
+        | grep -nE 'uptime-kuma-bootstrap\.sh|docker compose rm' \
+        | head -n1 | grep -c 'docker compose rm')" 1
 
 # --- the two networking modes stay exclusive ---------------------------------
 

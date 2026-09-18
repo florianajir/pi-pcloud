@@ -344,12 +344,24 @@ run_shared_pre_start_hooks() {
 # differs. The other unprefixed hooks in run-hooks.sh stay out - they belong to
 # core services that are already up, and headscale-init.sh mints an API key per
 # run.
+#
+# $1 is the list of services whose own post-start hooks just ran (empty on a
+# disable), so uptime-kuma-bootstrap.sh is not run a second time when Uptime
+# Kuma is itself the service being enabled - it is the most expensive hook in
+# the stack (a throwaway container that pip-installs its client), and
+# run_post_start_hooks has already run it by then.
 run_shared_post_start_hooks() {
+    _just_ran=" ${1:-} "
     run_hook homepage-widgets-bootstrap.sh
     # Uptime Kuma pauses the monitor of every service COMPOSE_PROFILES leaves
-    # out, so the one just enabled stays paused - reported down-but-ignored -
-    # until something reconciles it. Gated the way run-hooks.sh's `uptime-kuma:`
-    # prefix gates it, since Uptime Kuma is itself optional.
+    # out and resumes the rest, so the one just enabled stays paused - reported
+    # down-but-ignored - and the one just disabled keeps being polled, alerting
+    # on a container that is gone, until something reconciles them. Gated the
+    # way run-hooks.sh's `uptime-kuma:` prefix gates it, since Uptime Kuma is
+    # itself optional.
+    case "$_just_ran" in
+        *" uptime-kuma "*) return 0 ;;
+    esac
     if /bin/sh "$PROJECT_DIR/scripts/run-if-enabled.sh" uptime-kuma >/dev/null 2>&1; then
         run_hook uptime-kuma-bootstrap.sh
     fi
@@ -799,7 +811,7 @@ cmd_enable() {
     for _svc in $newly_on; do
         run_post_start_hooks "$_svc" "$known"
     done
-    run_shared_post_start_hooks
+    run_shared_post_start_hooks "$newly_on"
     echo "✅ $svc enabled"
     ram_note "$new_enabled"
 }
@@ -830,6 +842,12 @@ cmd_disable() {
     echo "🛑 Stopping and removing $svc..."
     run_compose_quiet stop "$svc"
     run_compose_quiet rm -f "$svc"
+    # The other half of what `enable` runs: Uptime Kuma resumes and pauses
+    # monitors from COMPOSE_PROFILES, so without this the monitor of the
+    # container just removed keeps being polled and alerts as down until the
+    # next `make update`. Nothing here was started, so no service name is
+    # passed.
+    run_shared_post_start_hooks ""
     echo "✅ $svc disabled"
     ram_note "$new_enabled"
 }
@@ -927,7 +945,10 @@ cmd_config() {
     for svc in $newly_on; do
         run_post_start_hooks "$svc" "$known"
     done
-    [ -z "$newly_on" ] || run_shared_post_start_hooks
+    # Not gated on $newly_on: a pure disable is exactly when Uptime Kuma is
+    # left polling a container that no longer exists. Only reached when
+    # something actually changed - the no-change case returned above.
+    run_shared_post_start_hooks "$newly_on"
 
     echo "✅ Applied${newly_on:+ · enabled:$newly_on}${newly_off:+ · disabled:$newly_off}"
     ram_note "$new_enabled"
