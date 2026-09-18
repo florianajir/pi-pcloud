@@ -12,8 +12,9 @@ file, one per line. Exit status is 0 on confirm, 1 on cancel.
 
 The third argument is the ceilings of the services this screen never lists,
 because they run whatever is picked (Traefik, Authelia, Postgres …); it is the
-floor every total starts from. Left out, the memory display is simply absent —
-the picker still picks.
+floor every total starts from. Left out, every total is short by exactly it, so
+services.sh always passes it; the memory display goes away altogether only when
+the rows carry no ceilings either.
 
 Files rather than stdio: curses owns the terminal, so a captured stdout would
 either swallow the UI or the result.
@@ -324,7 +325,7 @@ def draw(win, rows, lines, cursor, offset, message, view):
                 width - 1, curses.A_BOLD)
     win.addnstr(1, 0, f"{enabled}/{len(rows)} enabled · Traefik, Authelia, Pi-hole, "
                       f"Headscale, Postgres … always run", width - 1, curses.A_DIM)
-    if view["header_ram"]:
+    if view["header_ram"] and height > HEADER:
         text, key = ram_line(rows, view)
         win.addnstr(2, 0, text, width - 1, view["colors"][key] | curses.A_BOLD)
     column = view["column"]
@@ -335,6 +336,12 @@ def draw(win, rows, lines, cursor, offset, message, view):
     for screen_row, line_index in enumerate(range(offset, min(offset + body, len(lines)))):
         kind, payload = lines[line_index]
         y = screen_row + head
+        # `body` has a floor of one row, so a window too short to hold the
+        # header and the footer would otherwise be written past its last line -
+        # curses raises there, and the picker dies with a traceback instead of
+        # drawing what fits.
+        if y >= height - 1:
+            break
         if kind == "head":
             win.addnstr(y, 0, f"── {payload} ".ljust(width - 1, "─"), width - 1, curses.A_DIM)
             continue

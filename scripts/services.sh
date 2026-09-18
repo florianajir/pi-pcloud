@@ -683,8 +683,9 @@ cmd_enable() {
     # writes the keys its entrypoint reads. Diffing the effective sets is what
     # cmd_config already does; asking for `$svc-pre-start.sh` alone left the
     # dependency unconfigured while reporting success.
+    new_enabled="$(services_for_profiles "$new")"
     newly_on=""
-    for _svc in $(services_for_profiles "$new"); do
+    for _svc in $new_enabled; do
         in_lines "$was_enabled" "$_svc" || newly_on="$newly_on $_svc"
     done
     # Already running, so nothing is new: re-run the named service's own hooks
@@ -702,7 +703,7 @@ cmd_enable() {
         run_post_start_hooks "$_svc" "$known"
     done
     echo "✅ $svc enabled"
-    ram_note "$(services_for_profiles "$new")"
+    ram_note "$new_enabled"
 }
 
 cmd_disable() {
@@ -722,14 +723,17 @@ cmd_disable() {
     new="$(printf '%s\n' "$current" | tr ',' '\n' | grep -vx "$svc" | paste -sd, - || true)"
     [ -n "$new" ] || echo "⚠️  COMPOSE_PROFILES is now empty: only core services will run"
     write_profiles "$new"
-    if services_for_profiles "$new" 2>/dev/null | grep -qx "$svc"; then
+    # `|| true`, as when this was a pipeline in the `if` below: compose refusing
+    # the new selection must not abort the disable it was asked for.
+    new_enabled="$(services_for_profiles "$new" 2>/dev/null || true)"
+    if in_lines "$new_enabled" "$svc"; then
         echo "⚠️  $svc is still auto-enabled by another enabled service's profile — it will come back on the next stack restart"
     fi
     echo "🛑 Stopping and removing $svc..."
     run_compose_quiet stop "$svc"
     run_compose_quiet rm -f "$svc"
     echo "✅ $svc disabled"
-    ram_note "$(services_for_profiles "$new")"
+    ram_note "$new_enabled"
 }
 
 # Print the COMPOSE_PROFILES value the user picks, and nothing else, so

@@ -271,8 +271,8 @@ make disable stremio     # remove from COMPOSE_PROFILES and stop it
 
 ```
 Choose which services run — applying starts and stops containers now
-37/37 enabled · Traefik, Authelia, Pi-hole, Headscale, Postgres … always run
-RAM ceilings 36.6G of 15.6G · 2.3x — overcommitted, as designed
+36/37 enabled · Traefik, Authelia, Pi-hole, Headscale, Postgres … always run
+RAM ceilings 35.6G of 15.6G · 2.3x — overcommitted, as designed
 ── Download ──────────────────────────────────────────────────────────────
  [x] prowlarr                   512M  Torrent search aggregator
  [x]   flaresolverr             768M  Cloudflare challenge solver for Prowlarr
