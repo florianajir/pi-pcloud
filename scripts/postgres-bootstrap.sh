@@ -106,6 +106,15 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO "$service";
 EOF
 }
 
+# Separate connection: the database this installs into has just been created,
+# so the heredoc above could not have reached it.
+create_immich_extensions() {
+    docker exec -i "$PG_CONTAINER" psql -U postgres -d immich -v ON_ERROR_STOP=1 -Atq <<'EOF'
+CREATE EXTENSION IF NOT EXISTS vchord CASCADE;
+CREATE EXTENSION IF NOT EXISTS earthdistance CASCADE;
+EOF
+}
+
 ensure_service_roles() {
     services="$(postgres_backed_services)"
     # An empty parse is a renamed variable, not a cluster with no services, and
@@ -115,21 +124,24 @@ ensure_service_roles() {
         return 0
     fi
 
+    # One round-trip for the whole list: the `docker exec` around it costs far
+    # more than the query, and this runs on every boot. Role *and* database, so
+    # an interrupted first run that left one without the other is repaired too.
+    existing="$(psql_postgres -c \
+        "SELECT rolname FROM pg_roles INTERSECT SELECT datname FROM pg_database;")" \
+        || { log "WARNING: could not list the roles in this cluster"; return 0; }
+
     missing=""
     for service in $services; do
-        # Interpolated into SQL below, so it is checked rather than trusted -
-        # the list is ours, but nothing else in this script would notice a
-        # quote arriving in it.
+        # Interpolated into SQL below, so it is checked rather than trusted.
+        # Being [a-z0-9-] only, it is also a literal grep pattern.
         case "$service" in
-            *[!a-z0-9-]*) log "WARNING: ignoring unexpected service name in the SERVICES list"; continue ;;
+            *[!a-z0-9-]*)
+                log "WARNING: ignoring unexpected service name '$service' in the SERVICES list"
+                continue
+                ;;
         esac
-        # Role *or* database: an interrupted first run can leave one without
-        # the other, and the SQL above repairs either.
-        present="$(psql_postgres -c "
-            SELECT 1 WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$service')
-                      AND EXISTS (SELECT 1 FROM pg_database WHERE datname = '$service');")" \
-            || { log "WARNING: could not list the roles in this cluster"; return 0; }
-        [ "$present" = "1" ] || missing="$missing $service"
+        printf '%s\n' "$existing" | grep -qx -- "$service" || missing="$missing $service"
     done
 
     [ -n "$missing" ] || return 0
@@ -142,10 +154,17 @@ ensure_service_roles() {
     password_sql="$(sql_escape "$password")"
 
     for service in $missing; do
-        if create_role_and_database "$service" "$password_sql" >/dev/null; then
-            log "$service: created the missing role/database (it joined this cluster after it was initialised)"
-        else
+        if ! create_role_and_database "$service" "$password_sql" >/dev/null; then
             log "WARNING: could not create the $service role and database"
+            continue
+        fi
+        log "$service: created the missing role/database (it joined this cluster after it was initialised)"
+        # vchord.control sets `superuser = true` and the immich role
+        # deliberately is not one, so init-databases.sh pre-creates its
+        # extensions as postgres. Without them immich-server's first migration
+        # fails on "permission denied to create extension".
+        if [ "$service" = immich ] && ! create_immich_extensions >/dev/null; then
+            log "WARNING: could not create the immich extensions (vchord, earthdistance)"
         fi
     done
 }
