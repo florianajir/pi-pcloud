@@ -386,3 +386,79 @@ services:
     # on an import or a full-text reindex.
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
+
+  # Beside FreshRSS because it is the same job for the sites that publish no
+  # feed: a price, a stock status, a school menu.
+  changedetection:
+    <<: *service-defaults
+    image: ghcr.io/dgtlmoon/changedetection.io:0.60.6@sha256:eb4a9f718801004e006ffef0ce35171f42ec8d45c9b5d20da572bc5febe107ff
+    container_name: pi-changedetection
+    profiles: ["changedetection", "all"]
+    networks:
+      # Not just for Traefik: outbound HTTP to arbitrary hosts *is* the job, so
+      # an internal-only segment would break it. Same as freshrss and searxng.
+      #
+      # It is also the only one. ntfy is on frontend too, so the Apprise URL the
+      # bootstrap seeds resolves here as shelfmark's does; the `ntfy` segment is how
+      # backrest and dockhand reach ntfy *without* frontend, and this is the
+      # last container that should be given their :9898 and :3000.
+      - frontend
+    expose:
+      - 5000
+    environment:
+      - TZ=${TIMEZONE:-Europe/Paris}
+      # Only used for the link a notification carries back to the diff.
+      - BASE_URL=https://changes.${HOST_NAME:-pi.lan}
+      # The image defaults to DEBUG: ~15 journald lines per page fetched.
+      - LOGGER_LEVEL=INFO
+      # Upstream's default is 5. Each worker holds a page plus the lxml tree it
+      # parses, on four cores shared with Postgres and a model server.
+      - FETCH_WORKERS=3
+      # Monitored sites would otherwise see this stack's hostname in the Referer.
+      - HIDE_REFERER=true
+      - DISABLE_VERSION_CHECK=true
+      # The SSRF gate, and what makes a fetcher of arbitrary URLs safe on
+      # `frontend`: a watch resolving to a private address is refused, on the
+      # fetch and not only when saved. Upstream's default, pinned because
+      # flipping it is what would open the LAN. See docs/SECURITY.md.
+      - ALLOW_IANA_RESTRICTED_ADDRESSES=false
+      # No provider configured, and pointing one at agentgateway would mean
+      # opening the gate above - llm.api_base goes through it too. Off rather
+      # than a button that always errors.
+      - LLM_FEATURES_DISABLED=true
+    volumes:
+      # No database: settings, the watch list and the brotli history snapshots.
+      # No PUID either - the container runs as root and owns this tree.
+      - ${DATA_LOCATION:-./data}/changedetection:/datastore
+      - ./config/changedetection/healthcheck.py:/healthcheck.py:ro
+    healthcheck:
+      <<: *healthcheck-relaxed
+      # python3 is the only HTTP client in the image, and the probe asserts the
+      # fetch workers are alive: the watch list answers 200 with the pool dead.
+      test: ["CMD", "python3", "/healthcheck.py"]
+      start_period: 40s
+    labels:
+      - "homepage.group=News"
+      - "homepage.name=changedetection.io"
+      - "homepage.icon=changedetection.png"
+      - "homepage.href=https://changes.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Web page change monitoring and alerts"
+      - "homepage.widget.type=changedetectionio"
+      - "homepage.widget.url=http://pi-changedetection:5000"
+      # The datastore's own token, copied out by homepage-widgets-bootstrap.sh.
+      - "homepage.widget.key={{HOMEPAGE_FILE_CHANGEDETECTION_API_KEY}}"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      - "traefik.http.routers.changedetection.rule=Host(`changes.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.changedetection.entrypoints=websecure"
+      # No OIDC upstream and its own password is a single shared one, so
+      # forward-auth is the gate - which needs changes.__HOST_NAME__ in
+      # config/authelia/configuration.yml.template, or every request 403s.
+      - "traefik.http.routers.changedetection.middlewares=frame-deny@docker,lan@docker,authelia@docker"
+      - "traefik.http.routers.changedetection.tls=true"
+      - "traefik.http.services.changedetection.loadbalancer.server.port=5000"
+    cpu_shares: *cpu-prio-batch
+    # 110 MiB idle with three workers here, 141 MiB peak while fetching and
+    # compressing two pages. The headroom is for one page's lxml tree.
+    mem_limit: 512m
+    oom_score_adj: *oom-score-deprioritize

@@ -106,6 +106,7 @@ shelfmark:shelfmark-settings-bootstrap.sh
 audiobookshelf:audiobookshelf-bootstrap.sh
 open-webui:open-webui-bootstrap.sh
 trilium:trilium-bootstrap.sh
+changedetection:changedetection-bootstrap.sh
 homepage-widgets-bootstrap.sh
 '
 

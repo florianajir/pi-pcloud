@@ -120,6 +120,7 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | FreshRSS | ✓ | — | ✓ | LAN-only + OIDC. Apache's `mod_auth_openidc` guards `/i/` (the whole web UI) and maps `preferred_username` onto a per-user FreshRSS account, auto-created on first sign-in — so Authelia's `one_factor` policy is what decides who has a reading list at all. `/api/greader.php` is deliberately outside that: feed-reader apps can't pass an interactive portal, and it checks the account's own API password. No forward-auth for the same reason (as with Kavita's OPDS clients) |
 | SearXNG | ✓ | — | — | LAN-only and nothing else, as with Stremio, but for a different reason: SearXNG has no accounts to authenticate against and nothing per-user to protect — no stored credential and no query history. `enable_metrics: true` is on, but what it keeps is per-engine timings and the last error context each (hostname only, never the query text), which is the only signal that an engine is failing at all. `/metrics` stays 404 — the Prometheus endpoint needs `open_metrics` to carry a password, which it does not. `authelia@docker` is deliberately absent: forward-auth would also cover `/search`, which Open WebUI calls over the internal `ai` network with no session to present, and a second router cannot split the two — the browser and the JSON API are the same path |
 | Trilium | ✓ | — | ✓ | LAN-only + its own account / OIDC. No forward-auth: `/etapi` (scripting) and `/api/clipper` (the Web Clipper extension) can't pass an interactive portal, as with Kavita's OPDS clients. SSO is **not** live until the owner enrolls it — see below |
+| changedetection.io | ✓ | ✓ | — | LAN-only + SSO. No OIDC upstream, and its own password is a single shared one in the datastore, so forward-auth is the gate and that password is left unset — see [below](#changedetectionio-fetches-whatever-it-is-told-to). Its `/api/v1` is inside the same gate; the Homepage widget does not go through Traefik at all, it dials `pi-changedetection:5000` over `frontend` with the datastore's API token |
 | n8n | ✓ | — | — | LAN-only + its own auth |
 | ntfy | ✓ | — | — | LAN-only + its own accounts and ACLs (`deny-all` default) |
 | Homepage | ✓ | ✓ | ✓ | LAN-only + SSO + its own OIDC — all three, as Headplane already does, and here it costs nothing to: `HOMEPAGE_OIDC_AUTO_LOGIN=true` (v2.3.0) sends an unauthenticated visitor straight to Authelia rather than to a page whose only control is a sign-in button, and the forward-auth hop in front has already established that same session — so the dashboard still opens in one hop. Stacking is not redundant: forward-auth only guards the Traefik path, and `/api/*` — which proxies every widget's credentials — is reachable from anything on `frontend` that dials `:3000` with a forged `Host: homepage.<HOST_NAME>`, which is all `HOMEPAGE_ALLOWED_HOSTS` checks. `/api/healthcheck` and `/api/config/custom.css` stay public by design |
@@ -185,6 +186,47 @@ is the stack-wide limitation described under [OIDC](#oidc--for-services-that-can
 unlike Nextcloud and the others, Trilium cannot be pointed at Authelia's portal logout
 instead, because `postLogoutRedirect` is hardcoded to `/login`.
 
+### changedetection.io fetches whatever it is told to
+
+It is the only service in the stack whose *purpose* is to open arbitrary URLs from
+inside the Docker networks, and it sits on `frontend` with ~24 other containers,
+because outbound HTTP to any host is the job and an internal segment would break it.
+Two things keep that from being a server-side request forgery primitive:
+
+- **`ALLOW_IANA_RESTRICTED_ADDRESSES=false`** in `compose/compose-knowledge.yaml`.
+  Upstream resolves every watch URL — and every Apprise notification target routed
+  through its own `post://`/`get://` handlers — and refuses any hostname that lands on
+  a private, loopback, link-local, multicast or otherwise non-globally-reachable
+  address, parser differentials included (GHSA-rph4-96w6-q594). So `http://pi-postgres:5432`
+  and `http://192.168.1.1` are both rejected, by name or by address. It is upstream's
+  default; it is pinned here because a default is not a guarantee and this one is
+  load-bearing. Flipping it to watch a LAN page also hands every watch, and anyone who
+  can add one, the whole `frontend` segment. The check runs on the fetch itself, not only
+  when the watch is saved, and the plain-HTTP fetcher — the only one deployed here —
+  re-checks every redirect hop.
+- **`ALLOW_FILE_URI`** is left at its default `False`, so `file:///` watches — which
+  would read the container's own filesystem, including `/datastore` — are refused.
+
+The ntfy route is the one private target that does work, and deliberately: it goes
+through Apprise's built-in `ntfy://` plugin, which the SSRF check above does not cover,
+over `frontend`, where ntfy also sits. It is deliberately **not** put on the internal
+`ntfy` segment: that segment exists so backrest and dockhand can reach ntfy *without*
+joining `frontend`, so joining it would hand the one container built to fetch
+attacker-chosen URLs backrest's `:9898` — the restic password and the S3 keys — and
+dockhand's `:3000`, neither of which `frontend` can reach at all. Its credential is a
+per-service ntfy token with `rw` on the `watches` topic and nothing else, so this
+container cannot publish a fake outage or security alert.
+
+The same gate is why the LLM features are switched off with `LLM_FEATURES_DISABLED=true`
+rather than pointed at the stack's own models: `llm.api_base` goes through it too
+(`is_llm_api_base_safe`), so reaching `agentgateway` on an internal address would mean
+opening the SSRF gate for every watch as well.
+
+Its own password field in *Settings → General* is deliberately left empty: it is a
+single shared password with no accounts behind it, and setting one would put a second
+login in front of a router Authelia already gates. The healthcheck tolerates one being
+set anyway (`config/changedetection/healthcheck.py`) rather than reporting an outage.
+
 ## The middleware chain
 
 Every request through Traefik:
@@ -237,7 +279,7 @@ Authelia's rules in evaluation order (`config/authelia/configuration.yml.templat
 | Domain | Subject | Policy |
 |--------|---------|--------|
 | `auth.*` | — | bypass (the portal itself) |
-| `uptime.*`, `homepage.*`, `qbittorrent.*`, `prowlarr.*`, `kapowarr.*`, `ai.*` | any user | one_factor |
+| `uptime.*`, `homepage.*`, `qbittorrent.*`, `prowlarr.*`, `kapowarr.*`, `ai.*`, `changes.*` | any user | one_factor |
 | `headscale.*` path `/admin` | `admin` group | two_factor |
 | `backrest.*`, `pihole.*`, `traefik.*`, `lldap.*` | `admin` group | two_factor |
 | anything else | — | **deny** |

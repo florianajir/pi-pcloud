@@ -592,6 +592,25 @@ kavita_token() {
         2>/dev/null | jq -r '.token // empty'
 }
 
+# Echo changedetection.io's API access token, or nothing. Minted into the
+# datastore on its first start with no environment equivalent, so reading it back
+# is the only way to get it. From inside the container: on the host that file is
+# a root-owned 0600 a non-root `make update` could not open.
+#
+# Empty output, never a failing status - same contract as kavita_admin_api_key:
+# callers assign it, and `set -e` does not exempt an assignment, so a failing
+# status here would kill the hook before it could log its own warning.
+# Usage: changedetection_api_key [container]
+changedetection_api_key() {
+    local container="${1:-pi-changedetection}"
+
+    container_is_running "$container" || return 0
+
+    docker exec "$container" python3 -c \
+        'import json; print(json.load(open("/datastore/changedetection.json"))["settings"]["application"].get("api_access_token", ""), end="")' \
+        2>/dev/null || true
+}
+
 # Where scripts/audiobookshelf-bootstrap.sh persists the API key every later
 # script authenticates with. Inside /config rather than beside it so Backrest's
 # read-only mount of that directory carries it off-site: local logins are

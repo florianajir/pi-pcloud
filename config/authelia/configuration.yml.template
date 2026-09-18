@@ -78,6 +78,7 @@ access_control:
         # edits is the Stremio addon collection, and doing so needs the Stremio
         # password as well - which this service never stores.
         - 'stremthru.__HOST_NAME__'
+        - 'changes.__HOST_NAME__'
       policy: one_factor
 
     - domain: 'headscale.__HOST_NAME__'
