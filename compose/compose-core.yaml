@@ -262,6 +262,7 @@ services:
       - ai
       - vault
       - rss
+      - forge
     healthcheck:
       <<: *healthcheck-fast
       test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres}"]
