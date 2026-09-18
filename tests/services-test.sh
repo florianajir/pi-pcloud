@@ -200,18 +200,55 @@ contains "  and stremio-lan as disabled"      "$out" "⛔ stremio-lan disabled"
 
 # --- the row the picker is handed -------------------------------------------
 
-sed -n '/^config_rows()/,/^}$/p' "$WORK/scripts/services.sh" >"$WORK/rows.sh"
-echo config_rows >>"$WORK/rows.sh"
-sh "$WORK/rows.sh" >"$WORK/rows.txt"
+{
+    sed -n '/^compose_rows()/,/^}$/p' "$WORK/scripts/services.sh"
+    sed -n '/^config_rows()/,/^}$/p' "$WORK/scripts/services.sh"
+    sed -n '/^always_on_ram_mib()/,/^}$/p' "$WORK/scripts/services.sh"
+    echo '"$@"'
+} >"$WORK/rows.sh"
+sh "$WORK/rows.sh" config_rows >"$WORK/rows.txt"
 
-# Column 5 is the conflict, and one label in compose.yaml puts it on both rows.
+# Column 5 is the conflict, and one label in compose.yaml puts it on both rows;
+# column 6 is the mem_limit ceiling in MiB.
 ok "config_rows reports the conflict on stremio" \
-    "$(grep -c '^stremio:Video::gluetun:stremio-lan:' "$WORK/rows.txt")" 1
+    "$(grep -c '^stremio:Video::gluetun:stremio-lan:1024:' "$WORK/rows.txt")" 1
 ok "  and on stremio-lan"                     \
-    "$(grep -c '^stremio-lan:Video:::stremio:' "$WORK/rows.txt")" 1
+    "$(grep -c '^stremio-lan:Video:::stremio:1024:' "$WORK/rows.txt")" 1
 ok "  and leaves every other row's empty"     \
     "$(awk -F: '$5 != "" { print $1 }' "$WORK/rows.txt" | sort | tr '\n' ' ')" \
     "stremio stremio-lan "
+
+# --- the memory ceilings -----------------------------------------------------
+#
+# Both stremio modes take theirs from the x-stremio-common anchor rather than
+# from a key of their own, so the two rows above are also what proves the merge
+# key is followed: a parser reading only the literal lines reports 0 for them.
+
+ok "every optional service carries a ceiling" \
+    "$(awk -F: '$6 !~ /^[0-9]+$/ || $6 == 0 { print $1 }' "$WORK/rows.txt" | tr '\n' ' ')" ""
+ok "  and so does every always-on one" \
+    "$(sh "$WORK/rows.sh" compose_rows | awk -F'|' '$10 == 0 && $9 == 0 { print $4 }' \
+        | tr '\n' ' ')" ""
+
+ok "a core service is read but kept off the list" \
+    "$(sh "$WORK/rows.sh" compose_rows | awk -F'|' '$4 == "postgres" { print $9, $10 }')" \
+    "1536 0"
+ok "  while an optional one is on it" \
+    "$(sh "$WORK/rows.sh" compose_rows | awk -F'|' '$4 == "kavita" { print $9, $10 }')" \
+    "1024 1"
+ok "  and postgres never reaches the picker" \
+    "$(grep -c '^postgres:' "$WORK/rows.txt")" 0
+
+# The picker lists none of the always-on services, so their ceilings have to
+# reach it another way or every total it prints is short by a third.
+base_ram="$(sh "$WORK/rows.sh" always_on_ram_mib)"
+ok "the always-on total is a number" \
+    "$(printf '%s' "$base_ram" | grep -cE '^[0-9]+$')" 1
+ok "  larger than the largest core service alone" \
+    "$([ "$base_ram" -gt 1536 ] && echo yes || echo "$base_ram")" yes
+ok "  and counting no optional service" \
+    "$([ "$base_ram" -lt "$(awk -F: '{ t += $6 } END { print t }' "$WORK/rows.txt")" ] \
+        && echo yes || echo "$base_ram")" yes
 
 # --- the picker acts on that column -----------------------------------------
 #
@@ -261,13 +298,26 @@ print("DROP:" + picker.toggle(rows, index(rows, "stremio")) + "|" + ticked(rows)
 rows = load({"gluetun", "stremio", "comet"})
 print("MSG:" + picker.set_all(rows, True))
 print("ALL:" + ticked(rows))
+
+# The header adds up what is ticked plus the always-on floor it is handed, and
+# says which of the three things that is on this host: gluetun, stremio and
+# comet are 1792 MiB on top of a 1024 MiB floor.
+rows = load({"gluetun", "stremio", "comet"})
+print("RAM:" + picker.ram_line(rows, {"base": 1024, "ram": 8192})[0])
+print("KEYS:" + ",".join(
+    picker.ram_line(rows, {"base": 1024, "ram": size})[1] for size in (8192, 2048, 512)))
+
+# A ceiling is heavy relative to the host, not in absolute terms: 1 GB is a
+# rounding error on 16 GB and a quarter of a 4 GB Pi.
+print("HEAVY:" + ",".join(
+    str(picker.ram_key(1024, size)) for size in (4096, 8192, 16384)))
 PYCASE
 
 cat >"$WORK/picker-rows.txt" <<'ROWS'
-gluetun:Download::::on:VPN
-stremio:Video::gluetun:stremio-lan:on:Streaming server
-comet::stremio:::on:Addon
-stremio-lan:Video:::stremio:off:Casting
+gluetun:Download::::256:on:VPN
+stremio:Video::gluetun:stremio-lan:1024:on:Streaming server
+comet::stremio:::512:on:Addon
+stremio-lan:Video:::stremio:1024:off:Casting
 ROWS
 
 out="$(python3 "$WORK/picker-test.py" "$WORK/scripts/services-picker.py" "$WORK/picker-rows.txt" 2>&1 || true)"
@@ -276,6 +326,25 @@ contains "a companion follows either mode"    "$out" "COMPANION:gluetun,comet,st
 contains "dropping the mode drops the rest"   "$out" "DROP:also unticked: comet|gluetun"
 contains "select-all keeps the first mode"    "$out" "ALL:gluetun,stremio,comet"
 contains "  and says which it left out"       "$out" "MSG:left unticked (conflict): stremio-lan"
+contains "the header sums the ticked ceilings" "$out" "RAM:RAM ceilings 2.8G of 8.0G · 0.3x"
+contains "  and grades them against the host"  "$out" "KEYS:ok,warn,over"
+contains "  a heavy service is one on a share" "$out" "HEAVY:over,warn,None"
+
+# --- the ceilings are reported outside the picker too ------------------------
+#
+# `make config` needs python3 and a terminal; `make services` needs neither, and
+# is the only place a host without them can see what its selection costs.
+
+run_rc all list
+contains "list reports the RAM ceilings"      "$out" "🧠 RAM ceilings"
+contains "  against the host RAM"             "$out" " of "
+
+run_rc beszel list
+first="$(printf '%s\n' "$out" | sed -n 's/^🧠 RAM ceilings \([0-9.]*[MG]\).*/\1/p')"
+run_rc all list
+second="$(printf '%s\n' "$out" | sed -n 's/^🧠 RAM ceilings \([0-9.]*[MG]\).*/\1/p')"
+ok "  and a smaller selection is a smaller total" \
+    "$(printf '%s\n%s\n' "$first" "$second" | sort -h | head -n1)" "$first"
 
 printf '\nservices-test.sh: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

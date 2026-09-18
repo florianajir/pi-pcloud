@@ -497,7 +497,9 @@ Four cores and 16 GB, shared by ~40 containers including a local LLM. The sum of
 `mem_limit`s is close to twice the RAM, which is deliberate — they are ceilings on a
 service that misbehaves, not an allocation. What matters is who gives way first when
 the machine is actually short, and that is expressed in three separate knobs, none of
-which substitutes for another.
+which substitutes for another. The picker behind `make config` adds the ceilings up for
+the selection being made, graded against the RAM of the host it runs on
+([Choosing which services run](CONFIGURATION.md#choosing-which-services-run)).
 
 ### CPU
 

@@ -271,19 +271,24 @@ make disable stremio     # remove from COMPOSE_PROFILES and stop it
 
 ```
 Choose which services run — applying starts and stops containers now
-26/27 enabled · Traefik, Authelia, Pi-hole, Headscale, Postgres … always run
+36/37 enabled · Traefik, Authelia, Pi-hole, Headscale, Postgres … always run
+RAM ceilings 35.6G of 15.6G · 2.3x — overcommitted, as designed
 ── Download ──────────────────────────────────────────────────────────────
- [x] prowlarr                   Indexer manager
- [x]   flaresolverr             Cloudflare challenge solver for Prowlarr
- [x] qbittorrent                Torrent client (VPN protected)
+ [x] prowlarr                   512M  Torrent search aggregator
+ [x]   flaresolverr             768M  Cloudflare challenge solver for Prowlarr
+ [x] qbittorrent                512M  Torrent client (VPN protected)
 ── Video ─────────────────────────────────────────────────────────────────
- [x] stremio                    Streaming server (VPN protected)
- [x]   comet                    Stremio debrid addon
+ [x] stremio                    1.0G  Movie and TV streaming (VPN protected)
+ [x]   comet                    512M  Stream source addon for Stremio
 ```
 
 Ticking propagates along both dependency relations — the hard ones in the table above, and the companion indent — transitively, so the screen always shows a set the stack can actually run: unticking `gluetun` unticks `qbittorrent`, `kapowarr`, `stremio` and — through `stremio` — `comet`. The footer names whatever moved.
 
-The whole layout is read out of `compose/*.yaml` (`homepage.group` for the section, `homepage.description` for the text, `pi-pcloud.companion-of` for the indent, `profiles:` for the hard dependencies), so the picker cannot drift from the stack. It is `scripts/services-picker.py`, standard-library `curses` only — nothing to install on Raspberry Pi OS, and on a host without `python3` you simply use `make enable` / `make disable` instead. All three targets wrap `scripts/services.sh`, which is what actually writes `.env` and runs the hooks.
+**The number beside each service is what it may take.** It is the service’s `mem_limit` — the ceiling `compose/*.yaml` gives it, in MiB — and the third header line adds up the ticked ones plus the always-on services the screen never lists (Traefik, Authelia, Postgres, Pi-hole … 4.9G between them). Both are colourised against the RAM of *this* host: a ceiling worth a quarter of it is red, a tenth amber, so `llama-cpp` reads as heavy on a 16 GB box and `kavita` does on a 4 GB one. `make services`, `make enable` and `make disable` print the same total as a single line, which is the only place a host without `python3` can see it.
+
+**They are ceilings, not usage, and the header is graded accordingly.** The stack is overcommitted on purpose ([Rationing CPU and memory](ARCHITECTURE.md#rationing-cpu-and-memory)): a limit is what a service may take when it misbehaves, not what it holds, and the reference 16 GB host carries everything at 2.3× its RAM while sitting near 20% of those ceilings at idle. Colouring anything over 1× red would flag the shipped default, which is how a warning stops being read — so green means the selection fits even if every service peaked at once, amber is the ordinary overcommitted stack, and red starts at 2.5×, past what the machine this was tuned for was ever asked to carry. It is a hint for choosing between services, not a fit/no-fit verdict: what actually decides is which of them peak together, and the per-service comments in `compose/*.yaml` carry the measured idle figures.
+
+The whole layout is read out of `compose/*.yaml` (`homepage.group` for the section, `homepage.description` for the text, `pi-pcloud.companion-of` for the indent, `profiles:` for the hard dependencies, `mem_limit` for the ceilings), so the picker cannot drift from the stack. It is `scripts/services-picker.py`, standard-library `curses` only — nothing to install on Raspberry Pi OS, and on a host without `python3` you simply use `make enable` / `make disable` instead. All three targets wrap `scripts/services.sh`, which is what actually writes `.env` and runs the hooks.
 
 Enabling also runs the service's init hooks — `scripts/<service>-pre-start.sh` before the start, `scripts/<service>-bootstrap.sh` / `-oidc-bootstrap.sh` after — the same scripts the systemd unit runs. So no `make restart` is needed: the stack is immediately consistent, and the unit reads the same `.env` at next boot.
 

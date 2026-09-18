@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Interactive picker for the optional services of the stack.
 
-Usage: services-picker.py <rows-file> <out-file>
+Usage: services-picker.py <rows-file> <out-file> [always-on-MiB]
 
 The rows file holds one service per line, as
-"service:section:companion-of:needs:conflicts-with:state:description",
+"service:section:companion-of:needs:conflicts-with:ram-mib:state:description",
 as produced by scripts/services.sh (which owns everything else: reading
 compose/*.yaml, writing .env, running the per-service hooks). This script only
 lets the user choose, then writes the services that stay ticked to the out
 file, one per line. Exit status is 0 on confirm, 1 on cancel.
+
+The third argument is the ceilings of the services this screen never lists,
+because they run whatever is picked (Traefik, Authelia, Postgres …); it is the
+floor every total starts from. Left out, every total is short by exactly it, so
+services.sh always passes it; the memory display goes away altogether only when
+the rows carry no ceilings either.
 
 Files rather than stdio: curses owns the terminal, so a captured stdout would
 either swallow the UI or the result.
@@ -27,8 +33,29 @@ import curses
 import sys
 
 HELP = "space toggle · a all · n none · enter apply · q cancel"
-# Title, count and the blank line the sections start after.
+# Title and the count line, plus the memory line when there is one to draw.
 HEADER = 2
+# Width of the memory column, which holds "2.5G" and "512M" alike.
+RAM_WIDTH = 5
+
+# What the memory numbers mean, and why the bar sits where it does.
+#
+# They are mem_limit ceilings, not measured usage: the stack ships
+# overcommitted on purpose (docs/ARCHITECTURE.md, "Rationing CPU and memory").
+# The reference 16 GB host carries the full stack at 2.3x its RAM and sits near
+# 20% of the ceilings at idle, because a limit is what a service may take when
+# it misbehaves, not what it holds. Colouring anything over 1x red would
+# therefore flag the shipped default, which is how a warning stops being read.
+# Green means the selection fits even if everything peaked at once; amber is the
+# ordinary overcommitted stack; red is past what the machine this was tuned for
+# was ever asked to carry.
+FITS_RATIO = 1.0
+OVER_RATIO = 2.5
+# A single ceiling worth this much of the host is what to untick first, which is
+# a share rather than a fixed size: 1 GB is a rounding error on 16 GB and a
+# quarter of a 4 GB Pi.
+HEAVY_RATIO = 0.25
+NOTABLE_RATIO = 0.10
 
 
 def read_rows(path):
@@ -39,10 +66,10 @@ def read_rows(path):
             line = line.rstrip("\n")
             if not line:
                 continue
-            fields = line.split(":", 6)
-            if len(fields) != 7:
+            fields = line.split(":", 7)
+            if len(fields) != 8:
                 sys.exit(f"services-picker: malformed row {line!r}")
-            service, section, parent, needs, excludes, state, description = fields
+            service, section, parent, needs, excludes, ram, state, description = fields
             rows.append({
                 "service": service,
                 "section": section,
@@ -52,6 +79,9 @@ def read_rows(path):
                 # Everything it can never run alongside. Stated on both sides by
                 # services.sh, so this side never has to look for the other.
                 "excludes": excludes.split(),
+                # mem_limit in MiB, 0 for a service declaring none (which
+                # tests/compose-invariants.py refuses, so: never, in practice).
+                "ram": int(ram) if ram.isdigit() else 0,
                 "on": state == "on",
                 "description": description,
             })
@@ -199,32 +229,136 @@ def name_column(rows):
     return max(len(("  " if row["parent"] else "") + row["service"]) for row in rows)
 
 
-def draw(win, rows, lines, cursor, offset, message, column):
+def host_ram_mib():
+    """RAM of this host in MiB, 0 when it cannot be read (no /proc)."""
+    try:
+        with open("/proc/meminfo") as handle:
+            for line in handle:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, IndexError, ValueError):
+        pass
+    return 0
+
+
+def human(mib):
+    """A ceiling as it is printed: "512M", "2.5G", nothing at all for none."""
+    if not mib:
+        return ""
+    return f"{mib / 1024:.1f}G" if mib >= 1024 else f"{mib}M"
+
+
+def ram_line(rows, view):
+    """The memory header — worst case for the ticked set — and its colour."""
+    total = view["base"] + sum(row["ram"] for row in rows if row["on"])
+    ram = view["ram"]
+    if not ram:
+        return f"RAM ceilings {human(total)}, always-on services included", "ok"
+    ratio = total / ram
+    if ratio <= FITS_RATIO:
+        key, verdict = "ok", "fits even if all peak"
+    elif ratio <= OVER_RATIO:
+        key, verdict = "warn", "overcommitted, as designed"
+    else:
+        key, verdict = "over", "too much for this host"
+    return f"RAM ceilings {human(total)} of {human(ram)} · {ratio:.1f}x — {verdict}", key
+
+
+def ram_key(mib, ram):
+    """Colour for one ceiling, by the share of the host it could claim."""
+    if not ram or not mib:
+        return None
+    if mib >= HEAVY_RATIO * ram:
+        return "over"
+    if mib >= NOTABLE_RATIO * ram:
+        return "warn"
+    return None
+
+
+def color_keys():
+    """Colour pair per key, every one of them plain on a terminal without."""
+    keys = {"ok": curses.A_NORMAL, "warn": curses.A_NORMAL, "over": curses.A_NORMAL}
+    if not curses.has_colors():
+        return keys
+    try:
+        curses.use_default_colors()
+        background = -1
+    except curses.error:
+        background = curses.COLOR_BLACK
+    palette = (("ok", curses.COLOR_GREEN), ("warn", curses.COLOR_YELLOW),
+               ("over", curses.COLOR_RED))
+    for index, (key, color) in enumerate(palette, start=1):
+        curses.init_pair(index, color, background)
+        keys[key] = curses.color_pair(index)
+    return keys
+
+
+def layout(rows, base):
+    """What the drawing needs that no keypress changes.
+
+    The memory column appears only when the rows carry ceilings, and the header
+    line only when there is a total worth printing — so a caller that passes
+    neither gets exactly the screen this picker drew before they existed.
+    """
+    column_ram = any(row["ram"] for row in rows)
+    return {
+        "column": name_column(rows),
+        "base": base,
+        "ram": host_ram_mib(),
+        "column_ram": column_ram,
+        "header_ram": column_ram or base > 0,
+        "header": HEADER + (1 if column_ram or base > 0 else 0),
+        "colors": color_keys(),
+    }
+
+
+def draw(win, rows, lines, cursor, offset, message, view):
     win.erase()
     height, width = win.getmaxyx()
-    body = max(height - HEADER - 1, 1)
+    head = view["header"]
+    body = max(height - head - 1, 1)
     enabled = sum(1 for row in rows if row["on"])
-    # Two lines that fit 80 columns: what this screen does, then what it will
-    # not touch — the services that are missing from the list on purpose.
+    # Lines that fit 80 columns: what this screen does, what it will not touch —
+    # the services missing from the list on purpose — and what the ticked ones
+    # could take between them.
     win.addnstr(0, 0, "Choose which services run — applying starts and stops containers now",
                 width - 1, curses.A_BOLD)
     win.addnstr(1, 0, f"{enabled}/{len(rows)} enabled · Traefik, Authelia, Pi-hole, "
                       f"Headscale, Postgres … always run", width - 1, curses.A_DIM)
+    if view["header_ram"] and height > HEADER:
+        text, key = ram_line(rows, view)
+        win.addnstr(2, 0, text, width - 1, view["colors"][key] | curses.A_BOLD)
+    column = view["column"]
+    ram_x = 5 + column + 1
+    ram_width = RAM_WIDTH if view["column_ram"] else 0
     # Descriptions only earn their place once the names fit comfortably.
-    room = width - (5 + column + 2)
+    room = width - (ram_x + ram_width + 2)
     for screen_row, line_index in enumerate(range(offset, min(offset + body, len(lines)))):
         kind, payload = lines[line_index]
-        y = screen_row + HEADER
+        y = screen_row + head
+        # `body` has a floor of one row, so a window too short to hold the
+        # header and the footer would otherwise be written past its last line -
+        # curses raises there, and the picker dies with a traceback instead of
+        # drawing what fits.
+        if y >= height - 1:
+            break
         if kind == "head":
             win.addnstr(y, 0, f"── {payload} ".ljust(width - 1, "─"), width - 1, curses.A_DIM)
             continue
         row = rows[payload]
         name = ("  " if row["parent"] else "") + row["service"]
         text = f" [{'x' if row['on'] else ' '}] {name}"
+        ram = human(row["ram"]).rjust(ram_width) if ram_width else ""
+        text = text.ljust(ram_x) + ram
         if row["description"] and room >= 16:
-            text = f"{text.ljust(5 + column + 2)}{row['description']}"
+            text = f"{text.ljust(ram_x + ram_width + 2)}{row['description']}"
         attr = curses.A_REVERSE if line_index == cursor else curses.A_NORMAL
         win.addnstr(y, 0, text.ljust(width - 1), width - 1, attr)
+        # Drawn again on its own, so the ceiling carries the colour without the
+        # name and the description taking it with them.
+        key = ram_key(row["ram"], view["ram"]) if ram_width else None
+        if key and ram_x + ram_width < width:
+            win.addnstr(y, ram_x, ram, ram_width, view["colors"][key] | attr)
     win.addnstr(height - 1, 0, (message or HELP)[:width - 1], width - 1, curses.A_DIM)
     win.refresh()
 
@@ -245,7 +379,7 @@ def move(lines, cursor, start, step):
     return cursor if target is None else target
 
 
-def run(screen, rows):
+def run(screen, rows, base):
     curses.curs_set(0)
     lines = build_lines(rows)
     cursor = first_service_line(lines, 0, 1)
@@ -253,13 +387,13 @@ def run(screen, rows):
         return False
     offset = 0
     message = ""
-    column = name_column(rows)
+    view = layout(rows, base)
     while True:
-        height = max(screen.getmaxyx()[0] - HEADER - 1, 1)
+        height = max(screen.getmaxyx()[0] - view["header"] - 1, 1)
         offset = min(offset, cursor)
         if cursor >= offset + height:
             offset = cursor - height + 1
-        draw(screen, rows, lines, cursor, offset, message, column)
+        draw(screen, rows, lines, cursor, offset, message, view)
         key = screen.getch()
         if key in (ord("q"), 27):
             return False
@@ -285,14 +419,16 @@ def run(screen, rows):
 
 
 def main():
-    if len(sys.argv) != 3:
-        print("usage: services-picker.py <rows-file> <out-file>", file=sys.stderr)
+    if not 3 <= len(sys.argv) <= 4:
+        print("usage: services-picker.py <rows-file> <out-file> [always-on-MiB]",
+              file=sys.stderr)
         return 2
     rows = read_rows(sys.argv[1])
     if not rows:
         print("services-picker: no services to choose from", file=sys.stderr)
         return 2
-    if not curses.wrapper(run, rows):
+    base = sys.argv[3] if len(sys.argv) == 4 else ""
+    if not curses.wrapper(run, rows, int(base) if base.isdigit() else 0):
         return 1
     with open(sys.argv[2], "w") as handle:
         for row in rows:
