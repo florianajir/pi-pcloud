@@ -162,6 +162,16 @@ EOF
     return "$_rc"
 }
 
+# Shared with rollback_profiles below, so restoring a value cannot drift from
+# writing one.
+put_profiles_line() {
+    if has_profiles_line; then
+        sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=$(sed_escape "$1")|" "$ENV_FILE"
+    else
+        printf 'COMPOSE_PROFILES=%s\n' "$1" >> "$ENV_FILE"
+    fi
+}
+
 # Rewrite (or append) the COMPOSE_PROFILES line. Dry mode prints instead.
 write_profiles() {
     check_exclusive "$1" || return 1
@@ -169,24 +179,19 @@ write_profiles() {
         echo "DRY-RUN: would write to $ENV_FILE: COMPOSE_PROFILES=$1"
         return 0
     fi
-    if has_profiles_line; then
-        sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=$(sed_escape "$1")|" "$ENV_FILE"
-    else
-        printf 'COMPOSE_PROFILES=%s\n' "$1" >> "$ENV_FILE"
-    fi
+    put_profiles_line "$1"
     echo "✏️  Updated COMPOSE_PROFILES in $(basename "$ENV_FILE")"
 }
 
-# COMPOSE_PROFILES has to be written before the hooks run, because a hook may
-# ask whether a service is enabled (scripts/run-if-enabled.sh reads the line
-# from .env, not from an argument). Anything failing after that write leaves it
-# claiming a service that was never started - and enabled-ness is read back
-# from .env, so the next `make config` sees no change to make and never starts
-# it. Armed before the write, disarmed once the containers are up, this puts
-# the old value back instead.
+# COMPOSE_PROFILES is written before the hooks run, because a hook may ask
+# whether a service is enabled and run-if-enabled.sh reads that from .env. A
+# failure after the write therefore leaves the line claiming a service that was
+# never started - and since enabled-ness is read back from .env, the next
+# `make config` sees nothing left to do. Armed before the write, disarmed once
+# the containers are up.
 #
-# "absent" rather than an empty value: no COMPOSE_PROFILES line at all means
-# "everything enabled" (a pre-profiles install), which an empty line does not.
+# "absent:" is not "value:": no COMPOSE_PROFILES line at all means everything
+# enabled (a pre-profiles install), which an empty line does not.
 _profiles_backup=""
 
 arm_profiles_rollback() {
@@ -208,17 +213,16 @@ rollback_profiles() {
     _rc="$?"
     trap - EXIT INT TERM
     [ -n "$_profiles_backup" ] || exit "$_rc"
+    # A signal caught between two commands leaves $? at the last one's status,
+    # usually 0 - and exiting 0 from a run that just undid its own .env write
+    # reports the enable as done. Reaching here at all means it was not.
+    [ "$_rc" -ne 0 ] || _rc=1
     case "$_profiles_backup" in
         absent:)
             sed -i '/^COMPOSE_PROFILES=/d' "$ENV_FILE"
             ;;
         value:*)
-            _previous="${_profiles_backup#value:}"
-            if has_profiles_line; then
-                sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=$(sed_escape "$_previous")|" "$ENV_FILE"
-            else
-                printf 'COMPOSE_PROFILES=%s\n' "$_previous" >> "$ENV_FILE"
-            fi
+            put_profiles_line "${_profiles_backup#value:}"
             ;;
     esac
     _profiles_backup=""
@@ -261,22 +265,16 @@ run_compose_up_with() {
     fi
 }
 
-# The command that runs a hook, as a single string for both the dry-run print
-# and the real call.
-#
 # Elevated, because every other caller of these hooks is root: the systemd unit
-# runs them through scripts/run-hooks.sh, so everything they write under
-# DATA_LOCATION is root-owned with no group write. `make config` and
-# `make enable` are the only unprivileged callers, and authelia-pre-start.sh
-# fails on its first line there - "mktemp: cannot create
-# .../authelia-config/secrets/jwt_secret.XXXXXX: Permission denied" - which
-# aborts the run after .env was already rewritten. $SUDO is empty when we are
-# already root, since a root-only image often ships no sudo binary at all.
+# runs them through run-hooks.sh, so what they write under DATA_LOCATION is
+# root-owned. Unprivileged, authelia-pre-start.sh fails on its first line -
+# "mktemp: cannot create .../secrets/jwt_secret.XXXXXX: Permission denied".
+# $SUDO is empty when already root (a root-only image often ships no sudo).
 #
-# Through `env`, because sudo resets the environment: PROJECT_DIR and ENV_FILE
-# are what lib.sh derives everything else from, and a hook re-deriving them
-# from its own path would ignore the ENV_FILE this run was given. The same form
-# is used unelevated, so both paths run the identical command.
+# Through `env`, because sudo resets the environment: a hook re-deriving
+# PROJECT_DIR and ENV_FILE from its own path would ignore the ENV_FILE this run
+# was given. Used unelevated too, so both paths run the identical command -
+# which is also what makes hook_command's dry-run print honest.
 hook_command() {
     printf '%senv PROJECT_DIR=%s ENV_FILE=%s %s %s' \
         "${SUDO:+$SUDO }" "$PROJECT_DIR" "$ENV_FILE" "$(script_interpreter "$1")" "$1"

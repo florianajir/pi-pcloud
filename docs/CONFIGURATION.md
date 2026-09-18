@@ -292,7 +292,7 @@ The whole layout is read out of `compose/*.yaml` (`homepage.group` for the secti
 
 Enabling also runs the service's init hooks — `scripts/<service>-pre-start.sh` before the start, `scripts/<service>-bootstrap.sh` / `-oidc-bootstrap.sh` after — plus `scripts/authelia-pre-start.sh`, which is what writes every OIDC client secret. These are the same scripts the systemd unit runs, so no `make restart` is needed: the stack is immediately consistent, and the unit reads the same `.env` at next boot.
 
-They are run through `sudo` (nothing else here is), because the unit runs them as root and what they write under `DATA_LOCATION` is root-owned: unprivileged, `authelia-pre-start.sh` cannot even create a temp file in its own secrets directory. A hook that fails still stops the start, and the `COMPOSE_PROFILES` line written just before it is put back — otherwise the half-enabled service would read as enabled and the next `make config` would find nothing left to do.
+The hooks — and only they — are run through `sudo`, because what they write under `DATA_LOCATION` is owned by the root-run unit: unprivileged, `authelia-pre-start.sh` cannot create a temp file in its own secrets directory. A failing hook stops the start and the `COMPOSE_PROFILES` line written just before it is put back, so a service that never started is never left reading as enabled.
 
 > **Upgrading an older install:** an `.env` with no `COMPOSE_PROFILES` line keeps running everything, because the systemd unit defaults the variable to `all`. Manual `docker compose` invocations do not get that default, so add `COMPOSE_PROFILES=all` to your `.env`.
 

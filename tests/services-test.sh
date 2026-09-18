@@ -355,14 +355,12 @@ ok "  and a smaller selection is a smaller total" \
 # --- the hooks run with the privileges they were written for -----------------
 #
 # `make config` and `make enable` were the only callers running these hooks
-# unprivileged: everywhere else the systemd unit runs them as root, so
-# authelia-pre-start.sh died on "Permission denied" creating its temp file in
-# the root-owned secrets directory - after .env had already been rewritten, so
-# the service counted as enabled and the next run found nothing left to do.
+# unprivileged: authelia-pre-start.sh died on "Permission denied" in the
+# root-owned secrets directory - after .env had already been rewritten, so the
+# service counted as enabled and the next run found nothing left to do.
 #
-# This section runs for real (no DRY_RUN) against stub hooks, a stub `sudo` and
-# the `docker compose up` the stub answers. It replaces files in the throwaway
-# tree, so it stays last.
+# Runs for real (no DRY_RUN) against stub hooks and a stub `sudo`, replacing
+# files in the throwaway tree - so it stays last.
 
 cat >"$WORK/bin/sudo" <<'STUB'
 #!/bin/sh
