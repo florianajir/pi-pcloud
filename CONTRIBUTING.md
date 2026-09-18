@@ -55,6 +55,12 @@ Then open a pull request against `main`. CI runs those same gates, validates the
 Compose file under four profile combinations, runs the test suites and boots the
 stack.
 
+It also resolves every image reference the pull request *adds* and refuses one
+that publishes no ARM manifest (`tests/image-architectures.py`). The runners are
+amd64, so no other job says anything about the architecture the Pi needs: an
+image released for amd64 alone passes the smoke test and fails at the next
+`make update`.
+
 ### House rules
 
 These are the ones that get changes sent back. [AGENTS.md](AGENTS.md) has the full set.
