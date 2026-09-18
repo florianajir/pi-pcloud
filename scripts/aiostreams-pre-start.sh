@@ -11,7 +11,9 @@
 #                the local operator account. SSO covers the dashboard and the
 #                configuration page, but the built-in proxy and usenet engine
 #                authenticate with HTTP Basic, which an SSO identity has not
-#                got - and it is the way back in if OIDC breaks.
+#                got. Not an interactive fallback: the login route checks
+#                AIOSTREAMS_OIDC_ALLOW_LOCAL_LOGIN alone, and it is false, so
+#                the way back in is flipping that flag, not this value.
 #   AIOSTREAMS_OIDC_CLIENT_SECRET
 #                environment-only upstream, so it cannot follow the stack's
 #                usual "mount the secret as a file" pattern (docs/SECURITY.md).
@@ -25,13 +27,14 @@
 #                Two things these cannot do, because both are per-user config
 #                rather than instance settings: the Prowlarr addon still has to
 #                be added in Dashboard -> Addons (the values here only prefill
-#                it), and its "Timeout (ms)" has to be raised off the 7000 ms
-#                DEFAULT_TIMEOUT. Measured here, a live tracker search is 11-13s
-#                once AIOStreams expands a request into season-pack, episode and
-#                alternative-title queries - so at 7000 the fetcher aborts before
-#                Prowlarr answers and Stremio gets zero streams, with the only
-#                symptom a "timeout" line in the log. 30000 is comfortable; the
-#                UI ceiling is MAX_TIMEOUT (50000).
+#                it), and its "Timeout (ms)" has to be raised above
+#                DEFAULT_TIMEOUT (15000 here, 7000 upstream). Measured, a live
+#                tracker search is 11-13s once AIOStreams expands a request into
+#                season-pack, episode and alternative-title queries, and the
+#                anime preamble alone took 15.2s - under-budgeted, the fetcher
+#                aborts before Prowlarr answers and Stremio gets zero streams,
+#                with the only symptom a "timeout" line in the log. 30000 is
+#                comfortable; the UI ceiling is MAX_TIMEOUT (50000).
 #
 # Not lib.sh's ensure_env_secrets, which is otherwise this hook's shape: only
 # SECRET_KEY is generated. The rest are derived, and have to be reapplied every

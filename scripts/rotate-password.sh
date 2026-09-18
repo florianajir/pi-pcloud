@@ -523,12 +523,12 @@ rotate_shelfmark() {
 }
 
 # --- AIOStreams: PASSWORD is baked into its generated env_file ---
-# AIOSTREAMS_AUTH is "<ADMIN_USER>:<PASSWORD>", the local operator account that
-# is the way back in when OIDC breaks and the only credential its built-in proxy
-# and usenet engine accept. Same shape as Shelfmark above: re-render, then
-# recreate, because a `restart` keeps the environment compose resolved at
-# creation time. SECRET_KEY is carried forward by the hook, so every installed
-# addon URL stays valid across this.
+# AIOSTREAMS_AUTH is "<ADMIN_USER>:<PASSWORD>", the only credential its built-in
+# proxy and usenet engine accept - not an interactive login, which
+# AIOSTREAMS_OIDC_ALLOW_LOCAL_LOGIN=false refuses. Same shape as Shelfmark:
+# re-render, then recreate, because a `restart` keeps the environment compose
+# resolved at creation time. SECRET_KEY is carried forward by the hook, so
+# every installed addon URL stays valid across this.
 rotate_aiostreams() {
     if ! container_is_running "pi-aiostreams"; then
         note "✘ SKIPPED AIOStreams (pi-aiostreams not running)"

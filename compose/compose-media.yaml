@@ -406,7 +406,7 @@ services:
       - 1.1.1.1
       - 1.0.0.1
     # Every stack hostname this service might fetch, pinned to Traefik on
-    # `frontend`. Not optional once `dns:` below points at public resolvers: the
+    # `frontend`. Not optional once `dns:` above points at public resolvers: the
     # public records for these names answer with the WAN address, so without
     # these entries a request to our own Comet or AIOMetadata leaves the host,
     # hairpins back through the router and arrives at Traefik from the WAN IP -
@@ -415,6 +415,10 @@ services:
     extra_hosts:
       # Reach Authelia's OIDC discovery endpoint through Traefik internally.
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+      # Its own BASE_URL, for the same reason stremio-lan pins `stremio.`:
+      # install URLs and built-in stream URLs are generated from it, so this
+      # container resolves its own name too.
+      - "aiostreams.${HOST_NAME:-pi.lan}:172.30.11.250"
       # Upstream addons that live in this stack.
       - "comet.${HOST_NAME:-pi.lan}:172.30.11.250"
       - "aiometadata.${HOST_NAME:-pi.lan}:172.30.11.250"

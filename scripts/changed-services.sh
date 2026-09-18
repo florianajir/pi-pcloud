@@ -140,10 +140,17 @@ CONFIG_DIR_ALIASES='immich:immich-server,immich-machine-learning'
 #     network_mode: service:gluetun, which docker resolves to the container id
 #     at create time: recreating gluetun alone leaves all three running,
 #     healthy-looking and with no network at all.
+#
+#   - a client that does not reconnect. Authelia, Immich and Nextcloud rebuild
+#     their Redis connection when the server comes back; aiometadata's does
+#     not, and /health/live never touches the cache - so recreating redis alone
+#     leaves it healthy with no cache and no sign-in sessions, which is SSO
+#     down with nothing pointing at the pull.
 ALSO_RECREATE='ntfy:backrest,uptime-kuma
 n8n:n8n-runners
 headscale:headplane
 homepage:system-tools
+redis:aiometadata
 gluetun:qbittorrent,stremio,kapowarr'
 
 # --- helpers ----------------------------------------------------------------
