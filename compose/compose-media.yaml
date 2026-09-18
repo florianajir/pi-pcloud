@@ -405,9 +405,20 @@ services:
     dns:
       - 1.1.1.1
       - 1.0.0.1
+    # Every stack hostname this service might fetch, pinned to Traefik on
+    # `frontend`. Not optional once `dns:` below points at public resolvers: the
+    # public records for these names answer with the WAN address, so without
+    # these entries a request to our own Comet or AIOMetadata leaves the host,
+    # hairpins back through the router and arrives at Traefik from the WAN IP -
+    # slow, and matched by the *public* router, which carries rate-limit-auth at
+    # 10 req/s. Same reasoning as stremio-lan's entries further up.
     extra_hosts:
       # Reach Authelia's OIDC discovery endpoint through Traefik internally.
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+      # Upstream addons that live in this stack.
+      - "comet.${HOST_NAME:-pi.lan}:172.30.11.250"
+      - "aiometadata.${HOST_NAME:-pi.lan}:172.30.11.250"
+      - "stremthru.${HOST_NAME:-pi.lan}:172.30.11.250"
     expose:
       - 3000
     environment:
@@ -483,6 +494,22 @@ services:
       # Prowlarr needs 30000 (its three anime queries alone took 15.2s, before
       # the .torrent downloads that follow).
       - DEFAULT_TIMEOUT=15000
+      # AIOStreams rate-limits its own Stremio surfaces, on top of whatever
+      # Traefik does - and both were rejecting: over one 2h window, 145 requests
+      # were refused by Traefik (`OriginStatus=0`) and 75 by the addon
+      # (`OriginStatus=429`). The Traefik half is the router split below; this is
+      # the other half.
+      #
+      # The catalogue default is 30 requests per 5s, which a Stremio home paint
+      # blows through the moment AIOMetadata's ~60 catalogues are proxied through
+      # here: 55% of catalogue requests came back 429 and the rows stayed empty.
+      # Raised generously because a catalogue page is answered from a 5-minute
+      # cache and costs nothing upstream.
+      - STREMIO_CATALOG_RATE_LIMIT_MAX_REQUESTS=300
+      # The stream default is 10 per 15s. Raised far less: one stream request is
+      # the expensive one - it fans out to every addon and the debrid API - so
+      # this stays a real ceiling, just one a household of three does not hit.
+      - STREMIO_STREAM_RATE_LIMIT_MAX_REQUESTS=30
     # SECRET_KEY, AIOSTREAMS_AUTH, the OIDC client secret and the Prowlarr pair,
     # all from scripts/aiostreams-pre-start.sh. Not in `environment:` above,
     # which wins over `env_file:` and would silently shadow them. Frozen at
@@ -541,6 +568,23 @@ services:
       - "traefik.http.routers.aiostreams-public.tls=true"
       - "traefik.http.routers.aiostreams-public.priority=20"
       - "traefik.http.routers.aiostreams-public.service=aiostreams"
+      # Catalogues, metadata and the manifest, carved back out of the router
+      # above onto the looser limiter. Once AIOMetadata is added *inside*
+      # AIOStreams, a Stremio home paint asks this host for dozens of catalogues
+      # at once, and rate-limit-auth's burst of 20 answered 429 to 55% of them -
+      # measured, and from a LAN client, because the path is what picks the
+      # router, not where the request came from.
+      #
+      # The split is by resource: `/stremio/<uuid>/<password>/stream/...` stays
+      # on rate-limit-auth, because that is the request that fans out to a dozen
+      # addons and a debrid API. A catalogue page is answered from a cache with a
+      # 5-minute TTL and costs nothing upstream.
+      - "traefik.http.routers.aiostreams-catalog.rule=Host(`aiostreams.${HOST_NAME:-pi.lan}`) && PathPrefix(`/stremio/`) && !PathRegexp(`/configure(/|$$)`) && !PathRegexp(`/stream/`)"
+      - "traefik.http.routers.aiostreams-catalog.entrypoints=websecure"
+      - "traefik.http.routers.aiostreams-catalog.middlewares=frame-deny@docker,rate-limit-burst@docker"
+      - "traefik.http.routers.aiostreams-catalog.tls=true"
+      - "traefik.http.routers.aiostreams-catalog.priority=30"
+      - "traefik.http.routers.aiostreams-catalog.service=aiostreams"
       - "traefik.http.services.aiostreams.loadbalancer.server.port=3000"
     healthcheck:
       <<: *healthcheck-default
@@ -687,12 +731,12 @@ services:
       - "traefik.http.routers.aiometadata-public.tls=true"
       - "traefik.http.routers.aiometadata-public.priority=20"
       - "traefik.http.routers.aiometadata-public.service=aiometadata"
-      # Artwork, on rate-limit-art instead: these are served off the local disk
+      # Artwork, on rate-limit-burst instead: these are served off the local disk
       # cache and a single home paint asks for over a thousand of them, which
       # rate-limit-auth's burst of 20 answered with 429 for all but the first few.
       - "traefik.http.routers.aiometadata-art.rule=Host(`aiometadata.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/poster`) || PathPrefix(`/logo`) || PathPrefix(`/background`) || Path(`/missing_poster.png`))"
       - "traefik.http.routers.aiometadata-art.entrypoints=websecure"
-      - "traefik.http.routers.aiometadata-art.middlewares=frame-deny@docker,rate-limit-art@docker"
+      - "traefik.http.routers.aiometadata-art.middlewares=frame-deny@docker,rate-limit-burst@docker"
       - "traefik.http.routers.aiometadata-art.tls=true"
       - "traefik.http.routers.aiometadata-art.priority=30"
       - "traefik.http.routers.aiometadata-art.service=aiometadata"

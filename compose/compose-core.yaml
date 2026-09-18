@@ -131,19 +131,21 @@ services:
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.average=10"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.burst=20"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.period=1s"
-      # Artwork, which needs a different order of magnitude: one Stremio home
-      # paint is ~60 catalogues x ~20 tiles, so well over a thousand image
-      # requests from one browser IP in a few seconds. rate-limit-auth's burst of
-      # 20 dropped most of them as 429 and the posters simply did not render.
+      # The bursty sibling, for the Stremio surfaces a single client hammers:
+      # artwork and catalogues. One home paint is ~60 catalogues x ~20 tiles, so
+      # well over a thousand requests from one IP in a few seconds - measured,
+      # rate-limit-auth's burst of 20 answered 429 to most of the posters and to
+      # 55% of the catalogue requests.
       #
-      # Generous rather than absent, because the artwork route embeds an upstream
-      # URL and is therefore an image proxy anyone holding an addon URL can aim
-      # at the internet. The bytes come off a local disk cache, so this bounds
-      # abuse rather than protecting an API quota - the opposite trade from
-      # rate-limit-auth, which exists to stop exactly that quota being burned.
-      - "traefik.http.middlewares.rate-limit-art.ratelimit.average=100"
-      - "traefik.http.middlewares.rate-limit-art.ratelimit.burst=200"
-      - "traefik.http.middlewares.rate-limit-art.ratelimit.period=1s"
+      # Generous rather than absent, because both surfaces are reachable by
+      # anyone holding an addon URL. What they are not is expensive upstream: a
+      # poster comes off a local disk cache and a catalogue page off a cache with
+      # a 5-minute TTL. rate-limit-auth stays on the *stream* path, where one
+      # request fans out to a dozen addons and a debrid API - that is the quota
+      # worth protecting, and it is the opposite trade from this one.
+      - "traefik.http.middlewares.rate-limit-burst.ratelimit.average=100"
+      - "traefik.http.middlewares.rate-limit-burst.ratelimit.burst=200"
+      - "traefik.http.middlewares.rate-limit-burst.ratelimit.period=1s"
       - "traefik.http.routers.traefik.middlewares=frame-deny@docker,lan@docker,authelia@docker"
       - "traefik.http.routers.traefik.entrypoints=websecure"
       - "traefik.http.routers.traefik.rule=Host(`traefik.${HOST_NAME:-pi.lan}`)"
