@@ -481,6 +481,32 @@ def postgres_roles(repo_dir):
     return set(match.group(1).split())
 
 
+def widget_secret_files(repo_dir):
+    """The placeholder list scripts/homepage-widgets-bootstrap.sh guarantees."""
+    try:
+        source = Path(repo_dir, "scripts/homepage-widgets-bootstrap.sh").read_text()
+    except OSError:
+        return None
+    match = re.search(r"^WIDGET_SECRET_FILES='([^']+)'", source, re.M)
+    if not match:
+        return None
+    return set(match.group(1).split())
+
+
+def homepage_secret_vars(service):
+    """The files HOMEPAGE_FILE_* variables make Homepage open on every render."""
+    environment = service.get("environment") or {}
+    values = environment.values() if isinstance(environment, dict) else environment
+    names = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        match = re.fullmatch(r"(?:HOMEPAGE_FILE_[A-Z0-9_]+=)?/app/config/secrets/([A-Za-z0-9_.-]+)", value)
+        if match:
+            names.add(match.group(1))
+    return names
+
+
 def recreate_exceptions(repo_dir):
     """The lists scripts/changed-services.sh classifies an unowned path by.
 
@@ -820,6 +846,23 @@ def main():
         expected = {PG_ROLE_ALIAS.get(name, name) for name in backed}
         for role in sorted(roles - expected):
             report("POSTGRES", f"init-databases.sh creates role {role}, which no service depends on postgres for")
+
+    # Homepage reads each of these files on every render, so one that no run
+    # creates is an ENOENT thrown out of the dashboard page - which is what an
+    # optional service that has never started leaves behind.
+    placeholders = widget_secret_files(repo_dir)
+    homepage = services.get("homepage")
+    if homepage is not None:
+        referenced = homepage_secret_vars(config["services"]["homepage"])
+        if placeholders is None:
+            report("WIDGET", "could not read WIDGET_SECRET_FILES from scripts/homepage-widgets-bootstrap.sh")
+        elif not referenced:
+            report("WIDGET", "homepage declares no HOMEPAGE_FILE_* secret, so this check reads nothing")
+        else:
+            for name in sorted(referenced - placeholders):
+                report("WIDGET", f"homepage opens {name} on every render, but no run creates it")
+            for name in sorted(placeholders - referenced):
+                report("WIDGET", f"homepage-widgets-bootstrap.sh creates {name}, which no HOMEPAGE_FILE_* reads")
 
     for finding in findings:
         print(finding)

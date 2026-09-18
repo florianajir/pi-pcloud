@@ -333,6 +333,28 @@ run_shared_pre_start_hooks() {
     run_pre_start_hook authelia-pre-start.sh
 }
 
+# The same idea after the start: Homepage's hook is where every optional
+# service's widget key is minted, so without it `make enable changedetection`
+# left HOMEPAGE_FILE_CHANGEDETECTION_API_KEY pointing at a file nothing would
+# write until the next full `make update` - and Homepage opens that file on
+# every render, so the dashboard threw ENOENT the whole time. It also restarts
+# Homepage itself when a key changed, which is what the new widget needs.
+#
+# Cheap and safe to run unconditionally: it only rewrites a secret whose value
+# differs. The other unprefixed hooks in run-hooks.sh stay out - they belong to
+# core services that are already up, and headscale-init.sh mints an API key per
+# run.
+run_shared_post_start_hooks() {
+    run_hook homepage-widgets-bootstrap.sh
+    # Uptime Kuma pauses the monitor of every service COMPOSE_PROFILES leaves
+    # out, so the one just enabled stays paused - reported down-but-ignored -
+    # until something reconciles it. Gated the way run-hooks.sh's `uptime-kuma:`
+    # prefix gates it, since Uptime Kuma is itself optional.
+    if /bin/sh "$PROJECT_DIR/scripts/run-if-enabled.sh" uptime-kuma >/dev/null 2>&1; then
+        run_hook uptime-kuma-bootstrap.sh
+    fi
+}
+
 # Every scripts/<svc>-*bootstrap.{sh,py}, matching run-hooks.sh's
 # POST_START_HOOKS. Two exact names used to be hardcoded here, which missed the
 # -settings- and -library- ones and left those services half-configured.
@@ -777,6 +799,7 @@ cmd_enable() {
     for _svc in $newly_on; do
         run_post_start_hooks "$_svc" "$known"
     done
+    run_shared_post_start_hooks
     echo "✅ $svc enabled"
     ram_note "$new_enabled"
 }
@@ -904,6 +927,7 @@ cmd_config() {
     for svc in $newly_on; do
         run_post_start_hooks "$svc" "$known"
     done
+    [ -z "$newly_on" ] || run_shared_post_start_hooks
 
     echo "✅ Applied${newly_on:+ · enabled:$newly_on}${newly_off:+ · disabled:$newly_off}"
     ram_note "$new_enabled"

@@ -100,6 +100,11 @@ none "every config tree and script resolves to the services reading it" RECREATE
 # none and the password rotation misses it.
 none "every Postgres-backed service owns a role" POSTGRES
 
+# Homepage opens every HOMEPAGE_FILE_* on each render, so one that no run
+# creates throws ENOENT out of the dashboard page itself - which is what an
+# optional service that has never started used to leave behind.
+none "every HOMEPAGE_FILE_ secret is guaranteed to exist" WIDGET
+
 # The failure that lasted longest: five `deploy: resources: reservations: cpus:`
 # tiers across 40 services, all of which compose drops outside swarm. It read as
 # policy for months while every container sat at the default cpu.weight.

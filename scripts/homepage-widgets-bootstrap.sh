@@ -20,6 +20,17 @@ set -eu
 SECRETS_DIR="$PROJECT_DIR/config/homepage/secrets"
 CHANGED=0
 
+# Every file a HOMEPAGE_FILE_* in compose/compose-monitoring.yaml points at.
+# Homepage opens all of them on *each* render, so one that does not exist is an
+# ENOENT thrown out of the dashboard page itself - not a widget quietly doing
+# without. An optional service that has never started leaves exactly that:
+# nothing mints changedetection.io's token before its first boot, and enabling
+# it used to take a second full start before the dashboard stopped erroring.
+# tests/compose-invariants.py fails if this list and those variables drift.
+WIDGET_SECRET_FILES='prowlarr_api_key kavita_api_key audiobookshelf_api_key
+headscale_api_key headscale_node_id immich_api_key backrest_password
+changedetection_api_key'
+
 # Write $2 to file $1 if different from its current content. Sets CHANGED=1 on write.
 write_secret() {
     file="$1"
@@ -188,13 +199,16 @@ sync_audiobookshelf_key() {
 # Nothing mints this one. The widget's /api/v1/watch call obeys
 # `api_access_token` even though no password is set on the instance.
 sync_changedetection_key() {
-    key="$(changedetection_api_key)"
+    container_is_running "pi-changedetection" || return 0
 
-    if [ -z "$key" ]; then
-        # Expected while the container is still starting its first datastore.
+    # Only once the container is up, so a disabled changedetection costs
+    # nothing: the wait is for its first start committing the datastore.
+    if ! wait_for_cmd 15 2 changedetection_has_api_key; then
         log "WARNING: no changedetection.io API token yet; skipping its widget key"
         return 0
     fi
+
+    key="$(changedetection_api_key)"
 
     write_secret "$SECRETS_DIR/changedetection_api_key" "$key"
     log "changedetection.io API key ready for Homepage widget"
@@ -223,25 +237,31 @@ sync_backrest_password() {
     log "Backrest API password ready for Homepage widget"
 }
 
-# --- Immich: the only key that cannot be minted ---
-# Its admin password is chosen at signup and is not in .env, and api_key.key is
-# stored hashed, so neither the API nor the database can hand one back. All this can
-# do is guarantee the file exists, so HOMEPAGE_FILE_IMMICH_API_KEY always resolves;
-# paste the key in (Immich > Account Settings > API Keys, "server.statistics").
-# Never overwrites: a filled-in key must survive every run.
-ensure_immich_key_placeholder() {
-    file="$SECRETS_DIR/immich_api_key"
+# --- Every referenced file exists before anything is synced ---
+# Immich's can only ever be a placeholder: its admin password is chosen at
+# signup and is not in .env, and api_key.key is stored hashed, so neither the
+# API nor the database can hand one back - paste it in yourself (Immich >
+# Account Settings > API Keys, "server.statistics"). The rest are placeholders
+# only until the service they belong to runs. Never overwrites: a filled-in key
+# must survive every run.
+ensure_secret_placeholders() {
+    for name in $WIDGET_SECRET_FILES; do
+        file="$SECRETS_DIR/$name"
+        [ -e "$file" ] && continue
 
-    [ -e "$file" ] && return 0
-
-    : > "$file"
-    safe_chmod 600 "$file"
-    log "Created empty $file - paste an Immich API key there to enable its widget"
+        : > "$file"
+        safe_chmod 600 "$file"
+        log "Created empty $file - its widget stays unauthenticated until it is filled"
+    done
 }
 
 main() {
     log "=== Homepage Widgets Bootstrap ==="
     mkdir -p "$SECRETS_DIR"
+
+    # Before the syncs, not after: the renders happening while they run are the
+    # ones a missing file would throw on.
+    ensure_secret_placeholders
 
     wait_for_container "pi-homepage" 60 2 || log "WARNING: pi-homepage did not appear in time"
 
@@ -251,7 +271,6 @@ main() {
     sync_audiobookshelf_key || true
     sync_changedetection_key || true
     sync_backrest_password || true
-    ensure_immich_key_placeholder || true
 
     fix_ownership "$SECRETS_DIR"
 
