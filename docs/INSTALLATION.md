@@ -19,7 +19,7 @@ The installer:
 1. **Checks prerequisites** — `git`, `make`, Docker, the Compose plugin; offers to install what's missing via `apt-get` / [get.docker.com](https://get.docker.com). A fresh Docker install requires logging out and re-running, since the `docker` group only takes effect at next login.
 2. **Clones the repository** into `~/pi-pcloud` (`/opt/pi-pcloud` when run as root). Override with `PI_PCLOUD_DIR=/path`, or run it from inside an existing clone to reuse that checkout — it is fast-forwarded in place.
 3. **Builds `.env`** from `.env.dist`, prompting only for what it cannot work out: domain, email, admin user, Cloudflare token and zone. Timezone and the whole network layout are auto-detected, and `PASSWORD` can be generated for you.
-4. **Asks which services to run**, using the same picker as `make config` — everything pre-selected, grouped into sections, linked services toggling together. Core infrastructure always runs, and the choice can be changed any time. See [Choosing which services run](CONFIGURATION.md#choosing-which-services-run).
+4. **Asks which services to run**, using the same picker as `make config` — everything pre-selected, grouped into sections, linked services toggling together, each with the memory ceiling it may claim and a running total for the host. Core infrastructure always runs, and the choice can be changed any time. See [Choosing which services run](CONFIGURATION.md#choosing-which-services-run).
 5. **Runs `make preflight`, then `make install`.**
 
 Prompts use `whiptail` dialogs when available (it ships with Raspberry Pi OS) and fall back to plain terminal prompts otherwise, with identical behaviour. A host without `python3` skips step 4 and keeps every service enabled.
