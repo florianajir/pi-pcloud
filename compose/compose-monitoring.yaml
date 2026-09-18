@@ -664,6 +664,16 @@ services:
       - ${DATA_LOCATION:-./data}/prowlarr:/userdata/prowlarr:ro
       - ${DATA_LOCATION:-./data}/kapowarr/db:/userdata/kapowarr-db:ro
       - ${DATA_LOCATION:-./data}/shelfmark:/userdata/shelfmark:ro
+      # The two Stremio addons. db.sqlite holds every saved addon configuration,
+      # and losing it means every installed addon URL in the household stops
+      # resolving. Both are WAL-mode and written while the snapshot runs, so
+      # they are listed in scripts/sqlite-backup.sh rather than trusted to the
+      # raw file - the plan excludes every `*-wal`, which alone would restore a
+      # database missing its last committed transactions. Everything else in
+      # these volumes is a rebuildable cache and is excluded, except AIOStreams'
+      # stream cache, which lives *inside* db.sqlite (~38 MB) and cannot be.
+      - aiostreams_data:/userdata/aiostreams:ro
+      - aiometadata_data:/userdata/aiometadata:ro
       # Only /config: the SQLite database, the server settings and the OIDC
       # client live there. /metadata is covers and cached art, rebuilt by a scan.
       - ${DATA_LOCATION:-./data}/audiobookshelf/config:/userdata/audiobookshelf:ro

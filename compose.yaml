@@ -139,6 +139,9 @@ volumes:
   ddns_data:
   stremio_data:
   comet_data:
+  aiostreams_data:
+  aiometadata_data:
+  stremthru_data:
   kavita_config:
   beszel_data:
   beszel_agent_data:
@@ -263,6 +266,17 @@ networks:
   rss:
     driver: bridge
     name: rss
+    internal: true
+  # aiometadata and redis only. Same split again, and for the same reason it was
+  # not put on `auth`: that segment is Authelia's and lldap's, and a media addon
+  # has no business being able to open the directory. What it needs from there is
+  # one thing - the shared cache - so the segment is exactly that wide.
+  #
+  # It reaches TMDB/TVDB/MDBList/Jikan over `frontend`, so nothing but Redis
+  # traffic crosses this one.
+  aiometadata:
+    driver: bridge
+    name: aiometadata
     internal: true
   # Same idea for backrest, whose API returns the restic key and the S3 keys to any
   # authenticated caller: on frontend that port was open to ~24 containers, here to

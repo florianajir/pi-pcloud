@@ -131,6 +131,21 @@ services:
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.average=10"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.burst=20"
       - "traefik.http.middlewares.rate-limit-auth.ratelimit.period=1s"
+      # The bursty sibling, for the Stremio surfaces a single client hammers:
+      # artwork and catalogues. One home paint is ~60 catalogues x ~20 tiles, so
+      # well over a thousand requests from one IP in a few seconds - measured,
+      # rate-limit-auth's burst of 20 answered 429 to most of the posters and to
+      # 55% of the catalogue requests.
+      #
+      # Generous rather than absent, because both surfaces are reachable by
+      # anyone holding an addon URL. What they are not is expensive upstream: a
+      # poster comes off a local disk cache and a catalogue page off a cache with
+      # a 5-minute TTL. rate-limit-auth stays on the *stream* path, where one
+      # request fans out to a dozen addons and a debrid API - that is the quota
+      # worth protecting, and it is the opposite trade from this one.
+      - "traefik.http.middlewares.rate-limit-burst.ratelimit.average=100"
+      - "traefik.http.middlewares.rate-limit-burst.ratelimit.burst=200"
+      - "traefik.http.middlewares.rate-limit-burst.ratelimit.period=1s"
       - "traefik.http.routers.traefik.middlewares=frame-deny@docker,lan@docker,authelia@docker"
       - "traefik.http.routers.traefik.entrypoints=websecure"
       - "traefik.http.routers.traefik.rule=Host(`traefik.${HOST_NAME:-pi.lan}`)"
@@ -291,11 +306,36 @@ services:
       - immich
       - nextcloud
       - auth
+      - aiometadata
     cpu_shares: *cpu-prio-critical
-    # Shared by Immich, Nextcloud and Authelia. Peak dataset has been seen at
-    # ~44M; the limit must also cover the BGSAVE fork's copy-on-write pages, so
-    # keep it well above config/redis/valkey.conf's maxmemory (192mb).
-    mem_limit: 256m
+    # Shared by Immich, Nextcloud, Authelia and aiometadata. Peak dataset has
+    # been seen at ~44M; the limit must also cover the BGSAVE fork's
+    # copy-on-write pages, so keep it well above config/redis/valkey.conf's
+    # maxmemory (192mb).
+    #
+    # aiometadata is the one member whose working set has no natural ceiling - a
+    # ~60-catalog config caches every page and meta it renders - and maxmemory is
+    # one global budget with no per-client cap under volatile-lru, so a tenant
+    # that outgrows it evicts another member's keys. Authelia's sessions are the
+    # cheap case: everyone signs in again. Nextcloud's are not - redis.config.php
+    # points memcache.locking here, and an evicted lock is a concurrent write
+    # that thinks it holds one.
+    #
+    # Doubled (192mb -> 384mb, and this limit with it) rather than split off,
+    # because RSS was 118 MiB against a 192mb budget: there was no eviction yet,
+    # only a trajectory. Capacity is the cheap fix and it was the right one to
+    # try first. It does not make the tenants independent - if evicted_keys ever
+    # starts climbing, that is the signal for a valkey of aiometadata's own, and
+    # a third doubling would only buy time.
+    #
+    # Recreating this container needs `docker restart pi-aiometadata` after it.
+    # Authelia, Nextcloud and Immich reconnect on their own; aiometadata's client
+    # does not - it retried for about a minute, logging `getaddrinfo ENOTFOUND
+    # redis` while the container was gone, then went quiet without ever saying it
+    # had reconnected. Its healthcheck is /health/live, which does not test the
+    # cache, so the service reports healthy either way. The only positive signal
+    # is the startup banner: `redis ready`.
+    mem_limit: 512m
     mem_reservation: 64m
     oom_score_adj: *oom-score-critical
 

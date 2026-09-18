@@ -572,6 +572,19 @@ rotate_redis_auth() {
     # changes the service definition and --force is what makes compose act.
     recreate_enabled --force authelia immich-server nextcloud ||
         fail "could not recreate the Redis consumers"
+
+    # aiometadata is the fourth consumer and the odd one out: it has no *_FILE
+    # variant, so aiometadata-pre-start.sh inlines the password into REDIS_URL in
+    # config/aiometadata/aiometadata.env, which compose freezes at container
+    # creation. Re-render before recreating, or the container comes back with the
+    # old password and every call answers NOAUTH - sign-in sessions live there, so
+    # that is SSO down with nothing in the logs pointing at this rotation. No
+    # --force: an env_file change moves the config hash by itself.
+    if enabled_services | grep -qx aiometadata; then
+        sh "${SCRIPT_DIR}/aiometadata-pre-start.sh" >/dev/null ||
+            fail "aiometadata-pre-start.sh failed"
+    fi
+    recreate_enabled aiometadata || fail "could not recreate aiometadata"
 }
 
 rotate_vaultwarden() {

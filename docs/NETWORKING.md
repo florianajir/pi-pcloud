@@ -84,12 +84,15 @@ private address is not routable from outside anyway.
 **Never do this on the wildcard.** `headscale.<HOST_NAME>` must keep resolving to the WAN address —
 it is how remote nodes reach the control plane to enrol and reconnect from outside the tailnet.
 
-**Nor on `comet.<HOST_NAME>`.** `comet-public@docker` routes `/s/<PUBLIC_API_TOKEN>/` without
-`lan@docker` precisely so an addon installed on a Stremio account keeps resolving off-tailnet; a
-specific record aimed at `HOST_LAN_IP` hands the internet a private address and silently un-publishes
-it. The record is unnecessary here anyway: a cast receiver that hairpins to the WAN address now
-reaches the addon endpoints through the public router instead of the `403` this section exists to
-avoid. Only `/configure` and `/admin*` stay LAN-only, and neither is something a TV opens.
+**Nor on `comet.<HOST_NAME>`, `aiostreams.<HOST_NAME>` or `aiometadata.<HOST_NAME>`.** Each of the
+three carries a second, `lan@docker`-free router over the addon protocol only — `comet-public@docker`
+on `/s/<PUBLIC_API_TOKEN>/`, `aiostreams-public@docker` on `/stremio/<uuid>/<encryptedPassword>/`,
+`aiometadata-public@docker` on `/stremio/<uuid>/` — precisely so an addon installed on a Stremio
+account keeps resolving off-tailnet; a specific record aimed at `HOST_LAN_IP` hands the internet a
+private address and silently un-publishes all three. The record is unnecessary here anyway: a cast
+receiver that hairpins to the WAN address now reaches the addon endpoints through the public router
+instead of the `403` this section exists to avoid. Only the configure, dashboard and admin paths stay
+LAN-only, and none of them is something a TV opens.
 
 Verify the router does not strip private answers (some resolvers apply DNS rebinding protection):
 `dig @<router> <service>.<HOST_NAME> +short` must return `<HOST_LAN_IP>`.
@@ -339,7 +342,7 @@ Since Pi-hole resolves `*.<HOST_NAME>` to the Pi, every service works from the V
 | `frontend` | `172.30.11.0/24` (Traefik `.250`, Homepage `.240`, Pi-hole `.241`; everything else dynamic) | Traefik + every routed service except Backrest, Dockhand and Vaultwarden | The network Traefik proxies to by default (`--providers.docker.network`). The three static addresses exist because something binds to or allowlists them by number: Pi-hole's `FTLCONF_webserver_port`, Traefik's `internalapi-allow` ipallowlist, and Homepage's Traefik widget URL. They are high in the range because Docker allocates dynamically from `.2` upwards |
 | `backup` | `172.30.12.0/24` | Traefik, Homepage, Backrest | Backrest's `:9898` returns the restic key and the S3 credentials to any authenticated caller, so it is not left on a segment with ~24 other containers. Not internal: restic reaches S3 through it. A service opts in with `traefik.docker.network=backup`. The subnet is pinned rather than left to Docker, which handed out `172.31.0.0/16` — outside `ALLOW_IP_RANGES`, so any request Traefik answered from its `backup` address was refused by `lan@docker` with a bare `403` |
 | `auth` | internal | Authelia, LLDAP, Postgres, Redis, Backrest | LDAP and auth traffic never crosses an app network. Backrest is there only to `pg_dump` the `authelia` and `lldap` databases |
-| `nextcloud`, `immich`, `ai`, `vault`, `ntfy` | internal | each app + its own backends | Per-app isolation; `vault` deliberately has no path to LLDAP. Backrest also joins `nextcloud` and `immich` for their dumps, and `ntfy` to push a failed run |
+| `nextcloud`, `immich`, `ai`, `vault`, `ntfy`, `rss`, `aiometadata` | internal | each app + its own backends | Per-app isolation; `vault` deliberately has no path to LLDAP, and `aiometadata` exists for the same reason — it needs the shared Redis and nothing else, so putting it on `auth` would have given a media addon a route to the directory. Backrest also joins `nextcloud` and `immich` for their dumps, and `ntfy` to push a failed run |
 | `dns_internal` | `172.30.53.0/24`, no gateway | Pi-hole, Unbound | Nothing else can query Unbound |
 | `dockhand` | `172.30.13.0/24` (Traefik `.250`) | Traefik, Dockhand | Dockhand reads the Docker socket, so `:3000` is a path to every container on the host; it is not left on a segment with ~20 neighbours. Also on `ntfy`, for its OOM/unhealthy notifications |
 | `vaultwarden_web` | `172.30.14.0/24` (Traefik `.250`) | Traefik, Vaultwarden | The vault has no east-west consumer at all. Traefik's address is static here because Vaultwarden's `extra_hosts` names it by number, so the OIDC discovery call resolves |

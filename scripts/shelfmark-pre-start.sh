@@ -32,28 +32,8 @@ PROWLARR_URL="http://prowlarr:9696"
 QBITTORRENT_URL="http://gluetun:8080"
 NTFY_TOPIC="downloads"
 
-service_enabled() {
-    /bin/sh "$SCRIPT_DIR/run-if-enabled.sh" "$1"
-}
-
-# Compose interpolates env_file values, so a literal '$' has to be doubled or it
-# would be eaten as the start of a variable reference.
-escape_compose_env_value() {
-    printf '%s' "$1" | sed 's/[$]/$$/g'
-}
-
-# From the host copy, not `docker exec`: this is a pre-start hook, so on a cold
-# boot no container is up yet and a container read would come back empty - and
-# render() would then rewrite the file *without* the Prowlarr block, turning off
-# a release source that was working. prowlarr-pre-start.sh runs earlier in the
-# same sequence and is what puts the key in this file.
-prowlarr_api_key() {
-    local config_file=""
-    config_file="$(resolve_data_location_path)/prowlarr/config.xml"
-    [ -r "$config_file" ] || return 0
-    grep -oE '<ApiKey>[^<]+</ApiKey>' "$config_file" 2>/dev/null \
-        | sed -e 's|<ApiKey>||' -e 's|</ApiKey>||' | tr -d '\r\n'
-}
+# service_enabled, escape_compose_env_value and prowlarr_api_key all live in
+# lib.sh - this hook and the two Stremio addon hooks each need the same three.
 
 # Apprise's ntfy plugin reads the token out of the userinfo field; mode and auth
 # are spelled out rather than left to its hostname/`tk_` heuristics.

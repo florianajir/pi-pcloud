@@ -74,6 +74,10 @@ access_control:
         - 'prowlarr.__HOST_NAME__'
         - 'kapowarr.__HOST_NAME__'
         - 'ai.__HOST_NAME__'
+        # Same tier as the media plumbing above it, and proportionate: what it
+        # edits is the Stremio addon collection, and doing so needs the Stremio
+        # password as well - which this service never stores.
+        - 'stremthru.__HOST_NAME__'
       policy: one_factor
 
     - domain: 'headscale.__HOST_NAME__'
@@ -379,6 +383,68 @@ __OIDC_PRIVATE_KEY__
         consent_mode: implicit
         redirect_uris:
           - 'https://shelfmark.__HOST_NAME__/api/auth/oidc/callback'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        scopes:
+          - openid
+          - profile
+          - email
+          - groups
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+        token_endpoint_auth_method: client_secret_basic
+        userinfo_signed_response_alg: none
+
+      # Two Stremio addons, two clients, both covering the *operator* surface
+      # only. Neither can protect the endpoints Stremio itself fetches: those
+      # come from a headless client with no cookie jar that cannot follow a login
+      # redirect, so the addon URL stays a bearer credential and the Traefik
+      # routers decide who may reach it.
+      #
+      # `groups` is what makes them deny-by-default, so this scope and the
+      # *_GROUP_PERMISSIONS in compose/compose-media.yaml move together - drop it
+      # and nobody, admin included, can sign in.
+      #
+      # They differ on token_endpoint_auth_method, and it is not cosmetic:
+      # Authelia registers one method per client and refuses the token exchange
+      # when the RP uses the other, surfacing as a generic "the SSO provider
+      # rejected the login". aiostreams is client_secret_post (openid-client v6
+      # defaults to POST when given a secret with no explicit method - read the
+      # wrong way round first, and it cost a broken login); aiometadata picks
+      # client_secret_basic itself unless discovery advertises post *without*
+      # basic (addon/lib/oidc.ts), and Authelia advertises both.
+      - client_id: aiostreams
+        client_name: AIOStreams
+        client_secret: '{{ secret "/config/secrets/oidc_aiostreams_secret_hash" }}'
+        public: false
+        authorization_policy: one_factor
+        consent_mode: implicit
+        redirect_uris:
+          - 'https://aiostreams.__HOST_NAME__/api/v1/auth/oidc/callback'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        scopes:
+          - openid
+          - profile
+          - email
+          - groups
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+        token_endpoint_auth_method: client_secret_post
+        userinfo_signed_response_alg: none
+
+      - client_id: aiometadata
+        client_name: AIOMetadata
+        client_secret: '{{ secret "/config/secrets/oidc_aiometadata_secret_hash" }}'
+        public: false
+        authorization_policy: one_factor
+        consent_mode: implicit
+        redirect_uris:
+          - 'https://aiometadata.__HOST_NAME__/api/auth/oidc/callback'
         require_pkce: true
         pkce_challenge_method: 'S256'
         scopes:

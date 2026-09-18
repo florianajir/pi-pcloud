@@ -50,10 +50,8 @@ generate_token() {
     docker run --rm --entrypoint sh "$NTFY_IMAGE" -c 'ntfy token generate'
 }
 
-escape_compose_env_value() {
-    printf '%s' "$1" | sed 's/[$]/$$/g'
-}
-
+# escape_compose_env_value is lib.sh's; this is its inverse, needed only here
+# because this hook reads its own rendered values back to reuse them.
 unescape_compose_env_value() {
     printf '%s' "$1" | sed 's/[$][$]/$/g'
 }

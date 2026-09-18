@@ -135,6 +135,9 @@ That tolerance is not free, and it is not scoped to token grants: `timeout` cove
 | Gluetun HTTP proxy | — | — | — | Not routed through Traefik at all. `gluetun:8888` is unauthenticated and reachable by anything on `frontend` — gluetun's firewall accepts the whole Docker network by design. Enabled for Shelfmark's direct downloads; the exposure is VPN egress for a container that already has internet, not a path to data |
 | LLDAP | ✓ | ✓ | — | LAN-only + 2FA + its own auth + `rate-limit-auth` |
 | Stremio | ✓ | — | — | LAN-only; streaming clients and cast receivers can't do the portal |
+| StremThru | ✓ | ✓ | — | LAN-only + SSO, and the only one of the four Stremio services here with forward-auth: SideKick is a browser UI with no Stremio client fetching from it, so there is no headless caller to 401. It asks for a Stremio password, and with `STREMTHRU_FEATURE=stremio_sidekick` it does not keep it — `vault` is the feature that would store a Stremio account server-side, and it is off, so the `authKey` lives in an HttpOnly/Secure cookie in the browser and is read back per request. That flag also removes the debrid proxy, usenet engine, SABnzbd and WebDAV endpoints and five other addons: `/stremio/wrap`, `/stremio/store`, `/stremio/torz`, `/stremio/list`, `/stremio/newz` and `/v0/store` all answer 404, leaving `/stremio/sidekick/` and `/v0/health`. Turning `vault` on changes the first half of that and needs a Backrest mount this service deliberately has not got |
+| AIOStreams | partial | — | ✓ | Split in two routers, the same shape as Comet below. `/stremio/<uuid>/<encryptedPassword>/*` is public so an addon installed on a Stremio account resolves off-tailnet — that URL *is* the credential. Every configure page is excluded from the public rule by `!PathRegexp(`/configure(/|$)`)` — a prefix exclusion on `/stremio/configure` alone was not enough, because the page that matters is the per-user one at `/stremio/<uuid>/<encryptedPassword>/configure` — and `/api/v1/*` (the SPA, the dashboard, the OIDC callback) is not matched by it at all, so both stay LAN-only. No forward-auth on either: Stremio fetches manifests programmatically, and the operator surface has Authelia through its own OIDC (deny-by-default group mapping, `AIOSTREAMS_AUTH_REQUIRED=true` gating the configuration page). The public half carries `rate-limit-auth` — each stream request fans out to a dozen upstream addons and a debrid API from the Pi's WAN IP. Local login is **off** (`AIOSTREAMS_OIDC_ALLOW_LOCAL_LOGIN=false`): `POST /api/v1/auth/login` answers 403, so the shared `PASSWORD` is not a second way past Authelia. One `AIOSTREAMS_AUTH` account still exists, but now only as a credential — that flag gates the login route alone, and the built-in proxy and usenet engine authenticate with HTTP Basic, which an SSO identity has not got. It is `ADMIN_USER`/`PASSWORD`, which is sound because nothing accepts it interactively any more; `rotate-password.sh` re-renders it. It is therefore no longer the way back in, and upstream's own advice ("set `AIOSTREAMS_OIDC_ENABLED=false` and restart") does **not** work here — the route checks `allowLocalLogin` with no coupling to `oidc.enabled`. If Authelia is down, flip that one flag back to `true` in `compose/compose-media.yaml` and `up -d` |
+| AIOMetadata | partial | — | ✓ | Same split, in three routers. `/stremio/<uuid>/*` is the addon protocol, on `rate-limit-auth`; the artwork routes (`/poster*`, `/logo*`, `/background*`, `/missing_poster.png`) are on `rate-limit-burst` instead — one Stremio home paint is well over a thousand image requests from one browser, which `rate-limit-auth`'s burst of 20 answered with 429 for all but the first few, so most posters simply did not render. Generous rather than absent, because the artwork route embeds an upstream URL and is an image proxy anyone holding an addon URL can aim at the internet; the bytes come off a local disk cache, so it bounds abuse rather than protecting a quota. `POSTER_PROXY_ALLOW_PRIVATE=false` is what stops it being aimed *inward*. `/dashboard` and `/api/*` are at the root and are matched by neither public router; `/configure` is at the root too but is *also* served per user at `/stremio/<uuid>/configure`, so the public rule carries the same `!PathRegexp(`/configure(/|$)`)` exclusion AIOStreams does. All three stay LAN-only. Its own OIDC gates the operator surface (`AUTH_REQUIRE_SIGNIN=true`), and upstream leaves the addon routes open on purpose: a Stremio client carries no session. `ADMIN_KEY` is the documented bypass when the provider is unreachable, and doubles as the HMAC signing the artwork-proxy URLs. Provider API keys go in `config/aiometadata/api-keys.env` as `BUILT_IN_*` — never the bare names, which `/api/config` serves in full to every visitor even with sign-in required. `rate-limit-auth` on the public half: every catalog page is a fan-out to TMDB/TVDB/MDBList, and MDBList's free tier is 1000 calls a day |
 | Comet | partial | — | — | Split in two routers. `/s/<PUBLIC_API_TOKEN>/` is public so an addon installed on a Stremio account resolves off-tailnet; `/configure` is excluded from it, and `/`, `/health` and `/admin*` stay LAN-only. No forward-auth on either — Stremio fetches manifests programmatically. The public half carries `rate-limit-auth`, because each request fans out to Torrentio/MediaFusion/Zilean from the Pi's WAN IP. Its two passwords are generated per-service (`config/comet/comet.env`), never `${PASSWORD}` |
 
 Services with their own account system (Immich, Kavita, Shelfmark, Audiobookshelf, FreshRSS, Trilium) deliberately do **not** stack forward-auth on top of OIDC — their apps and clients cannot complete an interactive portal. Homepage and Headplane are not on that list: neither has such clients — both are only ever opened in a browser, which completes both hops.
@@ -219,7 +222,7 @@ never overriding a backend's own.
 
 List `frame-deny@docker` **first** in a router's chain. Middlewares listed later sit further inside, and anything that short-circuits — the `lan` 403, an Authelia portal redirect, the Stremio redirect — returns without reaching them, so a frame middleware placed last silently omits the header on exactly those responses. Adding a new router means adding it there too; nothing enforces this automatically.
 
-**Rate limiting** — `rate-limit-auth` (10 req/s average per source IP, burst 20, period 1 s) is on two routers: `lldap`, where it sits *before* the forward-auth middleware and blunts credential stuffing, and `comet-public`, where it caps the upstream fan-out (see the Comet row above).
+**Rate limiting** — `rate-limit-auth` (10 req/s average per source IP, burst 20, period 1 s) is on four routers: `lldap`, where it sits *before* the forward-auth middleware and blunts credential stuffing, and `comet-public`, `aiostreams-public` and `aiometadata-public`, where it caps the upstream fan-out (see those rows above). `rate-limit-burst` (100 req/s, burst 200) is the deliberately looser sibling, on `aiometadata-art` and `aiostreams-catalog`: artwork comes off a local disk cache and a catalogue page off a 5-minute cache, neither costing anything upstream, while a single Stremio home paint asks for over a thousand images and dozens of catalogues. `rate-limit-auth` stays on the *stream* path, which is the request that fans out to a dozen addons and a debrid API. Note that Traefik is only half the story: AIOStreams rate-limits its own Stremio surfaces too, and both layers were rejecting until `STREMIO_CATALOG_RATE_LIMIT_MAX_REQUESTS` was raised off its default of 30-per-5s.
 
 **Why the Authelia portal has neither an allowlist nor a rate limit.** Two reasons, both structural: its SPA fires several API calls on page load and would trip the limiter, and OIDC clients (Open WebUI, Nextcloud, Immich…) make *server-side* calls to its discovery and token endpoints — an IP allowlist would 403 those container-to-container requests. Brute force is handled instead by Authelia's own `regulation` block: `max_retries: 3` within `find_time: 2m`, then `ban_time: 5m`, applied in both modes — `user` and `ip`. IP mode is only sound because Traefik declares no `forwardedHeaders.trustedIPs` and the forward-auth call runs with `trustForwardHeader=false`: while the client's own `X-Forwarded-For` was trusted, the address Authelia regulated on was attacker-chosen, so a per-IP ban was evaded by changing a header. With `user` alone, spraying many usernames from one address locked each account for five minutes and never slowed the caller down.
 
@@ -339,11 +342,34 @@ config/comet/comet.env`. Neither feeds `PUBLIC_API_TOKEN`, which lives in the `c
 rotating them leaves every installed Stremio addon URL valid — but `env_file` values are frozen at
 container creation, so pick them up with `docker compose up -d comet`, not `restart`.
 
+The two other Stremio addons keep their own, in `config/aiostreams/aiostreams.env` and
+`config/aiometadata/aiometadata.env` (mode `600`, gitignored), written by
+`scripts/aiostreams-pre-start.sh` and `scripts/aiometadata-pre-start.sh`:
+
+| Value | What it is |
+| --- | --- |
+| `SECRET_KEY` | Encrypts every stored AIOStreams configuration. Minted once and carried forward on every run — rotating it makes existing configurations undecryptable, so every installed addon URL in the household stops resolving. `rotate-password.sh` deliberately never touches it |
+| `AIOSTREAMS_AUTH` | `<ADMIN_USER>:<PASSWORD>` — the one local operator account, kept because the built-in proxy and usenet engine authenticate with HTTP Basic, which an SSO identity has not got. Not an interactive fallback: `AIOSTREAMS_OIDC_ALLOW_LOCAL_LOGIN=false` makes `POST /api/v1/auth/login` answer 403 whatever `AIOSTREAMS_OIDC_ENABLED` says, so the way back in when Authelia is down is flipping that flag to `true` in `compose/compose-media.yaml` and `up -d`. Derived from `PASSWORD`, so `rotate-password.sh` re-renders this file and recreates the container (`rotate_aiostreams`) |
+| `ADMIN_KEY` | AIOMetadata's admin-endpoint bypass, used when the OIDC provider is unreachable. `IMAGE_PROXY_SIGNING_SECRET` falls back to it, so it is also the HMAC that stops the `/poster`, `/logo` and `/background` proxy URLs being forgeable |
+| `REDIS_URL` | The shared valkey password inlined into the URL — this addon has no `_FILE` variant. Sign-in sessions live there, so without it SSO cannot work at all |
+
+`config/aiometadata/api-keys.env` sits beside them and is the one file here no script ever rewrites:
+the provider keys (`BUILT_IN_TMDB_API_KEY` and friends) are yours to paste in. Seeded commented-out,
+because an empty value and an absent one are not the same thing to that addon.
+
 OIDC client secrets are injected into services through read-only Docker volumes, or written into the
 service's own configuration file by its bootstrap script (Kavita's `appsettings.json`, Shelfmark's
 `plugins/security.json`) or pushed over its admin API (Audiobookshelf's `PATCH /api/auth-settings`, whose
-settings live only in its SQLite database) — never through environment variables, where `docker inspect`
-would print them, and never baked into images.
+settings live only in its SQLite database) — and never baked into images.
+
+Two exceptions, both Stremio addons: AIOStreams' `AIOSTREAMS_OIDC_CLIENT_SECRET` and AIOMetadata's
+`OIDC_CLIENT_SECRET` are environment-only upstream — neither has a `_FILE` variant, and AIOMetadata's
+documentation says so explicitly — so `docker inspect` on those two containers does print them. The
+mitigation is that the value is reachable only by someone who can already run `docker inspect`, which on
+this host is a path to every other secret anyway; what it buys is that nothing has to be written into a
+config file the container also owns. They are rendered by `scripts/aiostreams-pre-start.sh` and
+`scripts/aiometadata-pre-start.sh` into mode-`600` gitignored env files rather than sitting in
+`compose/compose-media.yaml`, so `environment:` cannot shadow them and the repo never holds them.
 
 **A rendered file that carries a secret is 0600 from creation.** `lib.sh`'s `write_secret_file` renders
 into a `mktemp` file — 0600 before a byte is written — and `mv`s it into place, rather than `cmd > file`
@@ -393,10 +419,15 @@ network can read or forge an SSO session. A per-service ACL user would not have 
 So `requirepass` is set, from a generated secret. Not `PASSWORD`: nothing here has to type it, every
 consumer reads it from a file, and keeping it independent means `rotate-password.sh` has no
 four-service restart to sequence. Rotate it with `make rotate-secret TARGET=redis-auth`, which
-re-renders, restarts Valkey and recreates the three consumers in that order. Every one of those
-containers is recreated with `--force-recreate`: the secret is a bind-mounted *file*, so rotating it
-leaves the service definition byte-identical and a plain `up -d` would find a matching config hash
-and do nothing.
+re-renders, restarts Valkey and recreates the four consumers in that order. Authelia, Immich and
+Nextcloud are recreated with `--force-recreate`: the secret is a bind-mounted *file* for those three,
+so rotating it leaves the service definition byte-identical and a plain `up -d` would find a matching
+config hash and do nothing. AIOMetadata is the exception on both counts — it has no `_FILE` variant,
+so `scripts/aiometadata-pre-start.sh` is re-run first to put the new password back into `REDIS_URL` in
+`config/aiometadata/aiometadata.env`, and the resulting `env_file` change moves the config hash by
+itself. Skip either half and that container comes back authenticating with the old password: `NOAUTH`
+on every call, and since its sign-in sessions live in Redis, SSO down with nothing in the logs
+pointing at the rotation.
 
 | Where the value lands | How |
 |---|---|
@@ -404,8 +435,10 @@ and do nothing.
 | Authelia | `session.redis.password`, as `{{ secret "/config/secrets/redis_password" }}` |
 | Immich | `REDIS_PASSWORD_FILE`, read by `server/bin/start.sh` as root before the server starts |
 | Nextcloud | `REDIS_HOST_PASSWORD_FILE`, read by `file_env` in the image entrypoint as root — and re-read per request by `config/redis.config.php`, so it points at the `0644` copy below |
+| AIOMetadata | `REDIS_URL`, with the password inlined, rendered by `scripts/aiometadata-pre-start.sh` into the `0600` gitignored `config/aiometadata/aiometadata.env`. The one consumer with no `_FILE` variant |
 
-No consumer takes it as an environment variable, so `docker inspect` shows none of them holding it.
+Every consumer but AIOMetadata reads it from a file, so `docker inspect` shows none of those holding
+it. AIOMetadata is the same environment-only exception as its OIDC client secret above.
 
 **The two files under `${DATA_LOCATION}/redis` are `0644`, and that is deliberate.** With Grafana's
 OIDC client secret (below) they are the only secrets in this stack that are not `0600`, because the
