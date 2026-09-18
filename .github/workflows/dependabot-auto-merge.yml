@@ -1,0 +1,47 @@
+name: Dependabot auto-merge
+
+# What makes this safe is not this file but the required status checks on main:
+# `gh pr merge --auto` waits for whatever the branch protection demands and
+# nothing more, so with an empty required list it would merge before CI had
+# pulled a single image.
+#
+# Its reach stops at the profile selection. Everything compose.test.yaml marks
+# `ci-excluded` - gluetun, qbittorrent, kapowarr, stremio, tailscale, headplane,
+# beszel-agent, ddns-updater, llama-cpp, piper, parakeet - is dropped by
+# tests/ci-profiles.py before `docker compose pull` runs, and Validate Compose
+# never contacts a registry. Those bumps merge on four green checks that never
+# fetched the image; a missing arm64 manifest surfaces at the next `make update`.
+on: pull_request
+
+# Dependabot-triggered workflows get a read-only GITHUB_TOKEN whatever the
+# repository default is, and this one has to write.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Enable auto-merge
+    # Asserts the run was triggered by Dependabot, not what later lands on the
+    # branch: auto-merge is sticky PR state, so a commit pushed afterwards by
+    # someone else rides the same green checks in.
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read the bump's metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@08eff52bf64351f401fb50d4972fa95b9f2c2d1b  # v2.4.0
+
+      # Majors stay manual, and so does anything Dependabot cannot compare as
+      # semver - a digest-only bump reports an empty update-type, which matches
+      # neither entry. On a grouped pull request the output is the highest
+      # change among its members, so a major cannot ride in beside a patch.
+      - name: Enable auto-merge for patch and minor bumps
+        if: >-
+          contains(fromJSON('["version-update:semver-patch", "version-update:semver-minor"]'),
+          steps.metadata.outputs.update-type)
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
