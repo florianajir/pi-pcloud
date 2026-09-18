@@ -312,11 +312,13 @@ validate_service() {
 
 # --- Checklist layout ---
 
-# One row per optional service, as
-# "<service>:<section>:<companion-of>:<needs>:<conflicts-with>:<description>"
-# (description last, so a colon inside it survives),
-# ordered by section. Everything comes out of compose/*.yaml, so the picker can
-# never drift from the stack:
+# One record per service in compose/*.yaml, pipe-separated, in the order the
+# files are read:
+#   <section>|<root>|<child>|<name>|<companion-of>|<needs>|<description>|
+#   <conflicts-with>|<ram-mib>|<optional>
+# config_rows below turns the optional ones into the picker's rows;
+# always_on_ram_mib sums the rest. Everything comes out of compose/*.yaml, so
+# neither can drift from the stack:
 #   homepage.group=            the section the service is listed under
 #   pi-pcloud.companion-of=    the service it is pointless without, which is
 #                              what the picker draws it indented beneath
@@ -329,23 +331,48 @@ validate_service() {
 #   profiles:                  a service listing others in its own profile list
 #                              is a dependency they cannot run without (gluetun
 #                              for the containers sharing its network
-#                              namespace), reported as <needs>
-# The last two are different relations on purpose: qbittorrent needs gluetun but
-# is a service in its own right, listed under Download, while comet only makes
-# sense under stremio. Both propagate when a box is toggled; only companion-of
-# nests. A service with no section label borrows its companion's, else "Other".
-# Sorting goes through sort(1) because mawk has no asort. Fields are
-# colon-separated, not tab-separated: `read` folds runs of IFS whitespace, which
-# would swallow the empty fields a row carries.
-config_rows() {
+#                              namespace), reported as <needs>. A service with
+#                              no profiles list at all is core: it runs whatever
+#                              the selection says, which is <optional>=0
+#   mem_limit:                 the memory ceiling, in MiB, shown beside the
+#                              service and summed into the picker's header
+# The companion and the profile list are different relations on purpose:
+# qbittorrent needs gluetun but is a service in its own right, listed under
+# Download, while comet only makes sense under stremio. Both propagate when a
+# box is toggled; only companion-of nests. A service with no section label
+# borrows its companion, else "Other".
+compose_rows() {
     awk '
+        function mib(line,   value) {
+            value = line
+            sub(/^[^:]*:[ \t]*/, "", value)
+            sub(/[ \t].*$/, "", value)
+            gsub(/"/, "", value)
+            if (value ~ /[gG]$/) return int((value + 0) * 1024)
+            if (value ~ /[mM]$/) return int(value + 0)
+            if (value ~ /[kK]$/) return int((value + 0) / 1024)
+            return int((value + 0) / 1048576)
+        }
         /^services:[ \t]*$/ { in_services = 1; next }
         /^[A-Za-z0-9_-]+:/ {
             if (in_services) collect()
             in_services = 0
+            # A top-level x- block can hold a mem_limit that services pick up
+            # through a merge key (x-stremio-common is the only one today, and
+            # it is where both stremio modes get their ceiling), so the anchors
+            # are read on the way past.
+            anchor = ""
+            if ($0 ~ /&[A-Za-z0-9_-]+/) {
+                anchor = $0
+                sub(/^[^&]*&/, "", anchor)
+                sub(/[^A-Za-z0-9_-].*$/, "", anchor)
+            }
             next
         }
-        !in_services { next }
+        !in_services {
+            if (anchor != "" && $0 ~ /^[ \t]+mem_limit:/) anchor_mem[anchor] = mib($0)
+            next
+        }
         /^  [A-Za-z0-9_-]+:[ \t]*$/ {
             collect()
             svc = $0
@@ -353,6 +380,14 @@ config_rows() {
             next
         }
         /^[ \t]+profiles:/ { profiles = $0; next }
+        /^[ \t]+mem_limit:/ { mem = mib($0); next }
+        /^[ \t]+<<:[ \t]*\*/ {
+            merge = $0
+            sub(/^[^*]*\*/, "", merge)
+            sub(/[^A-Za-z0-9_-].*$/, "", merge)
+            merged = merged " " merge
+            next
+        }
         /homepage\.group=/ {
             group = $0
             sub(/.*homepage\.group=/, "", group)
@@ -411,28 +446,99 @@ config_rows() {
                 # A sidecar carries no dashboard description of its own; saying
                 # what it runs with beats an empty column.
                 text = info[i] != "" ? info[i] : (comp[i] != "" ? "runs with " comp[i] : "")
-                printf "%s|%s|%d|%s|%s|%s|%s|%s\n", section[name[i]], root, child, name[i], comp[i], needs[name[i]], text, excl[name[i]]
+                printf "%s|%s|%d|%s|%s|%s|%s|%s|%d|%d\n", section[name[i]], root, child, name[i], comp[i], needs[name[i]], text, excl[name[i]], ram[i], optional[i]
             }
         }
-        function collect() {
-            if (svc != "" && profiles != "") {
+        function collect(   i, cnt, part) {
+            if (svc != "") {
+                # Own ceiling first, then whatever a merge key brought in: a
+                # service overriding the anchor keeps its own number.
+                if (mem == 0) {
+                    cnt = split(merged, part, " ")
+                    for (i = 1; i <= cnt; i++)
+                        if (part[i] in anchor_mem) mem = anchor_mem[part[i]]
+                }
                 n++
                 name[n] = svc
                 grp[n] = group
                 comp[n] = companion
                 info[n] = desc
+                ram[n] = mem
                 p = profiles
                 sub(/^[^[]*\[/, "", p)
                 sub(/\].*$/, "", p)
                 gsub(/["\t ]/, "", p)
                 prof[n] = p
+                optional[n] = profiles != "" ? 1 : 0
                 confl[n] = conflict
             }
             svc = ""; profiles = ""; group = ""; companion = ""; desc = ""; conflict = ""
+            mem = 0; merged = ""
         }
-    ' "$PROJECT_DIR"/compose/*.yaml \
+    ' "$PROJECT_DIR"/compose/*.yaml
+}
+
+# One row per optional service, as
+# "<service>:<section>:<companion-of>:<needs>:<conflicts-with>:<ram-mib>:<description>"
+# (description last, so a colon inside it survives), ordered by section.
+# Sorting goes through sort(1) because mawk has no asort. Fields are
+# colon-separated, not tab-separated: `read` folds runs of IFS whitespace, which
+# would swallow the empty fields a row carries.
+config_rows() {
+    compose_rows \
+        | awk -F'|' '$10 == 1' \
         | sort -t'|' -k1,1 -k2,2 -k3,3n -k4,4 \
-        | awk -F'|' '{ printf "%s:%s:%s:%s:%s:%s\n", $4, ($3 == 0 ? $1 : ""), $5, $6, $8, $7 }'
+        | awk -F'|' '{ printf "%s:%s:%s:%s:%s:%s:%s\n", $4, ($3 == 0 ? $1 : ""), $5, $6, $8, $9, $7 }'
+}
+
+# The ceilings of the services the picker never lists, because they run whatever
+# it is told: Traefik, Authelia, Postgres, Pi-hole and the rest. Counted into
+# every total, since they are what the optional ones are picked on top of.
+always_on_ram_mib() {
+    compose_rows | awk -F'|' '$10 == 0 { total += $9 } END { print total + 0 }'
+}
+
+# Host RAM in MiB, 0 when it cannot be read (no /proc, another kernel).
+host_ram_mib() {
+    awk '/^MemTotal:/ { printf "%d\n", $2 / 1024; exit }' /proc/meminfo 2>/dev/null || echo 0
+}
+
+# One line on what a selection can take at worst: the mem_limit ceilings of
+# everything it runs, always-on services included, against the RAM of this host.
+#
+# Ceilings, not usage, and the difference is the whole point of the wording. The
+# stack ships overcommitted on purpose (docs/ARCHITECTURE.md, "Rationing CPU and
+# memory"): the reference 16 GB host carries the full stack at 2.3x its RAM and
+# sits near 20% of the ceilings at idle, because a limit is what a service may
+# take when it misbehaves, not what it holds. So the warning is not at 1x, which
+# any interesting selection crosses on a Pi, but past RAM_RATIO_WARN - more
+# ceiling than the machine the stack was tuned for was ever asked to carry.
+RAM_RATIO_WARN=2.5
+
+ram_note() {
+    _picked_ram="$(config_rows | awk -F: -v list="$1" '
+        BEGIN { n = split(list, part, "\n"); for (i = 1; i <= n; i++) on[part[i]] = 1 }
+        $1 in on { total += $6 }
+        END { print total + 0 }')"
+    # LC_ALL=C: awk formats %.1f through the locale, and a fr_FR host would
+    # print "2,3x" where the picker beside it prints "2.3x".
+    LC_ALL=C awk -v picked="$_picked_ram" -v core="$(always_on_ram_mib)" \
+        -v ram="$(host_ram_mib)" -v warn="$RAM_RATIO_WARN" '
+        function human(mib) {
+            return mib >= 1024 ? sprintf("%.1fG", mib / 1024) : sprintf("%dM", mib)
+        }
+        BEGIN {
+            total = picked + core
+            if (ram <= 0) {
+                printf "🧠 RAM ceilings %s (always-on core included)\n", human(total)
+                exit
+            }
+            printf "🧠 RAM ceilings %s of %s RAM — %.1fx (always-on core included)\n",
+                human(total), human(ram), total / ram
+            if (total / ram <= warn) exit
+            printf "⚠️  More ceiling than this host was built to carry. Untick a heavy\n"
+            printf "   service (make config) or expect swapping when several peak together.\n"
+        }'
 }
 
 # Runs the picker over the current selection and prints the COMPOSE_PROFILES
@@ -450,20 +556,24 @@ pick_profiles() {
     command -v python3 >/dev/null 2>&1 || return 2
 
     # The picker only chooses: it reads
-    # "service:section:parent:needs:state:description" rows and writes back the
-    # services that stay ticked. Files, not a pipe, because it takes over the
-    # terminal (see scripts/services-picker.py).
+    # "service:section:parent:needs:conflicts:ram:state:description" rows and
+    # writes back the services that stay ticked. Files, not a pipe, because it
+    # takes over the terminal (see scripts/services-picker.py). The always-on
+    # ceilings go with them, since the picker lists none of those services and
+    # they are what the selection is stacked on top of.
     _rows="$(mktemp)"
     _picked="$(mktemp)"
     _known="$(known_profiles)"
-    while IFS=: read -r _svc _section _parent _needs _conflicts _desc; do
+    while IFS=: read -r _svc _section _parent _needs _conflicts _ram _desc; do
         [ -n "$_svc" ] || continue
         in_lines "$_known" "$_svc" || continue
         if in_lines "$_enabled" "$_svc"; then
-            printf '%s:%s:%s:%s:%s:on:%s\n' "$_svc" "$_section" "$_parent" "$_needs" "$_conflicts" "$_desc" >>"$_rows"
+            _state=on
         else
-            printf '%s:%s:%s:%s:%s:off:%s\n' "$_svc" "$_section" "$_parent" "$_needs" "$_conflicts" "$_desc" >>"$_rows"
+            _state=off
         fi
+        printf '%s:%s:%s:%s:%s:%s:%s:%s\n' \
+            "$_svc" "$_section" "$_parent" "$_needs" "$_conflicts" "$_ram" "$_state" "$_desc" >>"$_rows"
     done <<EOF
 $(config_rows)
 EOF
@@ -472,7 +582,8 @@ EOF
         echo "❌ No optional services declared in compose/*.yaml" >&2
         return 2
     fi
-    if ! python3 "$PROJECT_DIR/scripts/services-picker.py" "$_rows" "$_picked" </dev/tty >/dev/tty; then
+    if ! python3 "$PROJECT_DIR/scripts/services-picker.py" "$_rows" "$_picked" \
+        "$(always_on_ram_mib)" </dev/tty >/dev/tty; then
         rm -f "$_rows" "$_picked"
         return 1
     fi
@@ -521,6 +632,7 @@ cmd_list() {
             printf '  ⛔ %s disabled\n' "$svc"
         fi
     done
+    ram_note "$enabled"
 }
 
 cmd_enable() {
@@ -590,6 +702,7 @@ cmd_enable() {
         run_post_start_hooks "$_svc" "$known"
     done
     echo "✅ $svc enabled"
+    ram_note "$(services_for_profiles "$new")"
 }
 
 cmd_disable() {
@@ -616,6 +729,7 @@ cmd_disable() {
     run_compose_quiet stop "$svc"
     run_compose_quiet rm -f "$svc"
     echo "✅ $svc disabled"
+    ram_note "$(services_for_profiles "$new")"
 }
 
 # Print the COMPOSE_PROFILES value the user picks, and nothing else, so
@@ -680,6 +794,7 @@ cmd_config() {
 
     if [ -z "$newly_on" ] && [ -z "$newly_off" ]; then
         echo "✅ No service changes (COMPOSE_PROFILES=${new_profiles:-<empty: core only>})"
+        ram_note "$new_enabled"
         return 0
     fi
 
@@ -709,6 +824,7 @@ cmd_config() {
     done
 
     echo "✅ Applied${newly_on:+ · enabled:$newly_on}${newly_off:+ · disabled:$newly_off}"
+    ram_note "$new_enabled"
 }
 
 # --- Main ---
