@@ -469,6 +469,20 @@ services:
       # all from the Pi's WAN IP, and peak memory while the results are held for
       # filtering. Watch mem_limit below if this is raised much further.
       - MAX_ADDONS=30
+      # The fallback timeout for any addon that does not set its own. 7000
+      # upstream, which is structurally too tight here: an anime request spends
+      # ~4.5s resolving alternative titles *before* the first search is issued,
+      # and that preamble is charged to every addon's budget - measured on
+      # kitsu:10740, identical for Knaben and Prowlarr, so it is shared work and
+      # not one slow scraper. At 7000 that leaves 2.5s to actually search, and
+      # every anime lookup aborts.
+      #
+      # This only covers addons with no explicit timeout of their own. The SEL
+      # template's wizard writes one per addon, so anything imported through it
+      # keeps whatever was chosen there and has to be raised in the dashboard -
+      # Prowlarr needs 30000 (its three anime queries alone took 15.2s, before
+      # the .torrent downloads that follow).
+      - DEFAULT_TIMEOUT=15000
     # SECRET_KEY, AIOSTREAMS_AUTH, the OIDC client secret and the Prowlarr pair,
     # all from scripts/aiostreams-pre-start.sh. Not in `environment:` above,
     # which wins over `env_file:` and would silently shadow them. Frozen at
