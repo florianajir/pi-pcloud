@@ -42,11 +42,15 @@ seed_notification_url() {
         return 0
     }
 
-    key="$(changedetection_api_key)"
-    if [ -z "$key" ]; then
+    # Waited for, not read once: the token only reaches the datastore file when
+    # the store commits, which a first start does shortly *after* Flask starts
+    # answering. "Retrying next start" is no answer on `make enable`, where this
+    # start is the only one there will be.
+    if ! wait_for_cmd 15 2 changedetection_has_api_key; then
         log "WARNING: could not read changedetection.io's API token; retrying next start"
         return 0
     fi
+    key="$(changedetection_api_key)"
 
     existing="$(docker_curl -H "x-api-key: $key" "$CHANGEDETECTION_URL/api/v1/notifications" 2>/dev/null)" || {
         log "WARNING: changedetection.io did not answer /api/v1/notifications; retrying next start"

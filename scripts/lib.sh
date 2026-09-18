@@ -611,6 +611,15 @@ changedetection_api_key() {
         2>/dev/null || true
 }
 
+# The token is minted in memory at first start and only reaches the datastore
+# file when the store commits, so a hot `make enable changedetection` asks for
+# it while the file is still absent. Waiting beats "retrying next start": on an
+# enable there is no next start until someone runs one.
+# Usage: wait_for_cmd 15 2 changedetection_has_api_key
+changedetection_has_api_key() {
+    [ -n "$(changedetection_api_key "$@")" ]
+}
+
 # Where scripts/audiobookshelf-bootstrap.sh persists the API key every later
 # script authenticates with. Inside /config rather than beside it so Backrest's
 # read-only mount of that directory carries it off-site: local logins are

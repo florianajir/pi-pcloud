@@ -172,6 +172,43 @@ ok       "  before the container is created" \
     "$(printf '%s\n' "$out" | grep -nE 'authelia-pre-start\.sh|docker compose up -d' \
         | head -n1 | grep -c 'authelia-pre-start')" 1
 
+# Every optional service's Homepage widget key is minted by homepage's own
+# bootstrap rather than the service's, and compose points HOMEPAGE_FILE_* at
+# those files unconditionally - so enabling changedetection without running it
+# left the dashboard throwing ENOENT on every render until the next full update.
+run_rc beszel enable changedetection
+ok       "enable changedetection succeeds"      "$rc" 0
+contains "  runs its own bootstrap"             "$out" "changedetection-bootstrap.sh"
+contains "  and homepage's widget bootstrap"    "$out" "homepage-widgets-bootstrap.sh"
+ok "  after the container is started" \
+    "$(printf '%s\n' "$out" \
+        | grep -nE 'homepage-widgets-bootstrap\.sh|docker compose up -d' \
+        | head -n1 | grep -c 'docker compose up -d')" 1
+lacks    "  and not Uptime Kuma's, which is off" "$out" "uptime-kuma-bootstrap.sh"
+
+# Uptime Kuma pauses the monitors of services COMPOSE_PROFILES leaves out, so
+# the newly enabled one stays paused until its bootstrap reconciles them.
+run_rc beszel,uptime-kuma enable changedetection
+ok       "enable with Uptime Kuma on succeeds"                "$rc" 0
+contains "the monitors are reconciled when Uptime Kuma runs"  "$out" "uptime-kuma-bootstrap.sh"
+
+# ...and exactly once when Uptime Kuma is itself the service being enabled: its
+# own post-start hook already ran it, and it is the most expensive hook here (a
+# throwaway container that pip-installs its client).
+run_rc beszel,uptime-kuma enable uptime-kuma
+ok "its own bootstrap is not run twice" \
+    "$(printf '%s\n' "$out" | grep -c 'uptime-kuma-bootstrap\.sh')" 1
+
+# The same reconciliation on the way out: a monitor left active against a
+# container that was just removed alerts as down until something pauses it.
+run_rc changedetection,uptime-kuma disable changedetection
+ok       "disable changedetection succeeds"          "$rc" 0
+contains "  reconciles the monitors too"             "$out" "uptime-kuma-bootstrap.sh"
+ok "  after the container is removed" \
+    "$(printf '%s\n' "$out" \
+        | grep -nE 'uptime-kuma-bootstrap\.sh|docker compose rm' \
+        | head -n1 | grep -c 'docker compose rm')" 1
+
 # --- the two networking modes stay exclusive ---------------------------------
 
 # "all" already runs stremio, so this must not silently start a second server
