@@ -290,7 +290,9 @@ Ticking propagates along both dependency relations — the hard ones in the tabl
 
 The whole layout is read out of `compose/*.yaml` (`homepage.group` for the section, `homepage.description` for the text, `pi-pcloud.companion-of` for the indent, `profiles:` for the hard dependencies, `mem_limit` for the ceilings), so the picker cannot drift from the stack. It is `scripts/services-picker.py`, standard-library `curses` only — nothing to install on Raspberry Pi OS, and on a host without `python3` you simply use `make enable` / `make disable` instead. All three targets wrap `scripts/services.sh`, which is what actually writes `.env` and runs the hooks.
 
-Enabling also runs the service's init hooks — `scripts/<service>-pre-start.sh` before the start, `scripts/<service>-bootstrap.sh` / `-oidc-bootstrap.sh` after — the same scripts the systemd unit runs. So no `make restart` is needed: the stack is immediately consistent, and the unit reads the same `.env` at next boot.
+Enabling also runs the service's init hooks — `scripts/<service>-pre-start.sh` before the start, `scripts/<service>-bootstrap.sh` / `-oidc-bootstrap.sh` after — plus `scripts/authelia-pre-start.sh`, which is what writes every OIDC client secret. These are the same scripts the systemd unit runs, so no `make restart` is needed: the stack is immediately consistent, and the unit reads the same `.env` at next boot.
+
+They are run through `sudo` (nothing else here is), because the unit runs them as root and what they write under `DATA_LOCATION` is root-owned: unprivileged, `authelia-pre-start.sh` cannot even create a temp file in its own secrets directory. A hook that fails still stops the start, and the `COMPOSE_PROFILES` line written just before it is put back — otherwise the half-enabled service would read as enabled and the next `make config` would find nothing left to do.
 
 > **Upgrading an older install:** an `.env` with no `COMPOSE_PROFILES` line keeps running everything, because the systemd unit defaults the variable to `all`. Manual `docker compose` invocations do not get that default, so add `COMPOSE_PROFILES=all` to your `.env`.
 

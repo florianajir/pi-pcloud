@@ -177,6 +177,55 @@ write_profiles() {
     echo "✏️  Updated COMPOSE_PROFILES in $(basename "$ENV_FILE")"
 }
 
+# COMPOSE_PROFILES has to be written before the hooks run, because a hook may
+# ask whether a service is enabled (scripts/run-if-enabled.sh reads the line
+# from .env, not from an argument). Anything failing after that write leaves it
+# claiming a service that was never started - and enabled-ness is read back
+# from .env, so the next `make config` sees no change to make and never starts
+# it. Armed before the write, disarmed once the containers are up, this puts
+# the old value back instead.
+#
+# "absent" rather than an empty value: no COMPOSE_PROFILES line at all means
+# "everything enabled" (a pre-profiles install), which an empty line does not.
+_profiles_backup=""
+
+arm_profiles_rollback() {
+    if is_dry_run; then return 0; fi
+    if has_profiles_line; then
+        _profiles_backup="value:$(get_env_value_clean COMPOSE_PROFILES)"
+    else
+        _profiles_backup="absent:"
+    fi
+    trap 'rollback_profiles' EXIT INT TERM
+}
+
+disarm_profiles_rollback() {
+    _profiles_backup=""
+    trap - EXIT INT TERM
+}
+
+rollback_profiles() {
+    _rc="$?"
+    trap - EXIT INT TERM
+    [ -n "$_profiles_backup" ] || exit "$_rc"
+    case "$_profiles_backup" in
+        absent:)
+            sed -i '/^COMPOSE_PROFILES=/d' "$ENV_FILE"
+            ;;
+        value:*)
+            _previous="${_profiles_backup#value:}"
+            if has_profiles_line; then
+                sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=$(sed_escape "$_previous")|" "$ENV_FILE"
+            else
+                printf 'COMPOSE_PROFILES=%s\n' "$_previous" >> "$ENV_FILE"
+            fi
+            ;;
+    esac
+    _profiles_backup=""
+    echo "↩️  Restored the previous COMPOSE_PROFILES in $(basename "$ENV_FILE")" >&2
+    exit "$_rc"
+}
+
 # Mutating docker compose command. Dry mode prints instead.
 run_compose() {
     if is_dry_run; then
@@ -212,6 +261,32 @@ run_compose_up_with() {
     fi
 }
 
+# The command that runs a hook, as a single string for both the dry-run print
+# and the real call.
+#
+# Elevated, because every other caller of these hooks is root: the systemd unit
+# runs them through scripts/run-hooks.sh, so everything they write under
+# DATA_LOCATION is root-owned with no group write. `make config` and
+# `make enable` are the only unprivileged callers, and authelia-pre-start.sh
+# fails on its first line there - "mktemp: cannot create
+# .../authelia-config/secrets/jwt_secret.XXXXXX: Permission denied" - which
+# aborts the run after .env was already rewritten. $SUDO is empty when we are
+# already root, since a root-only image often ships no sudo binary at all.
+#
+# Through `env`, because sudo resets the environment: PROJECT_DIR and ENV_FILE
+# are what lib.sh derives everything else from, and a hook re-deriving them
+# from its own path would ignore the ENV_FILE this run was given. The same form
+# is used unelevated, so both paths run the identical command.
+hook_command() {
+    printf '%senv PROJECT_DIR=%s ENV_FILE=%s %s %s' \
+        "${SUDO:+$SUDO }" "$PROJECT_DIR" "$ENV_FILE" "$(script_interpreter "$1")" "$1"
+}
+
+run_hook_script() {
+    $SUDO env "PROJECT_DIR=$PROJECT_DIR" "ENV_FILE=$ENV_FILE" \
+        "$(script_interpreter "$1")" "$1"
+}
+
 # Run scripts/<name> if it exists, under the interpreter its extension calls
 # for; tolerate failure like the systemd unit's `-` prefix does. Dry mode prints
 # instead.
@@ -219,11 +294,11 @@ run_hook() {
     _hook="$PROJECT_DIR/scripts/$1"
     [ -f "$_hook" ] || return 0
     if is_dry_run; then
-        echo "DRY-RUN: $(script_interpreter "$_hook") $_hook"
+        echo "DRY-RUN: $(hook_command "$_hook")"
         return 0
     fi
     log "Running hook $1..."
-    run_script "$_hook" || log "warning: hook $1 failed (continuing)"
+    run_hook_script "$_hook" || log "warning: hook $1 failed (continuing)"
 }
 
 # Same, for the pre-start hooks: a failure there stops the start, exactly as it
@@ -235,11 +310,11 @@ run_pre_start_hook() {
     _hook="$PROJECT_DIR/scripts/$1"
     [ -f "$_hook" ] || return 0
     if is_dry_run; then
-        echo "DRY-RUN: $(script_interpreter "$_hook") $_hook"
+        echo "DRY-RUN: $(hook_command "$_hook")"
         return 0
     fi
     log "Running hook $1..."
-    run_script "$_hook" || die "hook $1 failed; nothing was started"
+    run_hook_script "$_hook" || die "hook $1 failed; nothing was started"
 }
 
 # Hooks that belong to an always-on service but write files a *newly enabled*
@@ -674,6 +749,7 @@ cmd_enable() {
             done
             exit 1
         fi
+        arm_profiles_rollback
         write_profiles "$new"
     fi
 
@@ -699,6 +775,7 @@ cmd_enable() {
     echo "🚀 Starting$newly_on..."
     # shellcheck disable=SC2086 # service names, split on purpose
     run_compose_up_with "$new" up -d $newly_on
+    disarm_profiles_rollback
     for _svc in $newly_on; do
         run_post_start_hooks "$_svc" "$known"
     done
@@ -781,6 +858,7 @@ cmd_config() {
         echo "   Nothing was changed." >&2
         return 1
     fi
+    arm_profiles_rollback
     write_profiles "$new_profiles"
 
     # Diff effective service sets (not raw profiles), so auto-enabled
@@ -797,6 +875,7 @@ cmd_config() {
     done
 
     if [ -z "$newly_on" ] && [ -z "$newly_off" ]; then
+        disarm_profiles_rollback
         echo "✅ No service changes (COMPOSE_PROFILES=${new_profiles:-<empty: core only>})"
         ram_note "$new_enabled"
         return 0
@@ -814,6 +893,7 @@ cmd_config() {
         # shellcheck disable=SC2086 # service names, split on purpose
         run_compose_up_with "$new_profiles" up -d $newly_on
     fi
+    disarm_profiles_rollback
 
     if [ -n "$newly_off" ]; then
         echo "🛑 Stopping and removing$newly_off..."
