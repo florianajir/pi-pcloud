@@ -54,7 +54,13 @@ cat >"$WORK/bin/docker" <<'STUB'
 #!/bin/sh
 set -eu
 [ "${1:-}" = compose ] && shift || exit 1
-[ "${1:-}" = config ] && shift || exit 1
+# `up` is answered too, for the section that runs without DRY_RUN; everything
+# else is a command these tests never expect to reach a real daemon.
+case "${1:-}" in
+    config) shift ;;
+    up) echo "docker compose $*"; exit 0 ;;
+    *) exit 1 ;;
+esac
 awk -v mode="${1:-}" -v selection="${COMPOSE_PROFILES-all}" '
     function flush() {
         if (svc == "") return
@@ -345,6 +351,63 @@ run_rc all list
 second="$(printf '%s\n' "$out" | sed -n 's/^🧠 RAM ceilings \([0-9.]*[MG]\).*/\1/p')"
 ok "  and a smaller selection is a smaller total" \
     "$(printf '%s\n%s\n' "$first" "$second" | sort -h | head -n1)" "$first"
+
+# --- the hooks run with the privileges they were written for -----------------
+#
+# `make config` and `make enable` were the only callers running these hooks
+# unprivileged: authelia-pre-start.sh died on "Permission denied" in the
+# root-owned secrets directory - after .env had already been rewritten, so the
+# service counted as enabled and the next run found nothing left to do.
+#
+# Runs for real (no DRY_RUN) against stub hooks and a stub `sudo`, replacing
+# files in the throwaway tree - so it stays last.
+
+cat >"$WORK/bin/sudo" <<'STUB'
+#!/bin/sh
+echo "ELEVATED: $*"
+exec "$@"
+STUB
+chmod +x "$WORK/bin/sudo"
+
+rm -f "$WORK"/scripts/*-pre-start.sh "$WORK"/scripts/*bootstrap.sh "$WORK"/scripts/*bootstrap.py
+
+# The one hook left, exiting with the status the test asks for.
+authelia_hook_exiting() {
+    cat >"$WORK/scripts/authelia-pre-start.sh" <<STUB
+#!/bin/sh
+echo "authelia hook ran as uid \$(id -u) with PROJECT_DIR=\$PROJECT_DIR"
+exit $1
+STUB
+    chmod +x "$WORK/scripts/authelia-pre-start.sh"
+}
+
+written_line() {
+    sed -n 's/^COMPOSE_PROFILES=//p' "$ENV_FILE"
+}
+
+run_live() {
+    printf 'COMPOSE_PROFILES=%s\n' "$1" >"$ENV_FILE"
+    shift
+    out="$(sh "$WORK/scripts/services.sh" "$@" 2>&1)" && rc=0 || rc=$?
+}
+
+authelia_hook_exiting 1
+run_live beszel enable kavita
+ok       "a failing pre-start hook fails the enable" "$rc" 1
+contains "  the hook is given the project paths"    "$out" "PROJECT_DIR=$WORK"
+ok       "  and COMPOSE_PROFILES is put back"       "$(written_line)" "beszel"
+
+if [ "$(id -u)" = 0 ]; then
+    lacks    "  no sudo when already root"          "$out" "ELEVATED:"
+else
+    contains "  the hook is elevated"               "$out" "ELEVATED: env PROJECT_DIR=$WORK"
+fi
+
+authelia_hook_exiting 0
+run_live beszel enable kavita
+ok       "a completed enable keeps its .env write"  "$rc" 0
+contains "  starting the service"                   "$out" "up -d kavita"
+contains "  and leaving it enabled"                 ",$(written_line)," ",kavita,"
 
 printf '\nservices-test.sh: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -162,6 +162,16 @@ EOF
     return "$_rc"
 }
 
+# Shared with rollback_profiles below, so restoring a value cannot drift from
+# writing one.
+put_profiles_line() {
+    if has_profiles_line; then
+        sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=$(sed_escape "$1")|" "$ENV_FILE"
+    else
+        printf 'COMPOSE_PROFILES=%s\n' "$1" >> "$ENV_FILE"
+    fi
+}
+
 # Rewrite (or append) the COMPOSE_PROFILES line. Dry mode prints instead.
 write_profiles() {
     check_exclusive "$1" || return 1
@@ -169,12 +179,55 @@ write_profiles() {
         echo "DRY-RUN: would write to $ENV_FILE: COMPOSE_PROFILES=$1"
         return 0
     fi
-    if has_profiles_line; then
-        sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=$(sed_escape "$1")|" "$ENV_FILE"
-    else
-        printf 'COMPOSE_PROFILES=%s\n' "$1" >> "$ENV_FILE"
-    fi
+    put_profiles_line "$1"
     echo "✏️  Updated COMPOSE_PROFILES in $(basename "$ENV_FILE")"
+}
+
+# COMPOSE_PROFILES is written before the hooks run, because a hook may ask
+# whether a service is enabled and run-if-enabled.sh reads that from .env. A
+# failure after the write therefore leaves the line claiming a service that was
+# never started - and since enabled-ness is read back from .env, the next
+# `make config` sees nothing left to do. Armed before the write, disarmed once
+# the containers are up.
+#
+# "absent:" is not "value:": no COMPOSE_PROFILES line at all means everything
+# enabled (a pre-profiles install), which an empty line does not.
+_profiles_backup=""
+
+arm_profiles_rollback() {
+    if is_dry_run; then return 0; fi
+    if has_profiles_line; then
+        _profiles_backup="value:$(get_env_value_clean COMPOSE_PROFILES)"
+    else
+        _profiles_backup="absent:"
+    fi
+    trap 'rollback_profiles' EXIT INT TERM
+}
+
+disarm_profiles_rollback() {
+    _profiles_backup=""
+    trap - EXIT INT TERM
+}
+
+rollback_profiles() {
+    _rc="$?"
+    trap - EXIT INT TERM
+    [ -n "$_profiles_backup" ] || exit "$_rc"
+    # A signal caught between two commands leaves $? at the last one's status,
+    # usually 0 - and exiting 0 from a run that just undid its own .env write
+    # reports the enable as done. Reaching here at all means it was not.
+    [ "$_rc" -ne 0 ] || _rc=1
+    case "$_profiles_backup" in
+        absent:)
+            sed -i '/^COMPOSE_PROFILES=/d' "$ENV_FILE"
+            ;;
+        value:*)
+            put_profiles_line "${_profiles_backup#value:}"
+            ;;
+    esac
+    _profiles_backup=""
+    echo "↩️  Restored the previous COMPOSE_PROFILES in $(basename "$ENV_FILE")" >&2
+    exit "$_rc"
 }
 
 # Mutating docker compose command. Dry mode prints instead.
@@ -212,6 +265,26 @@ run_compose_up_with() {
     fi
 }
 
+# Elevated, because every other caller of these hooks is root: the systemd unit
+# runs them through run-hooks.sh, so what they write under DATA_LOCATION is
+# root-owned. Unprivileged, authelia-pre-start.sh fails on its first line -
+# "mktemp: cannot create .../secrets/jwt_secret.XXXXXX: Permission denied".
+# $SUDO is empty when already root (a root-only image often ships no sudo).
+#
+# Through `env`, because sudo resets the environment: a hook re-deriving
+# PROJECT_DIR and ENV_FILE from its own path would ignore the ENV_FILE this run
+# was given. Used unelevated too, so both paths run the identical command -
+# which is also what makes hook_command's dry-run print honest.
+hook_command() {
+    printf '%senv PROJECT_DIR=%s ENV_FILE=%s %s %s' \
+        "${SUDO:+$SUDO }" "$PROJECT_DIR" "$ENV_FILE" "$(script_interpreter "$1")" "$1"
+}
+
+run_hook_script() {
+    $SUDO env "PROJECT_DIR=$PROJECT_DIR" "ENV_FILE=$ENV_FILE" \
+        "$(script_interpreter "$1")" "$1"
+}
+
 # Run scripts/<name> if it exists, under the interpreter its extension calls
 # for; tolerate failure like the systemd unit's `-` prefix does. Dry mode prints
 # instead.
@@ -219,11 +292,11 @@ run_hook() {
     _hook="$PROJECT_DIR/scripts/$1"
     [ -f "$_hook" ] || return 0
     if is_dry_run; then
-        echo "DRY-RUN: $(script_interpreter "$_hook") $_hook"
+        echo "DRY-RUN: $(hook_command "$_hook")"
         return 0
     fi
     log "Running hook $1..."
-    run_script "$_hook" || log "warning: hook $1 failed (continuing)"
+    run_hook_script "$_hook" || log "warning: hook $1 failed (continuing)"
 }
 
 # Same, for the pre-start hooks: a failure there stops the start, exactly as it
@@ -235,11 +308,11 @@ run_pre_start_hook() {
     _hook="$PROJECT_DIR/scripts/$1"
     [ -f "$_hook" ] || return 0
     if is_dry_run; then
-        echo "DRY-RUN: $(script_interpreter "$_hook") $_hook"
+        echo "DRY-RUN: $(hook_command "$_hook")"
         return 0
     fi
     log "Running hook $1..."
-    run_script "$_hook" || die "hook $1 failed; nothing was started"
+    run_hook_script "$_hook" || die "hook $1 failed; nothing was started"
 }
 
 # Hooks that belong to an always-on service but write files a *newly enabled*
@@ -674,6 +747,7 @@ cmd_enable() {
             done
             exit 1
         fi
+        arm_profiles_rollback
         write_profiles "$new"
     fi
 
@@ -699,6 +773,7 @@ cmd_enable() {
     echo "🚀 Starting$newly_on..."
     # shellcheck disable=SC2086 # service names, split on purpose
     run_compose_up_with "$new" up -d $newly_on
+    disarm_profiles_rollback
     for _svc in $newly_on; do
         run_post_start_hooks "$_svc" "$known"
     done
@@ -781,6 +856,7 @@ cmd_config() {
         echo "   Nothing was changed." >&2
         return 1
     fi
+    arm_profiles_rollback
     write_profiles "$new_profiles"
 
     # Diff effective service sets (not raw profiles), so auto-enabled
@@ -797,6 +873,7 @@ cmd_config() {
     done
 
     if [ -z "$newly_on" ] && [ -z "$newly_off" ]; then
+        disarm_profiles_rollback
         echo "✅ No service changes (COMPOSE_PROFILES=${new_profiles:-<empty: core only>})"
         ram_note "$new_enabled"
         return 0
@@ -814,6 +891,7 @@ cmd_config() {
         # shellcheck disable=SC2086 # service names, split on purpose
         run_compose_up_with "$new_profiles" up -d $newly_on
     fi
+    disarm_profiles_rollback
 
     if [ -n "$newly_off" ]; then
         echo "🛑 Stopping and removing$newly_off..."
