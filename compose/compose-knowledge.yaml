@@ -205,7 +205,7 @@ services:
     <<: *service-defaults
     # Upstream tags a build per day as <date>-<sha>; there is no semver release
     # and no floating tag worth pinning to. Newest at the time of writing.
-    image: searxng/searxng:2026.9.15-ca4965040
+    image: searxng/searxng:2026.9.17-c49771992
     container_name: pi-searxng
     # open-webui, because that chat's web search has nothing to call without
     # this. Same shape as agentgateway under open-webui, or flaresolverr under
