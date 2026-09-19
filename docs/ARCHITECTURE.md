@@ -502,6 +502,13 @@ which substitutes for another. The picker behind `make config` adds the ceilings
 the selection being made, graded against the RAM of the host it runs on
 ([Choosing which services run](CONFIGURATION.md#choosing-which-services-run)).
 
+That sum is a worst case nothing has ever reached, and reading it as anything else is
+the mistake the numbers invite: the shipped selection declares 34G, holds 8.5G, and its
+per-container peaks add up to 22.6G over windows that never overlapped. `make doctor`
+reports the measured side — what each container holds, the most it ever held, and how
+often it reached its ceiling and had to reclaim to stay under it
+([Ceilings, and what PSI cannot see](MONITORING.md#ceilings-and-what-psi-cannot-see)).
+
 ### CPU
 
 `cpuset` is the isolation, `cpu_shares` is the priority.

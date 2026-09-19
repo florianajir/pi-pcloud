@@ -99,8 +99,8 @@ PER_INVOCATION='db-backup.sh sqlite-backup.sh'
 # build on any scripts/ file that is neither owned by a service nor named here.
 HOST_ONLY='api-keys.sh authelia-ntfy-watch.sh changed-services.sh
 configure-kernel-params.sh configure-swap.sh lint.sh pg-major-upgrade.sh
-pi-pcloud recovery-kit.sh rotate-password.sh rotate-secret.sh sarif-merge.py
-services.sh services-picker.py wan-allowlist-sync.sh'
+pi-pcloud ram-usage.sh recovery-kit.sh rotate-password.sh rotate-secret.sh
+sarif-merge.py services.sh services-picker.py wan-allowlist-sync.sh'
 
 # config/ files a container reads only while it initialises for the first time,
 # spelled as the path under config/. config/postgres/init-databases.sh is

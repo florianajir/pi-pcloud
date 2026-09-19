@@ -85,6 +85,74 @@ the container doing the stalling — which no host-wide level ever could. Beszel
 no PSI collector, so this is the one memory signal that lives in the terminal and
 the chat but not on your phone.
 
+### Ceilings, and what PSI cannot see
+
+PSI answers *is anything stalling*, and on a healthy host the answer is no: 352
+seconds of cumulative `full` stall over a fortnight of uptime, and `0.00` in
+every per-container `memory.pressure` file. That silence is honest, and it is
+also the limit of the reading. A container that reaches its `mem_limit` a
+thousand times a day and drops page cache to stay under it never appears in it
+— reclaim that cheap stalls nobody — so the one signal that says a ceiling is
+*binding* has to come from somewhere else.
+
+`scripts/ram-usage.sh` reads it from `memory.events`, and `make doctor` prints
+the result under its own heading:
+
+```
+🧠 Memory ceilings
+  8.5G held now, 22.6G had every peak landed together, 34.1G declared (46 containers)
+  ⚠ 8 services are pressing against their ceiling, reclaiming to stay under it:
+      flaresolverr              4300x in 4d  ·   382M held of 768M,    47M swapped
+      qbittorrent               1129x in 4d  ·   505M held of 512M,    17M swapped
+      grafana                    619x in 3d  ·   304M held of 512M,    14M swapped
+      open-webui                 334x in 4d  ·   295M held of 1.0G,   511M swapped
+      kavita                     316x in 4d  ·   978M held of 1.0G,    39M swapped
+      … and 3 more: dockhand, immich-machine-learning, llama-cpp
+  · 2.3G of ceiling never approached in over a day of uptime:
+      stremio-lan              peaked   113M of 1.0G  in 4d
+      agentgateway             peaked    29M of 512M  in 4d
+```
+
+Four readings, four different questions, all free — one `docker ps` for the
+container-to-service mapping, then files under `/sys/fs/cgroup`:
+
+| Reading | Answers |
+|---|---|
+| `memory.current` | what it holds now — page cache and shared memory included, which is why it is usually far above the process RSS |
+| `memory.peak` | the most it has held since the container *started*, which is the window the report prints beside it |
+| `memory.events` `max` | how many times it reached its ceiling and had to reclaim — the ceiling is binding, or it is decoration |
+| `memory.swap.current` | what that reclaim cost, for the part that came out of anonymous memory instead of cache |
+
+**A hit count is not an alarm.** flaresolverr above is Chromium holding 281 MB
+of page cache against a 768 MB ceiling: the kernel drops some, Chromium reads
+it back, nothing waits. Read the swap column beside it for the cost — 511 MB
+under open-webui is real, 47 MB under flaresolverr is not — and the OOM kills,
+which are listed separately and are always a fault.
+
+Two things the report deliberately refuses to say. A peak is only worth the
+window it covers, so it is printed with the container's uptime, taken from the
+scope directory's mtime rather than from `docker inspect` (Docker's own
+`RunningFor` is the *creation* time, which a plain `docker restart` leaves
+untouched while the kernel resets the peak). And a ceiling counts as unused
+only after a day of uptime — without the floor every service restarted an hour
+ago reads as oversized.
+
+`scripts/ram-usage.sh snapshot` prints the same readings one line per
+container, in bytes, for anything that wants to do its own arithmetic.
+
+**What outlives the container.** `record` is `snapshot` plus a merge into
+`.ram-observed`, beside `.env` — gitignored, specific to this machine, and
+rewritten by every `make doctor`, `make services`, `make enable` and `make
+disable`. It exists because neither reading survives what it describes:
+`memory.peak` dies with the container, and a service that is switched off has
+no cgroup at all. So the peak is kept as a maximum across restarts, and what a
+service holds survives it being disabled — which is what lets `make config` put
+a number beside an unticked box ([Choosing which services
+run](CONFIGURATION.md#choosing-which-services-run)). A sample from a container
+less than an hour old may seed a row but never overwrite one: that young, it is
+holding its startup footprint. Failing to write the file is a no-op, never an
+error — it improves the numbers, it is not where they come from.
+
 ## Uptime Kuma — the services
 
 `https://uptime.<HOST_NAME>`, LAN-only + SSO.

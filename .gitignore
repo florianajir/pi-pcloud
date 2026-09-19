@@ -2,6 +2,10 @@
 /.env.tmp*
 /.env.bak*
 /.rotate-password.*
+# What scripts/ram-usage.sh measured on this host: derived, host-specific, and
+# meaningless on any other machine.
+/.ram-observed
+/.ram-observed.tmp.*
 /compose.override.yaml
 /.venv-lint
 /data
