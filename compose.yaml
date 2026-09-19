@@ -145,7 +145,6 @@ volumes:
   kavita_config:
   beszel_data:
   beszel_agent_data:
-  beszel_socket:
   dockhand_data:
   pihole_data:
   n8n_data:

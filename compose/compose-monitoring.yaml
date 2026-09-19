@@ -70,7 +70,6 @@ services:
       - DISABLE_PASSWORD_AUTH=true
     volumes:
       - beszel_data:/beszel_data
-      - beszel_socket:/beszel_socket
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -93,8 +92,9 @@ services:
       # No second, lan@docker-free router for /api/beszel/agent-connect, which is
       # the WebSocket an agent holds open to the hub. It carried real traffic -
       # beszel-agent does reach the hub through Traefik at beszel.<HOST_NAME>,
-      # despite the shared beszel_socket volume suggesting otherwise - but it
-      # never needed to be public: the agent is network_mode: host, and its
+      # which the docs denied for a while, having it read over a shared socket
+      # volume instead - but it never needed to be public: the agent is
+      # network_mode: host, and its
       # extra_hosts entry pins beszel.<HOST_NAME> to HOST_LAN_IP, so it arrives
       # from the host's own LAN address - inside the static 192.168.1.0/24 of
       # ALLOW_IP_RANGES. Verified by deleting the router and watching the agent
@@ -161,13 +161,20 @@ services:
       - /run/udev/data:/run/udev/data:ro
       - /proc:/host/proc:ro
       - /mnt/sdcard:/extra-filesystems/mmcblk0:ro,rslave
-      - beszel_socket:/beszel_socket
       - beszel_agent_data:/var/lib/beszel-agent
     env_file:
       - path: ./config/beszel-agent/agent.env
         required: false
     environment:
-      LISTEN: /beszel_socket/beszel.sock
+      # No LISTEN. The agent never serves anything here: with HUB_URL set it
+      # dials the hub and holds a WebSocket open, and the pull model LISTEN
+      # belongs to is unused - it was pointed at a socket in a shared volume
+      # that the agent never created, so the hub had nothing to read. Leaving it
+      # out is deliberate rather than an omission: the binary's own default is
+      # `:45876`, a TCP listener, and this container is network_mode: host, so a
+      # default taking effect would open a port on every interface. Verified
+      # after removing it - nothing listens on 45876, `/agent health` still
+      # answers ok, and the WebSocket still connects.
       HUB_URL: https://beszel.${HOST_NAME:-pi.lan}
       HOST_PROC: /host/proc
     # HUB_URL resolved through public DNS lands on the published AAAA and on the
