@@ -103,9 +103,11 @@ the result under its own heading:
   8.5G held now, 22.6G had every peak landed together, 34.1G declared (46 containers)
   ⚠ 8 services are pressing against their ceiling, reclaiming to stay under it:
       flaresolverr              4300x in 4d  ·   382M held of 768M,    47M swapped
+      qbittorrent               1129x in 4d  ·   505M held of 512M,    17M swapped
       grafana                    619x in 3d  ·   304M held of 512M,    14M swapped
       open-webui                 334x in 4d  ·   295M held of 1.0G,   511M swapped
-      … and 3 more: immich-machine-learning, llama-cpp, pihole
+      kavita                     316x in 4d  ·   978M held of 1.0G,    39M swapped
+      … and 3 more: dockhand, immich-machine-learning, llama-cpp
   · 2.3G of ceiling never approached in over a day of uptime:
       stremio-lan              peaked   113M of 1.0G  in 4d
       agentgateway             peaked    29M of 512M  in 4d

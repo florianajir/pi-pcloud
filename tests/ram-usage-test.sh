@@ -219,5 +219,28 @@ ok "  and exits 0"                        "$rc" 0
 sh "$SCRIPT" nonsense >/dev/null 2>&1 && rc=0 || rc=$?
 ok "an unknown subcommand is refused" "$rc" 1
 
+# --- a scope torn down while it is being read --------------------------------
+#
+# `docker ps` names the container, the guard finds memory.current, and the
+# scope is gone by the time awk opens the rest of it - two seconds after
+# someone stopped a container. awk treats an unopenable file as fatal, so under
+# `set -e` that used to exit 2 and take the caller with it: `make doctor` runs
+# this unguarded and would have stopped before its secret-consistency section.
+
+torn="$SLICE/docker-$(printf '%s' grafana | md5sum | cut -c1-32).scope"
+rm -f "$torn/memory.max"
+out="$(sh "$SCRIPT" snapshot)" && rc=0 || rc=$?
+ok "a half-read scope is not fatal"        "$rc" 0
+ok "  and the other containers survive it" \
+    "$(printf '%s\n' "$out" | grep -c .)" 12
+ok "  the torn one reporting no ceiling"   \
+    "$(printf '%s\n' "$out" | awk '$1 == "grafana" { print $4 }')" 0
+
+rm -f "$torn"/memory.*
+out="$(sh "$SCRIPT" snapshot)" && rc=0 || rc=$?
+ok "a scope that vanished entirely is dropped, not fatal" "$rc" 0
+ok "  and never eats the containers behind it in the listing" \
+    "$(printf '%s\n' "$out" | grep -c .)" 11
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 [ "$fail" -eq 0 ]

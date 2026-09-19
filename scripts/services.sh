@@ -738,8 +738,13 @@ ram_note() {
                     line = line sprintf(" · swap %s of %s",
                         human(swap_total - swap_free), human(swap_total))
                 print line
-                printf "   ceilings %s for this selection — %.1fx the host, overcommitted by design\n",
-                    human(total), total / ram
+                # The verdict is conditional, unlike the figure: a selection
+                # whose ceilings fit under MemTotal is not overcommitted, and
+                # printing that it is by design is how the line stops being
+                # read on the one host where it would have meant something.
+                printf "   ceilings %s for this selection — %.1fx the host%s\n",
+                    human(total), total / ram,
+                    (total > ram ? ", overcommitted by design" : ", fits even if all peak")
                 if (avail * 100 >= ram * freewarn) exit
                 printf "⚠️  Only %s free: the next service enabled is paid for in swap.\n", human(avail)
                 printf "   `make doctor` says which ceilings are already binding.\n"

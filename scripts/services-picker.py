@@ -38,7 +38,8 @@ import curses
 import sys
 
 HELP = "space toggle · a all · n none · enter apply · q cancel"
-# Title and the count line, plus the memory line when there is one to draw.
+# Title and the count line. layout() adds one row per memory line it has
+# something to draw on: the ceilings, then what was measured here.
 HEADER = 2
 # Width of the memory column, which holds "2.5G" and "512M" alike - and
 # "329M/1.0G" once the service has run here and the cell can carry both.

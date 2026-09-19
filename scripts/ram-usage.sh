@@ -101,13 +101,22 @@ snapshot() {
         # Listed rather than globbed, and only the readable ones: awk treats a
         # missing file as fatal and skips its END block, so one kernel without
         # memory.peak would drop the container from the snapshot entirely
-        # instead of reporting it with one field short.
-        _files="$_dir/memory.current $_dir/memory.max"
-        for _extra in memory.peak memory.stat memory.events memory.swap.current; do
+        # instead of reporting it with one field short. memory.max is tested
+        # with the rest: a scope torn down between `docker ps` and this loop
+        # loses its files all at once, and a fatal awk under `set -e` took the
+        # whole reading - and `make doctor`, which runs this unguarded - down
+        # with it, two seconds after someone stopped a container.
+        _files=""
+        for _extra in memory.current memory.max memory.peak memory.stat \
+                      memory.events memory.swap.current; do
             if [ -r "$_dir/$_extra" ]; then
                 _files="$_files $_dir/$_extra"
             fi
         done
+        # Never an empty list: awk with no file argument reads stdin, which
+        # here is the `docker ps` pipe this loop is reading - it would swallow
+        # every remaining container.
+        [ -n "$_files" ] || continue
         # shellcheck disable=SC2086 # a cgroup path never contains whitespace
         awk -v svc="$_svc" -v since="$(scope_started "$_dir")" '
             FILENAME ~ /\/memory\.current$/       { cur  = $1; next }
@@ -133,7 +142,10 @@ snapshot() {
                 printf "%s %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f\n",
                     svc, cur, peak, lim, anon, swap, hits, oom, since
             }
-        ' $_files
+        # The last of the same guard: readable a moment ago is not readable
+        # now, and one container disappearing mid-read drops that container,
+        # not the reading.
+        ' $_files 2>/dev/null || true
     done
 }
 
