@@ -336,34 +336,33 @@ services:
       - "homepage.icon=stremio.png"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
-      # Two routers on one host. This one is the catch-all: LAN/tailnet only (lan@docker
-      # covers the tailscale ranges), no authelia, because Stremio clients fetch the
-      # manifest/stream endpoints programmatically and cannot pass an interactive login.
+      # One router, and nothing of Comet's reaches the internet: LAN/tailnet only
+      # (lan@docker covers the tailscale ranges), no authelia, because Stremio clients
+      # fetch the manifest/stream endpoints programmatically and cannot pass an
+      # interactive login. No `priority` either - it existed only to order this router
+      # against the public one, and this host now has a single router.
+      #
+      # That public router published /s/<PUBLIC_API_TOKEN>/ so an addon installed
+      # straight onto a Stremio account resolved off-tailnet. Nothing installs Comet
+      # directly any more: AIOStreams wraps it as a scraper, reaches it over `frontend`
+      # (inside the allowlist) and gets back results carrying an `infoHash` and no `url`
+      # of their own - measured on a real title, 156 streams, every one of them
+      # infoHash-only - so the link a client actually plays is AIOStreams'
+      # /api/v1/debrid/playback/, published on *its* router instead.
+      #
+      # Deleting this router also takes a debrid API key off the internet: a
+      # /s/<token>/<config>/ URL carries the configured debrid credentials in plaintext
+      # base64, where the AIOStreams link encrypts them under SECRET_KEY. Rotate the
+      # TorBox key if an addon URL of that shape was ever installed on a client.
+      #
+      # CONFIGURE_PAGE_PASSWORD stays set even though no password form is public now: it
+      # is what mounts the Stremio endpoints under /s/<PUBLIC_API_TOKEN>/ in the first
+      # place, and that prefix is baked into the addon URL AIOStreams is configured with.
+      # Unsetting it moves every endpoint back to the root and breaks that configuration.
       - "traefik.http.routers.comet.rule=Host(`comet.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.comet.entrypoints=websecure"
       - "traefik.http.routers.comet.middlewares=frame-deny@docker,lan@docker"
       - "traefik.http.routers.comet.tls=true"
-      - "traefik.http.routers.comet.priority=10"
-      # The public half, so an addon installed on a Stremio account keeps resolving
-      # off-tailnet - a TV or a phone on mobile data cannot join it. CONFIGURE_PAGE_PASSWORD
-      # mounts every Stremio endpoint under /s/<PUBLIC_API_TOKEN>/, so that unguessable
-      # prefix - and nothing else - is what goes out: /, /health, /admin and /admin/api/*
-      # (logs, connections, scraper control) stay behind lan@docker on the router above.
-      # /configure is carved back out because config.router is mounted under the token
-      # prefix too, and it is the only password form Comet serves; excluding it leaves no
-      # login at all on the public surface. The cost is that Stremio's Configure button
-      # 403s off-tailnet - streaming does not, and the addon URL is unchanged.
-      # Fails closed: a typo in the rule 403s from outside while still working from the
-      # LAN, so any change here has to be validated off-tailnet.
-      - "traefik.http.routers.comet-public.rule=Host(`comet.${HOST_NAME:-pi.lan}`) && PathPrefix(`/s/`) && !PathRegexp(`/configure(/login)?$$`)"
-      - "traefik.http.routers.comet-public.entrypoints=websecure"
-      # rate-limit-auth is not about auth here: every Comet request fans out to
-      # Torrentio/MediaFusion/Zilean from the Pi's own WAN IP (comet is on frontend, not
-      # behind gluetun), so an unmetered public endpoint is an outbound amplifier.
-      - "traefik.http.routers.comet-public.middlewares=frame-deny@docker,rate-limit-auth@docker"
-      - "traefik.http.routers.comet-public.tls=true"
-      - "traefik.http.routers.comet-public.priority=20"
-      - "traefik.http.routers.comet-public.service=comet"
       - "traefik.http.services.comet.loadbalancer.server.port=8000"
     healthcheck:
       <<: *healthcheck-default
@@ -551,7 +550,29 @@ services:
       # resolving off-tailnet - a TV on mobile data cannot join it. Only the
       # addon protocol goes out: /stremio/<uuid>/<encryptedPassword>/*, whose URL
       # is itself the credential. Every configure page is carved back out, and
-      # /api/v1/* is not matched at all.
+      # the only /api/v1/ path matched is the playback redirect.
+      #
+      # /api/v1/debrid/playback/* is where a stream is actually played. AIOStreams
+      # hands Stremio a link of its own at stream-list time and resolves it to the
+      # debrid CDN with a 307 on click, rather than resolving every candidate
+      # upfront - so leaving it out of this rule let an off-tailnet client list
+      # streams and play none of them. Measured on one client: 200 on
+      # /stremio/.../stream/movie, 403 twelve seconds later on the playback link,
+      # then a fallback to a Comet addon it still had installed directly. The rest
+      # of /api/v1/* stays LAN-only, the dashboard and the built-in proxy included.
+      #
+      # Only this URL shape is covered, and the other two would reproduce the bug
+      # verbatim: with the built-in proxy on, the 307 targets
+      # BUILTIN_PROXY_PATH_PREFIX (/api/v1/proxy/) instead of the CDN, and a
+      # usenet-sourced item is handed /api/v1/usenet/stream/<token>/ at
+      # stream-list time. Neither is matched here, both on purpose - the proxy
+      # would have to move behind gluetun first (see the note above this service),
+      # and nothing in this stack feeds AIOStreams usenet. Turning either on means
+      # revisiting this rule.
+      #
+      # Same credential-in-URL model as the addon path, and tighter than the job's
+      # alternative: the blob is encrypted with SECRET_KEY, where Comet's own
+      # /playback/ carries the debrid API key in plaintext base64.
       #
       # A regexp rather than !PathPrefix(`/stremio/configure`), which was what
       # shipped first and covered only the instance-level page: the one that
@@ -563,7 +584,7 @@ services:
       #
       # Fails closed: a typo 403s from outside while still working from the LAN,
       # so any change here has to be validated off-tailnet.
-      - "traefik.http.routers.aiostreams-public.rule=Host(`aiostreams.${HOST_NAME:-pi.lan}`) && PathPrefix(`/stremio/`) && !PathRegexp(`/configure(/|$$)`)"
+      - "traefik.http.routers.aiostreams-public.rule=Host(`aiostreams.${HOST_NAME:-pi.lan}`) && ((PathPrefix(`/stremio/`) && !PathRegexp(`/configure(/|$$)`)) || PathPrefix(`/api/v1/debrid/playback/`))"
       - "traefik.http.routers.aiostreams-public.entrypoints=websecure"
       # Not about auth here: every stream request fans out to a dozen upstream
       # addons and a debrid API from the Pi's own WAN IP, so an unmetered public
@@ -583,7 +604,16 @@ services:
       # on rate-limit-auth, because that is the request that fans out to a dozen
       # addons and a debrid API. A catalogue page is answered from a cache with a
       # 5-minute TTL and costs nothing upstream.
-      - "traefik.http.routers.aiostreams-catalog.rule=Host(`aiostreams.${HOST_NAME:-pi.lan}`) && PathPrefix(`/stremio/`) && !PathRegexp(`/configure(/|$$)`) && !PathRegexp(`/stream/`)"
+      #
+      # /static/* rides here for the same reason, which is also why it is not on
+      # the router above despite belonging to the playback path: twelve 15-31 KiB
+      # .mp4 clips (downloading.mp4, 403.mp4, 429.mp4 ...) that the playback route
+      # redirects to instead of failing silently, so a player shows why nothing is
+      # playing. Local disk, nothing upstream, and `app.use('/static', ...)`
+      # mounts them bare - staticRateLimiter guards /logo.png and the root-level
+      # icons only, and /assets is deliberately exempt from it too - while a
+      # player range-requests a clip it loops.
+      - "traefik.http.routers.aiostreams-catalog.rule=Host(`aiostreams.${HOST_NAME:-pi.lan}`) && ((PathPrefix(`/stremio/`) && !PathRegexp(`/configure(/|$$)`) && !PathRegexp(`/stream/`)) || PathPrefix(`/static/`))"
       - "traefik.http.routers.aiostreams-catalog.entrypoints=websecure"
       - "traefik.http.routers.aiostreams-catalog.middlewares=frame-deny@docker,rate-limit-burst@docker"
       - "traefik.http.routers.aiostreams-catalog.tls=true"
