@@ -146,6 +146,15 @@ services:
       - "traefik.http.middlewares.rate-limit-burst.ratelimit.average=100"
       - "traefik.http.middlewares.rate-limit-burst.ratelimit.burst=200"
       - "traefik.http.middlewares.rate-limit-burst.ratelimit.period=1s"
+      # The SSO portal's own limit. rate-limit-auth would break it: a cold browser
+      # load is 21 requests at once (index.html, manifest, favicon, 18 hashed
+      # chunks), so its burst of 20 answers 429 to a chunk the login form needs.
+      # Sized on 48h of access logs, where nothing exceeded 2 requests in one second
+      # here. It caps the flood, not the guess - Authelia's own regulation (3
+      # failures in 2m, then a 5m ban on the user and the IP) does that.
+      - "traefik.http.middlewares.rate-limit-portal.ratelimit.average=20"
+      - "traefik.http.middlewares.rate-limit-portal.ratelimit.burst=60"
+      - "traefik.http.middlewares.rate-limit-portal.ratelimit.period=1s"
       - "traefik.http.routers.traefik.middlewares=frame-deny@docker,lan@docker,authelia@docker"
       - "traefik.http.routers.traefik.entrypoints=websecure"
       - "traefik.http.routers.traefik.rule=Host(`traefik.${HOST_NAME:-pi.lan}`)"

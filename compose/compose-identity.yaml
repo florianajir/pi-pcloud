@@ -158,7 +158,7 @@ services:
       - "traefik.docker.network=frontend"
       - "traefik.http.routers.authelia.rule=Host(`auth.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.authelia.entrypoints=websecure"
-      - "traefik.http.routers.authelia.middlewares=frame-deny@docker,security-headers@docker"
+      - "traefik.http.routers.authelia.middlewares=frame-deny@docker,rate-limit-portal@docker,security-headers@docker"
       - "traefik.http.routers.authelia.tls=true"
       - "traefik.http.services.authelia.loadbalancer.server.port=9091"
       - "traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/authz/forward-auth"
