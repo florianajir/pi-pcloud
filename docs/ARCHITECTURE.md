@@ -95,7 +95,7 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **llama.cpp / Piper / Parakeet / system-tools** | Inference, TTS, STT and the host-status tool | Agentgateway, Open WebUI |
 | **Homepage** | Dashboard with live widgets | users |
 | **Beszel** | Hardware metrics and threshold alerts | admins |
-| **beszel-agent** | Host-side collector feeding the Beszel hub over a shared Unix socket | Beszel only |
+| **beszel-agent** | Host-side collector, opens a WebSocket *to* the Beszel hub through Traefik | Beszel only |
 | **Uptime Kuma** | Service and route monitoring | admins |
 | **Prometheus** | Scrapes the /metrics endpoints the stack already serves and keeps 90 days of them. No UI and no Traefik router — Grafana is the only reader | Grafana |
 | **Grafana** | The dashboards over Prometheus: LLM spend and tokens, Traefik request rates, Authelia outcomes, service queues | admins, 2FA |

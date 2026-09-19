@@ -259,11 +259,61 @@ services:
       # in a retry loop on every share view (32 times over one off-tailnet test),
       # and none of them ever matched the old rule either - they sit at the root,
       # outside /share, /s/, /_app and /api.
-      - "traefik.http.routers.immich-public.rule=Host(`immich.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/share`) || PathPrefix(`/s/`) || PathPrefix(`/_app`) || Path(`/service-worker.js`) || Path(`/custom.css`) || Path(`/dark_skeleton.png`) || Path(`/api/shared-links/me`) || Path(`/api/shared-links/login`) || Path(`/api/server/config`) || Path(`/api/server/features`) || Path(`/api/server/media-types`) || ((PathPrefix(`/api/assets`) || PathPrefix(`/api/download`) || PathPrefix(`/api/timeline`) || PathPrefix(`/api/albums`)) && (QueryRegexp(`key`, `.+`) || QueryRegexp(`slug`, `.+`))))"
+      - "traefik.http.routers.immich-public.rule=Host(`immich.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/share`) || PathPrefix(`/s/`) || PathPrefix(`/_app`) || Path(`/service-worker.js`) || Path(`/custom.css`) || Path(`/dark_skeleton.png`) || Path(`/api/server/config`) || Path(`/api/server/features`) || Path(`/api/server/media-types`) || ((PathPrefix(`/api/assets`) || PathPrefix(`/api/download`) || PathPrefix(`/api/timeline`) || PathPrefix(`/api/albums`)) && (QueryRegexp(`key`, `.+`) || QueryRegexp(`slug`, `.+`))))"
       - "traefik.http.routers.immich-public.entrypoints=websecure"
-      - "traefik.http.routers.immich-public.middlewares=frame-deny@docker"
+      # rate-limit-burst, not rate-limit-auth: a share page pulls one thumbnail
+      # per photo from /api/assets, so the tight limiter would answer 429 to most
+      # of an album exactly as it did to AIOMetadata's posters. 100/s with a burst
+      # of 200, per source, bounds a download hammer without touching a real view.
+      - "traefik.http.routers.immich-public.middlewares=frame-deny@docker,rate-limit-burst@docker"
       - "traefik.http.routers.immich-public.tls=true"
       - "traefik.http.routers.immich-public.priority=20"
+      # The password of a protected share had no brute-force protection of any
+      # kind. Measured from an address outside the allowlist: eight consecutive
+      # wrong passwords on /api/shared-links/login all answered 401 in ~53 ms,
+      # flat - Immich throttles nothing here, and this router carried no limiter.
+      # Nextcloud, on the same test, recorded the attempts against the real client
+      # IP and armed a 25 s delay; Immich has no equivalent to enable.
+      #
+      # So the two credential endpoints get their own router and their own
+      # limiter. /login is the password submission - upstream's own summary on
+      # `Post('login')` is "Login to a password protected shared link"
+      # (server/dist/controllers/shared-link.controller.js) - and /me is where a
+      # share page learns a password is required at all. Both are carved out of the
+      # router above rather than left on the burst limiter, which at 100/s is no
+      # obstacle to guessing.
+      #
+      # Carved out means *removed* from immich-public's rule, not merely
+      # outranked by this one. Leaving them there would make the split fail
+      # open: this router is one mistyped middleware name away from being
+      # dropped from the routing table - the failure mode the ipv6Subnet note
+      # below warns about - and the credential endpoints would then quietly land
+      # back on rate-limit-burst instead of 404ing. With them gone, a router that
+      # fails to load leaves those two paths to immich@ at priority 10, which
+      # carries lan@docker: LAN keeps working, the internet gets a 403.
+      #
+      # 30 per minute with a burst of 20: a human who mistypes a share password
+      # three times never notices, while a guesser drops from unbounded to ~43k
+      # attempts a day. Not measured against real share traffic - there is none in
+      # the access log to measure - so it is sized for the call pattern (/me once
+      # per page load, /login once per submission), not observed load.
+      #
+      # ipv6Subnet is what makes it worth having. Without it a per-IP bucket is
+      # decorative against IPv6: this host answers on a /64 and a client can pick a
+      # fresh address per request. Grouping the bucket by /64 makes rotating within
+      # the prefix pointless. Traefik 3.7 field; it silently does nothing if the
+      # name is wrong, so check the middleware in /api/http/middlewares after any
+      # edit rather than trusting the label.
+      - "traefik.http.middlewares.immich-share-limit.ratelimit.average=30"
+      - "traefik.http.middlewares.immich-share-limit.ratelimit.burst=20"
+      - "traefik.http.middlewares.immich-share-limit.ratelimit.period=1m"
+      - "traefik.http.middlewares.immich-share-limit.ratelimit.sourcecriterion.ipstrategy.ipv6subnet=64"
+      - "traefik.http.routers.immich-share-auth.rule=Host(`immich.${HOST_NAME:-pi.lan}`) && (Path(`/api/shared-links/me`) || Path(`/api/shared-links/login`))"
+      - "traefik.http.routers.immich-share-auth.entrypoints=websecure"
+      - "traefik.http.routers.immich-share-auth.middlewares=frame-deny@docker,immich-share-limit@docker"
+      - "traefik.http.routers.immich-share-auth.tls=true"
+      - "traefik.http.routers.immich-share-auth.priority=30"
+      - "traefik.http.routers.immich-share-auth.service=immich"
       - "traefik.http.services.immich.loadbalancer.server.port=2283"
     cpuset: "1-3"
     cpu_shares: *cpu-prio-normal

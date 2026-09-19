@@ -70,7 +70,6 @@ services:
       - DISABLE_PASSWORD_AUTH=true
     volumes:
       - beszel_data:/beszel_data
-      - beszel_socket:/beszel_socket
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -90,11 +89,37 @@ services:
       - "traefik.http.routers.beszel.entrypoints=websecure"
       - "traefik.http.routers.beszel.middlewares=frame-deny@docker,lan@docker"
       - "traefik.http.routers.beszel.tls=true"
-      - "traefik.http.routers.beszel-agentconnect.rule=Host(`beszel.${HOST_NAME:-pi.lan}`) && PathPrefix(`/api/beszel/agent-connect`)"
-      - "traefik.http.routers.beszel-agentconnect.entrypoints=websecure"
-      - "traefik.http.routers.beszel-agentconnect.middlewares=frame-deny@docker"
-      - "traefik.http.routers.beszel-agentconnect.priority=100"
-      - "traefik.http.routers.beszel-agentconnect.tls=true"
+      # No second, lan@docker-free router for /api/beszel/agent-connect, which is
+      # the WebSocket an agent holds open to the hub. It carried real traffic -
+      # beszel-agent does reach the hub through Traefik at beszel.<HOST_NAME>,
+      # which the docs denied for a while, having it read over a shared socket
+      # volume instead - but it never needed to be public: the agent is
+      # network_mode: host, and its
+      # extra_hosts entry pins beszel.<HOST_NAME> to HOST_LAN_IP, so it arrives
+      # from the host's own LAN address - inside the static 192.168.1.0/24 of
+      # ALLOW_IP_RANGES. Verified by deleting the router and watching the agent
+      # reconnect: its WebSocket is now served by beszel@docker and the
+      # container stays healthy.
+      #
+      # That pin is load-bearing, not cosmetic. Without it the host resolves the
+      # name through public DNS and reaches Traefik over the published AAAA (and
+      # the hairpinned WAN IPv4), so the only allowlist entries admitting the
+      # agent are HOST_LAN_SUBNET6 and WAN_HAIRPIN_IP - the two that expire with
+      # the ISP lease and are only refreshed by wan-allowlist-sync.sh's 15-minute
+      # timer. Measured: the agent's WebSocket arrived from the host's *global*
+      # IPv6, and on a fresh install, before that timer has ever run, it would
+      # have been 403ed with no router left to fall through to.
+      #
+      # The coupling that remains: the agent depends on the host's own LAN
+      # address being inside ALLOW_IP_RANGES. An allowlist narrowed past the host
+      # would show up as an agent that cannot reach the hub.
+      #
+      # Counting access-log lines is what makes this endpoint look unused - the
+      # whole log held two hits. A WebSocket is logged once, when it *closes*, so
+      # a connection open for 14 h appears nowhere until it drops. Read StartUTC,
+      # not the count, before concluding a long-lived route is dead.
+      #
+      # A *remote* agent would need the public router back, with a limiter.
       - "traefik.http.services.beszel.loadbalancer.server.port=8090"
     cpu_shares: *cpu-prio-normal
     mem_limit: 64m
@@ -136,15 +161,29 @@ services:
       - /run/udev/data:/run/udev/data:ro
       - /proc:/host/proc:ro
       - /mnt/sdcard:/extra-filesystems/mmcblk0:ro,rslave
-      - beszel_socket:/beszel_socket
       - beszel_agent_data:/var/lib/beszel-agent
     env_file:
       - path: ./config/beszel-agent/agent.env
         required: false
     environment:
-      LISTEN: /beszel_socket/beszel.sock
+      # No LISTEN. The agent never serves anything here: with HUB_URL set it
+      # dials the hub and holds a WebSocket open, and the pull model LISTEN
+      # belongs to is unused - it was pointed at a socket in a shared volume
+      # that the agent never created, so the hub had nothing to read. Leaving it
+      # out is deliberate rather than an omission: the binary's own default is
+      # `:45876`, a TCP listener, and this container is network_mode: host, so a
+      # default taking effect would open a port on every interface. Verified
+      # after removing it - nothing listens on 45876, `/agent health` still
+      # answers ok, and the WebSocket still connects.
       HUB_URL: https://beszel.${HOST_NAME:-pi.lan}
       HOST_PROC: /host/proc
+    # HUB_URL resolved through public DNS lands on the published AAAA and on the
+    # hairpinned WAN IPv4, both of which only clear lan@docker through the two
+    # allowlist entries that expire with the ISP lease. Pinning the name to the
+    # host's own LAN address keeps the agent inside the static range instead -
+    # the same reason tailscale pins headscale.<HOST_NAME> in compose-network.yaml.
+    extra_hosts:
+      - "beszel.${HOST_NAME:-pi.lan}:${HOST_LAN_IP:-192.168.1.30}"
     healthcheck:
       <<: *healthcheck-light
       test: ["CMD", "/agent", "health"]
