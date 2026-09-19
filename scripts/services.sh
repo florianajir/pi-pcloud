@@ -599,17 +599,41 @@ compose_rows() {
     ' "$PROJECT_DIR"/compose/*.yaml
 }
 
+# What ram-usage.sh has recorded for each service on this host, as
+# "<service> <held-mib> <peak-mib>". Empty when nothing has ever been measured
+# here, which is the state a fresh install stays in until the first command
+# that reads the cgroups.
+observed_mib() {
+    run_script ram-usage.sh observed 2>/dev/null || true
+}
+
 # One row per optional service, as
-# "<service>:<section>:<companion-of>:<needs>:<conflicts-with>:<ram-mib>:<description>"
+# "<service>:<section>:<companion-of>:<needs>:<conflicts-with>:<ram-mib>:<held-mib>:<peak-mib>:<description>"
 # (description last, so a colon inside it survives), ordered by section.
 # Sorting goes through sort(1) because mawk has no asort. Fields are
 # colon-separated, not tab-separated: `read` folds runs of IFS whitespace, which
 # would swallow the empty fields a row carries.
+#
+# held and peak are 0 for a service this host has never run, which is exactly
+# the case the ceiling was always the only answer for.
 config_rows() {
+    _observed="$(observed_mib)"
     compose_rows \
         | awk -F'|' '$10 == 1' \
         | sort -t'|' -k1,1 -k2,2 -k3,3n -k4,4 \
-        | awk -F'|' '{ printf "%s:%s:%s:%s:%s:%s:%s\n", $4, ($3 == 0 ? $1 : ""), $5, $6, $8, $9, $7 }'
+        | awk -F'|' -v observed="$_observed" '
+            BEGIN {
+                n = split(observed, line, "\n")
+                for (i = 1; i <= n; i++)
+                    if (split(line[i], f, " ") >= 3) {
+                        held[f[1]] = f[2] + 0
+                        peak[f[1]] = f[3] + 0
+                    }
+            }
+            {
+                printf "%s:%s:%s:%s:%s:%s:%d:%d:%s\n",
+                    $4, ($3 == 0 ? $1 : ""), $5, $6, $8, $9, held[$4], peak[$4], $7
+            }'
 }
 
 # The ceilings of the services the picker never lists, because they run whatever
@@ -619,22 +643,68 @@ always_on_ram_mib() {
     compose_rows | awk -F'|' '$10 == 0 { total += $9 } END { print total + 0 }'
 }
 
-# Host RAM in MiB, 0 when it cannot be read (no /proc, another kernel).
-host_ram_mib() {
-    awk '/^MemTotal:/ { printf "%d\n", $2 / 1024; exit }' /proc/meminfo 2>/dev/null || echo 0
+# The measured side of it: what those same always-on services were last
+# recorded holding, and their peaks, as "<held> <peak>" in MiB. The picker needs
+# both floors or its two header lines count different populations - ceilings for
+# the whole stack against measurements for the optional half of it.
+always_on_observed_mib() {
+    _core="$(compose_rows | awk -F'|' '$10 == 0 { print $4 }')"
+    observed_mib | awk -v core="$_core" '
+        BEGIN { n = split(core, part, "\n"); for (i = 1; i <= n; i++) on[part[i]] = 1 }
+        $1 in on { held += $2; peak += $3 }
+        END { printf "%d %d\n", held + 0, peak + 0 }'
 }
 
-# One line on what a selection can take at worst: the mem_limit ceilings of
-# everything it runs, always-on services included, against the RAM of this host.
+# MemTotal, MemAvailable, SwapTotal and SwapFree in MiB, in that order; four
+# zeroes when /proc/meminfo cannot be read (no /proc, another kernel). One
+# reader for all four: they are only ever wanted together.
+host_mem_mib() {
+    awk '
+        /^MemTotal:/     { total = $2 }
+        /^MemAvailable:/ { avail = $2 }
+        /^SwapTotal:/    { swtotal = $2 }
+        /^SwapFree:/     { swfree = $2 }
+        END {
+            printf "%d %d %d %d\n",
+                total / 1024, avail / 1024, swtotal / 1024, swfree / 1024
+        }
+    ' /proc/meminfo 2>/dev/null || echo "0 0 0 0"
+}
+
+# What the running containers of this project hold right now, in MiB, and how
+# many of them there are. "0 0" whenever nothing can be measured - no Docker, a
+# stopped stack, a kernel without cgroup v2 - which is what ram_note branches
+# on rather than testing any of those conditions itself.
+#
+# `record` rather than `snapshot`: the same reading, filed on the way past. This
+# is what keeps the picker supplied, since every `make services`, `enable` and
+# `disable` comes through here and the cache is the only thing that can put a
+# number beside a service that is currently off.
+measured_mib() {
+    run_script ram-usage.sh record 2>/dev/null \
+        | awk 'NF >= 2 { held += $2; n++ } END { printf "%d %d\n", held / 1048576, n + 0 }'
+}
+
+# What a selection costs, in one or two lines.
+#
+# The declared ceilings are the only figure this had for a long time, and on
+# their own they answer nothing: the shipped default declares 34G on a 16G host
+# and holds 8.5G of it, so the total barely moves when a service is toggled and
+# matches nothing the user can see in `free -h`. They stay - they are the only
+# number that responds to the selection at all, and the only one available
+# before a single container has ever run - but with what the stack actually
+# holds beside them whenever that can be read.
 #
 # Ceilings, not usage, and the difference is the whole point of the wording. The
 # stack ships overcommitted on purpose (docs/ARCHITECTURE.md, "Rationing CPU and
-# memory"): the reference 16 GB host carries the full stack at 2.3x its RAM and
-# sits near 20% of the ceilings at idle, because a limit is what a service may
-# take when it misbehaves, not what it holds. So the warning is not at 1x, which
-# any interesting selection crosses on a Pi, but past RAM_RATIO_WARN - more
-# ceiling than the machine the stack was tuned for was ever asked to carry.
+# memory"): a limit is what a service may take when it misbehaves, not what it
+# holds. So the unmeasured warning is not at 1x, which any interesting selection
+# crosses on a Pi, but past RAM_RATIO_WARN - more ceiling than the machine the
+# stack was tuned for was ever asked to carry.
 RAM_RATIO_WARN=2.5
+# Measured, there is a better question than the ratio: how much room is left.
+# Below this share of MemTotal, the next service enabled is paid for in swap.
+RAM_FREE_WARN_PCT=15
 
 ram_note() {
     _picked_ram="$(config_rows | awk -F: -v list="$1" '
@@ -643,13 +713,41 @@ ram_note() {
         END { print total + 0 }')"
     # LC_ALL=C: awk formats %.1f through the locale, and a fr_FR host would
     # print "2,3x" where the picker beside it prints "2.3x".
+    #
+    # Both readers hand over space-separated fields for awk to split, rather
+    # than one command substitution per figure: six of those to print two lines
+    # is how a display line starts costing more than what it displays.
     LC_ALL=C awk -v picked="$_picked_ram" -v core="$(always_on_ram_mib)" \
-        -v ram="$(host_ram_mib)" -v warn="$RAM_RATIO_WARN" '
+        -v warn="$RAM_RATIO_WARN" -v freewarn="$RAM_FREE_WARN_PCT" \
+        -v mem="$(host_mem_mib)" -v measured="$(measured_mib)" '
         function human(mib) {
             return mib >= 1024 ? sprintf("%.1fG", mib / 1024) : sprintf("%dM", mib)
         }
         BEGIN {
+            split(mem, m, " ")
+            ram = m[1]; avail = m[2]; swap_total = m[3]; swap_free = m[4]
+            split(measured, d, " ")
+            held = d[1]; running = d[2]
             total = picked + core
+
+            if (running > 0 && ram > 0) {
+                line = sprintf("🧠 RAM %s held by %d container%s · %s free of %s",
+                    human(held), running, (running == 1 ? "" : "s"),
+                    human(avail), human(ram))
+                if (swap_total > 0)
+                    line = line sprintf(" · swap %s of %s",
+                        human(swap_total - swap_free), human(swap_total))
+                print line
+                printf "   ceilings %s for this selection — %.1fx the host, overcommitted by design\n",
+                    human(total), total / ram
+                if (avail * 100 >= ram * freewarn) exit
+                printf "⚠️  Only %s free: the next service enabled is paid for in swap.\n", human(avail)
+                printf "   `make doctor` says which ceilings are already binding.\n"
+                exit
+            }
+
+            # Nothing running to measure - a fresh install, a stopped stack, a
+            # host without Docker. The declared total is all there is.
             if (ram <= 0) {
                 printf "🧠 RAM ceilings %s (always-on core included)\n", human(total)
                 exit
@@ -659,6 +757,35 @@ ram_note() {
             if (total / ram <= warn) exit
             printf "⚠️  More ceiling than this host was built to carry. Untick a heavy\n"
             printf "   service (make config) or expect swapping when several peak together.\n"
+        }'
+}
+
+# What a change just cost, one line per service that moved.
+#
+# The totals ram_note prints barely react to it - one service in forty is a
+# rounding error on a 34G ceiling total and on an 8.5G measured one alike - so
+# the figure that answers "what did I just do" is the delta, and it has to be
+# per service to be one. The measured column is whatever ram-usage.sh last
+# recorded here, which is also the only number available for a service that has
+# just been switched off and has no cgroup left to read.
+change_note() {
+    _on="${1:-}"
+    _off="${2:-}"
+    [ -n "$_on$_off" ] || return 0
+    # LC_ALL=C, as in ram_note: %.1f goes through the locale.
+    config_rows | LC_ALL=C awk -F: -v on="$_on" -v off="$_off" '
+        function human(mib) {
+            return mib >= 1024 ? sprintf("%.1fG", mib / 1024) : sprintf("%dM", mib)
+        }
+        BEGIN {
+            n = split(on, part, " ")
+            for (i = 1; i <= n; i++) if (part[i] != "") sign[part[i]] = "+"
+            n = split(off, part, " ")
+            for (i = 1; i <= n; i++) if (part[i] != "") sign[part[i]] = "-"
+        }
+        $1 in sign {
+            printf "   %s %-24s %6s ceiling · %s\n", sign[$1], $1, human($6),
+                ($7 > 0 ? human($7) " measured here" : "never run on this host")
         }'
 }
 
@@ -677,15 +804,15 @@ pick_profiles() {
     command -v python3 >/dev/null 2>&1 || return 2
 
     # The picker only chooses: it reads
-    # "service:section:parent:needs:conflicts:ram:state:description" rows and
-    # writes back the services that stay ticked. Files, not a pipe, because it
-    # takes over the terminal (see scripts/services-picker.py). The always-on
-    # ceilings go with them, since the picker lists none of those services and
-    # they are what the selection is stacked on top of.
+    # "service:section:parent:needs:conflicts:ram:held:peak:state:description"
+    # rows and writes back the services that stay ticked. Files, not a pipe,
+    # because it takes over the terminal (see scripts/services-picker.py). The
+    # always-on ceilings go with them, since the picker lists none of those
+    # services and they are what the selection is stacked on top of.
     _rows="$(mktemp)"
     _picked="$(mktemp)"
     _known="$(known_profiles)"
-    while IFS=: read -r _svc _section _parent _needs _conflicts _ram _desc; do
+    while IFS=: read -r _svc _section _parent _needs _conflicts _ram _held _peak _desc; do
         [ -n "$_svc" ] || continue
         in_lines "$_known" "$_svc" || continue
         if in_lines "$_enabled" "$_svc"; then
@@ -693,8 +820,9 @@ pick_profiles() {
         else
             _state=off
         fi
-        printf '%s:%s:%s:%s:%s:%s:%s:%s\n' \
-            "$_svc" "$_section" "$_parent" "$_needs" "$_conflicts" "$_ram" "$_state" "$_desc" >>"$_rows"
+        printf '%s:%s:%s:%s:%s:%s:%s:%s:%s:%s\n' \
+            "$_svc" "$_section" "$_parent" "$_needs" "$_conflicts" "$_ram" \
+            "$_held" "$_peak" "$_state" "$_desc" >>"$_rows"
     done <<EOF
 $(config_rows)
 EOF
@@ -703,8 +831,10 @@ EOF
         echo "❌ No optional services declared in compose/*.yaml" >&2
         return 2
     fi
+    _core_observed="$(always_on_observed_mib)"
+    # shellcheck disable=SC2086 # two numbers, split into two arguments on purpose
     if ! python3 "$PROJECT_DIR/scripts/services-picker.py" "$_rows" "$_picked" \
-        "$(always_on_ram_mib)" </dev/tty >/dev/tty; then
+        "$(always_on_ram_mib)" $_core_observed </dev/tty >/dev/tty; then
         rm -f "$_rows" "$_picked"
         return 1
     fi
@@ -828,6 +958,7 @@ cmd_enable() {
     done
     run_shared_post_start_hooks "$newly_on"
     echo "✅ $svc enabled"
+    change_note "$newly_on" ""
     ram_note "$new_enabled"
 }
 
@@ -864,6 +995,7 @@ cmd_disable() {
     # passed.
     run_shared_post_start_hooks ""
     echo "✅ $svc disabled"
+    change_note "" "$svc"
     ram_note "$new_enabled"
 }
 
@@ -967,6 +1099,7 @@ cmd_config() {
     run_shared_post_start_hooks "$newly_on"
 
     echo "✅ Applied${newly_on:+ · enabled:$newly_on}${newly_off:+ · disabled:$newly_off}"
+    change_note "$newly_on" "$newly_off"
     ram_note "$new_enabled"
 }
 

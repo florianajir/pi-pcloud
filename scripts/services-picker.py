@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """Interactive picker for the optional services of the stack.
 
-Usage: services-picker.py <rows-file> <out-file> [always-on-MiB]
+Usage: services-picker.py <rows-file> <out-file> [ceilings] [held] [peak]
 
 The rows file holds one service per line, as
-"service:section:companion-of:needs:conflicts-with:ram-mib:state:description",
+"service:section:companion-of:needs:conflicts-with:ram-mib:held-mib:peak-mib:state:description",
 as produced by scripts/services.sh (which owns everything else: reading
 compose/*.yaml, writing .env, running the per-service hooks). This script only
 lets the user choose, then writes the services that stay ticked to the out
 file, one per line. Exit status is 0 on confirm, 1 on cancel.
 
-The third argument is the ceilings of the services this screen never lists,
-because they run whatever is picked (Traefik, Authelia, Postgres …); it is the
-floor every total starts from. Left out, every total is short by exactly it, so
-services.sh always passes it; the memory display goes away altogether only when
-the rows carry no ceilings either.
+held and peak are what scripts/ram-usage.sh last recorded for the service on
+this host, 0 for one it has never run. They are why the screen can say anything
+at all about an unticked box: a ceiling is what a service may take, and until
+it has run here once, nobody knows what it does take.
+
+The last three arguments are the same three figures for the services this
+screen never lists, because they run whatever is picked (Traefik, Authelia,
+Postgres …); they are the floor every total starts from. Left out, every total
+is short by exactly them, so services.sh always passes them; the memory display
+goes away altogether only when the rows carry no figures either.
 
 Files rather than stdio: curses owns the terminal, so a captured stdout would
 either swallow the UI or the result.
@@ -35,8 +40,9 @@ import sys
 HELP = "space toggle · a all · n none · enter apply · q cancel"
 # Title and the count line, plus the memory line when there is one to draw.
 HEADER = 2
-# Width of the memory column, which holds "2.5G" and "512M" alike.
-RAM_WIDTH = 5
+# Width of the memory column, which holds "2.5G" and "512M" alike - and
+# "329M/1.0G" once the service has run here and the cell can carry both.
+RAM_WIDTH = 9
 
 # What the memory numbers mean, and why the bar sits where it does.
 #
@@ -51,9 +57,11 @@ RAM_WIDTH = 5
 # was ever asked to carry.
 FITS_RATIO = 1.0
 OVER_RATIO = 2.5
-# A single ceiling worth this much of the host is what to untick first, which is
+# A single service worth this much of the host is what to untick first, which is
 # a share rather than a fixed size: 1 GB is a rounding error on 16 GB and a
-# quarter of a 4 GB Pi.
+# quarter of a 4 GB Pi. Graded on the peak once there is one - the ceiling grades
+# what the stack allows, the peak what this host has actually been asked to find,
+# and llama-cpp is heavy by both while stremio-lan is only heavy by the first.
 HEAVY_RATIO = 0.25
 NOTABLE_RATIO = 0.10
 
@@ -66,10 +74,11 @@ def read_rows(path):
             line = line.rstrip("\n")
             if not line:
                 continue
-            fields = line.split(":", 7)
-            if len(fields) != 8:
+            fields = line.split(":", 9)
+            if len(fields) != 10:
                 sys.exit(f"services-picker: malformed row {line!r}")
-            service, section, parent, needs, excludes, ram, state, description = fields
+            (service, section, parent, needs, excludes, ram, held, peak, state,
+             description) = fields
             rows.append({
                 "service": service,
                 "section": section,
@@ -82,6 +91,9 @@ def read_rows(path):
                 # mem_limit in MiB, 0 for a service declaring none (which
                 # tests/compose-invariants.py refuses, so: never, in practice).
                 "ram": int(ram) if ram.isdigit() else 0,
+                # Measured on this host, 0 for a service it has never run.
+                "held": int(held) if held.isdigit() else 0,
+                "peak": int(peak) if peak.isdigit() else 0,
                 "on": state == "on",
                 "description": description,
             })
@@ -264,8 +276,39 @@ def ram_line(rows, view):
     return f"RAM ceilings {human(total)} of {human(ram)} · {ratio:.1f}x — {verdict}", key
 
 
+def ram_cell(row):
+    """The memory column: what the service holds here over what it may take.
+
+    Just the ceiling for one this host has never run, in the same width and the
+    same place, so the column still scans as one thing.
+    """
+    ceiling = human(row["ram"])
+    if not row["held"] or not ceiling:
+        return ceiling or human(row["held"])
+    return f"{human(row['held'])}/{ceiling}"
+
+
+def measured_line(rows, view):
+    """What the ticked set has actually been measured at, or None.
+
+    Separate from ram_line rather than folded into it, because it answers a
+    different question and is allowed to be incomplete: a service nobody has
+    ever run here contributes nothing to either total, and saying how many of
+    those there are is more honest than quietly leaving them out.
+    """
+    held = view["base_held"] + sum(row["held"] for row in rows if row["on"])
+    peak = view["base_peak"] + sum(row["peak"] for row in rows if row["on"])
+    if not peak:
+        return None
+    unknown = sum(1 for row in rows if row["on"] and not row["peak"])
+    text = f"measured here {human(held)} held, {human(peak)} at their peaks"
+    if unknown:
+        text += f" · {unknown} never run here"
+    return text
+
+
 def ram_key(mib, ram):
-    """Colour for one ceiling, by the share of the host it could claim."""
+    """Colour for one service, by the share of the host it could claim."""
     if not ram or not mib:
         return None
     if mib >= HEAVY_RATIO * ram:
@@ -273,6 +316,17 @@ def ram_key(mib, ram):
     if mib >= NOTABLE_RATIO * ram:
         return "warn"
     return None
+
+
+def row_key(row, ram):
+    """Which figure a row is graded on: the peak once this host has one.
+
+    The ceiling grades what the stack allows, the peak what the machine has
+    actually been asked to find - and they disagree in both directions.
+    stremio-lan is allowed 1 GB and has never held more than 113 MB, while
+    llama-cpp is allowed 6 GB and has taken every byte of it.
+    """
+    return ram_key(row["peak"] or row["ram"], ram)
 
 
 def color_keys():
@@ -293,21 +347,28 @@ def color_keys():
     return keys
 
 
-def layout(rows, base):
+def layout(rows, base, base_held, base_peak):
     """What the drawing needs that no keypress changes.
 
-    The memory column appears only when the rows carry ceilings, and the header
-    line only when there is a total worth printing — so a caller that passes
-    neither gets exactly the screen this picker drew before they existed.
+    The memory column appears only when the rows carry ceilings, the ceiling
+    header only when there is a total worth printing, and the measured header
+    only once something has been measured — so a caller that passes none of
+    them gets exactly the screen this picker drew before they existed, and a
+    host that has never run the stack gets the ceilings alone.
     """
     column_ram = any(row["ram"] for row in rows)
+    header_ram = column_ram or base > 0
+    header_measured = base_peak > 0 or any(row["peak"] for row in rows)
     return {
         "column": name_column(rows),
         "base": base,
+        "base_held": base_held,
+        "base_peak": base_peak,
         "ram": host_ram_mib(),
         "column_ram": column_ram,
-        "header_ram": column_ram or base > 0,
-        "header": HEADER + (1 if column_ram or base > 0 else 0),
+        "header_ram": header_ram,
+        "header_measured": header_measured,
+        "header": HEADER + (1 if header_ram else 0) + (1 if header_measured else 0),
         "colors": color_keys(),
     }
 
@@ -325,9 +386,17 @@ def draw(win, rows, lines, cursor, offset, message, view):
                 width - 1, curses.A_BOLD)
     win.addnstr(1, 0, f"{enabled}/{len(rows)} enabled · Traefik, Authelia, Pi-hole, "
                       f"Headscale, Postgres … always run", width - 1, curses.A_DIM)
-    if view["header_ram"] and height > HEADER:
+    line_y = HEADER
+    if view["header_ram"] and height > line_y:
         text, key = ram_line(rows, view)
-        win.addnstr(2, 0, text, width - 1, view["colors"][key] | curses.A_BOLD)
+        win.addnstr(line_y, 0, text, width - 1, view["colors"][key] | curses.A_BOLD)
+        line_y += 1
+    if view["header_measured"] and height > line_y:
+        # Dim, and under the ceilings rather than over them: the ceilings are
+        # what a tick changes, this is what the host has to say about it.
+        text = measured_line(rows, view)
+        if text:
+            win.addnstr(line_y, 0, text, width - 1, curses.A_DIM)
     column = view["column"]
     ram_x = 5 + column + 1
     ram_width = RAM_WIDTH if view["column_ram"] else 0
@@ -348,7 +417,7 @@ def draw(win, rows, lines, cursor, offset, message, view):
         row = rows[payload]
         name = ("  " if row["parent"] else "") + row["service"]
         text = f" [{'x' if row['on'] else ' '}] {name}"
-        ram = human(row["ram"]).rjust(ram_width) if ram_width else ""
+        ram = ram_cell(row).rjust(ram_width) if ram_width else ""
         text = text.ljust(ram_x) + ram
         if row["description"] and room >= 16:
             text = f"{text.ljust(ram_x + ram_width + 2)}{row['description']}"
@@ -356,7 +425,7 @@ def draw(win, rows, lines, cursor, offset, message, view):
         win.addnstr(y, 0, text.ljust(width - 1), width - 1, attr)
         # Drawn again on its own, so the ceiling carries the colour without the
         # name and the description taking it with them.
-        key = ram_key(row["ram"], view["ram"]) if ram_width else None
+        key = row_key(row, view["ram"]) if ram_width else None
         if key and ram_x + ram_width < width:
             win.addnstr(y, ram_x, ram, ram_width, view["colors"][key] | attr)
     win.addnstr(height - 1, 0, (message or HELP)[:width - 1], width - 1, curses.A_DIM)
@@ -379,7 +448,7 @@ def move(lines, cursor, start, step):
     return cursor if target is None else target
 
 
-def run(screen, rows, base):
+def run(screen, rows, base, base_held, base_peak):
     curses.curs_set(0)
     lines = build_lines(rows)
     cursor = first_service_line(lines, 0, 1)
@@ -387,7 +456,7 @@ def run(screen, rows, base):
         return False
     offset = 0
     message = ""
-    view = layout(rows, base)
+    view = layout(rows, base, base_held, base_peak)
     while True:
         height = max(screen.getmaxyx()[0] - view["header"] - 1, 1)
         offset = min(offset, cursor)
@@ -419,16 +488,20 @@ def run(screen, rows, base):
 
 
 def main():
-    if not 3 <= len(sys.argv) <= 4:
-        print("usage: services-picker.py <rows-file> <out-file> [always-on-MiB]",
-              file=sys.stderr)
+    if not 3 <= len(sys.argv) <= 6:
+        print("usage: services-picker.py <rows-file> <out-file> "
+              "[ceilings] [held] [peak]", file=sys.stderr)
         return 2
     rows = read_rows(sys.argv[1])
     if not rows:
         print("services-picker: no services to choose from", file=sys.stderr)
         return 2
-    base = sys.argv[3] if len(sys.argv) == 4 else ""
-    if not curses.wrapper(run, rows, int(base) if base.isdigit() else 0):
+
+    def figure(position):
+        value = sys.argv[position] if len(sys.argv) > position else ""
+        return int(value) if value.isdigit() else 0
+
+    if not curses.wrapper(run, rows, figure(3), figure(4), figure(5)):
         return 1
     with open(sys.argv[2], "w") as handle:
         for row in rows:

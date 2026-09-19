@@ -77,7 +77,7 @@ help:
 	@echo "  headscale-register <key> Register a headscale node"
 	@echo "  headscale-reset  Reset all Headscale nodes, preauth keys, and IP allocations"
 	@echo "  check-env        Validate required .env variables"
-	@echo "  test             Run every suite: installer, check-env, CLI, services, start sequence, compose invariants, routing and SARIF merge (no host changes)"
+	@echo "  test             Run every suite: installer, check-env, CLI, services, memory readings, start sequence, compose invariants, routing and SARIF merge (no host changes)"
 	@echo "  smoke            Probe the running stack through Traefik: every router loaded, LAN admitted, outside refused"
 	@echo "  lint             Run every static check CI runs (shell, YAML, Python, Dockerfiles, workflows, secrets)"
 	@echo "  pg-upgrade to=<image> Migrate Postgres to a new major (dump/restore, old data kept)"
@@ -120,6 +120,7 @@ test:
 	@sh tests/lib-test.sh
 	@sh tests/cli-test.sh
 	@sh tests/services-test.sh
+	@sh tests/ram-usage-test.sh
 	@sh tests/stack-up-test.sh
 	@sh tests/changed-services-test.sh
 	@sh tests/compose-test.sh
@@ -479,6 +480,15 @@ doctor:
 	@$(COMPOSE) exec -T system-tools python3 -c \
 		"import urllib.request as r; print(r.urlopen('http://localhost:8000/status/anomalies').read().decode())" \
 		|| echo "❌ system-tools unreachable - check 'docker compose ps' and 'make logs'"
+	@echo
+	@echo "🧠 Memory ceilings"
+	@# Read on the host, not through system-tools: the anomalies above answer
+	@# "is the machine in trouble", which is a host-wide question, while this
+	@# one is per-container and has no threshold to cross - a ceiling being hit
+	@# costs a service its page cache and stalls nobody, so it never shows up
+	@# in PSI and never belongs in a findings list. It is still the only way to
+	@# tell a ceiling that is doing something from one that is decoration.
+	@sh scripts/ram-usage.sh report
 	@echo
 	@echo "🔑 Secret consistency"
 	@# Without sudo, so `make doctor` stays non-interactive: the one target that
