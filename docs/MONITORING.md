@@ -138,6 +138,19 @@ ago reads as oversized.
 `scripts/ram-usage.sh snapshot` prints the same readings one line per
 container, in bytes, for anything that wants to do its own arithmetic.
 
+**What outlives the container.** `record` is `snapshot` plus a merge into
+`.ram-observed`, beside `.env` — gitignored, specific to this machine, and
+rewritten by every `make doctor`, `make services`, `make enable` and `make
+disable`. It exists because neither reading survives what it describes:
+`memory.peak` dies with the container, and a service that is switched off has
+no cgroup at all. So the peak is kept as a maximum across restarts, and what a
+service holds survives it being disabled — which is what lets `make config` put
+a number beside an unticked box ([Choosing which services
+run](CONFIGURATION.md#choosing-which-services-run)). A sample from a container
+less than an hour old may seed a row but never overwrite one: that young, it is
+holding its startup footprint. Failing to write the file is a no-op, never an
+error — it improves the numbers, it is not where they come from.
+
 ## Uptime Kuma — the services
 
 `https://uptime.<HOST_NAME>`, LAN-only + SSO.

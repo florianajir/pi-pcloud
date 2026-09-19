@@ -79,8 +79,8 @@ container pihole                     85   192   192   14    3   31   0 $((4 * DA
 # Room it has never used, and a day of uptime to prove it.
 container agentgateway               20    29   640    3    5    0   0 $((4 * DAY))
 container stremio-lan                93   113  1024   43   20    0   0 $((4 * DAY))
-# Same shape, an hour old: too young to conclude anything from.
-container freshrss                   94   100   512   11    0    0   0 3600
+# Same shape, ten minutes old: too young to conclude anything from.
+container freshrss                   94   100   512   11    0    0   0 600
 # No mem_limit at all, so there is no ceiling to be under or over.
 container traefik                    72    95     -   31    0    0   0 $((4 * DAY))
 # A kernel without memory.peak: current is the floor, never a zero.
@@ -131,7 +131,7 @@ ok "swap is charged to the container that swapped" \
 # The peak is only worth as much as the window it covers, and the window is the
 # scope directory's mtime - which is the container start, not its creation.
 ok "the start time is the scope mtime" \
-    "$(field freshrss 9)" "$((NOW - 3600))"
+    "$(field freshrss 9)" "$((NOW - 600))"
 
 # --- report ------------------------------------------------------------------
 
@@ -151,6 +151,57 @@ contains "  biggest first"                     "$out" "stremio-lan              
 contains "  including the one with no peak file" "$out" "lldap                    peaked    15M of 128M"
 lacks "  but never a container too young to judge" "$out" "freshrss"
 lacks "  nor one with no ceiling to be under"      "$out" "traefik"
+
+# --- record ------------------------------------------------------------------
+#
+# What the cache is for: memory.peak dies with the container, and a service that
+# is switched off has no cgroup at all - which is exactly the service `make
+# config` is being asked about.
+
+export RAM_OBSERVED_FILE="$WORK/observed"
+cached() { awk -v svc="$1" -v col="$2" '$1 == svc { print $col }' "$RAM_OBSERVED_FILE"; }
+
+out="$(sh "$SCRIPT" record)"
+ok "record prints the same snapshot it files" "$out" "$snap"
+ok "  and writes the cache"                   "$([ -f "$RAM_OBSERVED_FILE" ] && echo yes)" yes
+ok "  in MiB, not bytes"                      "$(cached llama-cpp 2)" 700
+ok "  peaks included"                         "$(cached llama-cpp 3)" 6144
+
+# The trap this pins: awk's usual `FNR == NR` for "still reading the first file"
+# is also true for the *first record of the second* when the first file is
+# empty - which is every host that has no cache yet. Every field landed one
+# column off, so the cache filled with bytes where MiB belonged and a ceiling
+# where the timestamp belonged, and only the second run of a fresh install was
+# ever right.
+ok "  and a timestamp where the timestamp goes" \
+    "$([ "$(cached llama-cpp 4)" -ge "$NOW" ] && echo yes || cached llama-cpp 4)" yes
+
+printf 'forgejo 210 480 1700000000\n' >>"$RAM_OBSERVED_FILE"
+sh "$SCRIPT" record >/dev/null
+ok "a service that is not running keeps its row" "$(cached forgejo 3)" 480
+
+# The kernel resets memory.peak with the container; the file is what outlives it.
+sed -i 's/^kavita [0-9]* [0-9]* /kavita 330 4096 /' "$RAM_OBSERVED_FILE"
+sh "$SCRIPT" record >/dev/null
+ok "a recorded peak is never lowered" "$(cached kavita 3)" 4096
+
+# A container in its first minutes holds its startup footprint. freshrss is ten
+# minutes old, so it may seed a row and never overwrite one.
+sed -i 's/^freshrss [0-9]* [0-9]* /freshrss 500 600 /' "$RAM_OBSERVED_FILE"
+sh "$SCRIPT" record >/dev/null
+ok "a container too young does not overwrite what it holds" "$(cached freshrss 2)" 500
+ok "  but its peak still counts"                            "$(cached freshrss 3)" 600
+
+ok "observed prints service, held and peak" \
+    "$(sh "$SCRIPT" observed | awk '$1 == "grafana" { print $2, $3 }')" "304 512"
+
+# The cache improves the numbers, it is never where they come from - so a place
+# it cannot be written is a quiet no-op, not a failed `make services`.
+out="$(RAM_OBSERVED_FILE=/proc/nope/observed sh "$SCRIPT" record)" && rc=0 || rc=$?
+ok "an unwritable cache is not an error"  "$rc" 0
+ok "  and the snapshot still comes out"   "$(printf '%s\n' "$out" | grep -c .)" 12
+
+unset RAM_OBSERVED_FILE
 
 # --- nothing to measure ------------------------------------------------------
 #

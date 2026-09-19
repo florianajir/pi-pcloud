@@ -39,13 +39,26 @@
 #              "<service> <current> <peak> <limit> <anon> <swap> <hits> <oom> <started>"
 #              Bytes, except <hits>/<oom> (counts) and <started> (epoch
 #              seconds). <limit> is 0 for a container with no mem_limit.
+#   record     the same, merged into the observation cache on the way out, so a
+#              caller that wants both pays for one `docker ps`
+#   observed   the cache as "<service> <held-mib> <peak-mib>", which is the only
+#              thing that can put a number beside a service that is *not*
+#              running - the question `make config` asks about every unticked
+#              box, and the one a live reading can never answer
 #   report     the human block `make doctor` prints
 #
-# CGROUP_ROOT and PROJECT_DIR are honored from the environment, for the tests.
+# CGROUP_ROOT, PROJECT_DIR and RAM_OBSERVED_FILE are honored from the
+# environment, for the tests.
 set -eu
 
 CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
 PROJECT_DIR="${PROJECT_DIR:-$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)}"
+# Beside .env, because it is the same kind of thing: host state, specific to
+# this machine, never committed. Not under DATA_LOCATION, which the root-run
+# unit owns and may point at another disk - this file is written by whoever
+# typed `make`, and the replacement is a rename into a directory that user
+# already owns, so a copy left behind by a `sudo make` does not freeze it.
+RAM_OBSERVED_FILE="${RAM_OBSERVED_FILE:-$PROJECT_DIR/.ram-observed}"
 
 # How many rows each list in `report` prints before collapsing into a count.
 LIST_SHOWN=5
@@ -124,11 +137,94 @@ snapshot() {
     done
 }
 
+# A container in its first minutes holds its startup footprint, not its working
+# set, so a sample that young does not get to overwrite a settled one.
+RECORD_MIN_AGE=3600
+
+# snapshot, plus what it teaches, merged into the cache.
+#
+# The snapshot goes to stdout either way: every caller that records also wants
+# to display, and making them call both would mean two `docker ps` and two
+# readings a second apart that do not add up.
+#
+# What the cache is for: memory.peak dies with the container and there is no
+# reading at all for a service that is switched off, which is exactly the
+# service the picker is being asked about. So the peak is kept as a maximum
+# across restarts, and what a service holds survives it being disabled.
+#
+# Failing to write is not an error. The cache is an improvement on the numbers,
+# never the source of them, and a read-only checkout or a stale root-owned copy
+# must not turn `make services` into a failure.
+record() {
+    _snap="$(snapshot)"
+    # Before the echo, not after: `printf '%s\n' ""` is a blank line, and a
+    # caller summing the output counted it as one container holding nothing.
+    [ -n "$_snap" ] || return 0
+    printf '%s\n' "$_snap"
+
+    _body="$(printf '%s\n' "$_snap" | awk -v now="$(date +%s)" \
+        -v minage="$RECORD_MIN_AGE" -v cache="$RAM_OBSERVED_FILE" '
+        # The cache as it stands, read here rather than as a second input file:
+        # the usual FNR == NR is true for the *first* record of the second file
+        # too when the first one is empty, and on a host with no cache yet that
+        # filed every snapshot row as a cached one - bytes stored where MiB
+        # belonged, and the ceiling stored where the timestamp belonged.
+        # getline returns -1 on a file that is not there, so no /dev/null stand-in
+        # and no readability test.
+        BEGIN {
+            while ((getline line < cache) > 0) {
+                if (line ~ /^#/) continue
+                if (split(line, f, " ") < 4) continue
+                held[f[1]] = f[2] + 0; peak[f[1]] = f[3] + 0; seen[f[1]] = f[4] + 0
+            }
+            close(cache)
+        }
+        # Rows for services that are not running now are carried over
+        # untouched - that is the whole point of the file.
+        {
+            svc = $1
+            cur = int($2 / 1048576)
+            pk  = int($3 / 1048576)
+            up  = (now > $9 && $9 > 0) ? now - $9 : 0
+            fresh = (svc in seen) ? 0 : 1
+            if (pk > peak[svc]) peak[svc] = pk
+            if (up >= minage || fresh) held[svc] = cur
+            seen[svc] = now
+        }
+        END { for (svc in seen) printf "%s %d %d %d\n", svc, held[svc], peak[svc], seen[svc] }
+    ' | LC_ALL=C sort)"
+
+    # The whole write is a subshell with its stderr closed, not just the
+    # redirection: a redirection that cannot be opened is reported by the shell
+    # itself, on the shell's stderr, so `>"$_tmp" 2>/dev/null` silences
+    # everything except the one message it was written for. umask rather than a
+    # chmod afterwards, so the file is never briefly private.
+    _tmp="$RAM_OBSERVED_FILE.tmp.$$"
+    if (
+        umask 022
+        {
+            echo "# What each service was measured holding on this host, in MiB."
+            echo "# service held peak updated-epoch — written by scripts/ram-usage.sh"
+            printf '%s\n' "$_body"
+        } >"$_tmp"
+    ) 2>/dev/null; then
+        mv -f "$_tmp" "$RAM_OBSERVED_FILE" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
+    else
+        rm -f "$_tmp" 2>/dev/null || true
+    fi
+}
+
+# The cache, as "<service> <held-mib> <peak-mib>". Silence when there is none.
+observed() {
+    [ -r "$RAM_OBSERVED_FILE" ] || return 0
+    awk '$0 !~ /^#/ && NF >= 3 { print $1, $2, $3 }' "$RAM_OBSERVED_FILE"
+}
+
 # The block `make doctor` prints under its own heading. Three lists, in the
 # order they deserve attention: what died, what is being squeezed, what was
 # given room it has never used.
 report() {
-    _snap="$(snapshot)"
+    _snap="$(record)"
     if [ -z "$_snap" ]; then
         echo "  · no running container to measure"
         return 0
@@ -225,11 +321,13 @@ report() {
 }
 
 usage() {
-    echo "Usage: ram-usage.sh {snapshot|report}" >&2
+    echo "Usage: ram-usage.sh {snapshot|record|observed|report}" >&2
 }
 
 case "${1:-}" in
     snapshot) snapshot ;;
+    record) record ;;
+    observed) observed ;;
     report) report ;;
     *) usage; exit 1 ;;
 esac

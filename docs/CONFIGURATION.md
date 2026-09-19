@@ -273,18 +273,23 @@ make disable stremio     # remove from COMPOSE_PROFILES and stop it
 Choose which services run — applying starts and stops containers now
 36/37 enabled · Traefik, Authelia, Pi-hole, Headscale, Postgres … always run
 RAM ceilings 35.6G of 15.6G · 2.3x — overcommitted, as designed
+measured here 8.6G held, 22.6G at their peaks · 5 never run here
 ── Download ──────────────────────────────────────────────────────────────
- [x] prowlarr                   512M  Torrent search aggregator
- [x]   flaresolverr             768M  Cloudflare challenge solver for Prowlarr
- [x] qbittorrent                512M  Torrent client (VPN protected)
+ [x] prowlarr              173M/512M  Torrent search aggregator
+ [x]   flaresolverr        382M/768M  Cloudflare challenge solver for Prowlarr
+ [x] qbittorrent            72M/512M  Torrent client (VPN protected)
 ── Video ─────────────────────────────────────────────────────────────────
  [x] stremio                    1.0G  Movie and TV streaming (VPN protected)
- [x]   comet                    512M  Stream source addon for Stremio
+ [x]   comet               280M/512M  Stream source addon for Stremio
 ```
 
 Ticking propagates along both dependency relations — the hard ones in the table above, and the companion indent — transitively, so the screen always shows a set the stack can actually run: unticking `gluetun` unticks `qbittorrent`, `kapowarr`, `stremio` and — through `stremio` — `comet`. The footer names whatever moved.
 
-**The number beside each service is what it may take.** It is the service’s `mem_limit` — the ceiling `compose/*.yaml` gives it, in MiB — and the third header line adds up the ticked ones plus the always-on services the screen never lists (Traefik, Authelia, Postgres, Pi-hole … 4.9G between them). Both are colourised against the RAM of *this* host: a ceiling worth a quarter of it is red, a tenth amber, so `llama-cpp` reads as heavy on a 16 GB box and `kavita` does on a 4 GB one. `make services`, `make enable` and `make disable` print the same total, which is the only place a host without `python3` can see it — but never on its own, because on its own it decides nothing:
+**The pair beside each service is what it holds here over what it may take.** The right-hand number is the service’s `mem_limit` — the ceiling `compose/*.yaml` gives it — and the third header line adds the ticked ones up plus the always-on services the screen never lists (Traefik, Authelia, Postgres, Pi-hole … 4.9G between them). The left-hand one is what `scripts/ram-usage.sh` last measured that service holding on *this* host, and it is missing for one the host has never run — `stremio` above, which is off in favour of `stremio-lan`. The fourth header line totals the measured side over the same population and says how many of the ticked services it has nothing to say about.
+
+The colour grades the peak once there is one, and the ceiling until then: the ceiling says what the stack allows, the peak what this machine has actually been asked to find, and they disagree in both directions. A quarter of the host is red and a tenth amber, so `llama-cpp` — allowed 6 GB and measured taking every byte of it — is red on a 16 GB box, while `stremio-lan` is allowed 1 GB, has never held more than 113 MB, and is not.
+
+`make services`, `make enable` and `make disable` print the same ceiling total, which is the only place a host without `python3` can see it — but never on its own, because on its own it decides nothing:
 
 ```
 🧠 RAM 8.5G held by 46 containers · 7.2G free of 15.6G · swap 5.3G of 8.0G
@@ -293,7 +298,16 @@ Ticking propagates along both dependency relations — the hard ones in the tabl
 
 The first line is measured (`scripts/ram-usage.sh`, reading each container's cgroup) and is the one that answers *can I afford this*; the second is the picker's total, and is the one that responds to a tick. With no container running to measure — a fresh install, a stopped stack — only the second line is printed, with a warning past 2.5×.
 
+`make enable` and `make disable` add the line that actually answers *what did I just do*, because neither total moves much for one service in forty:
+
+```
+✅ kavita disabled
+   - kavita                     1.0G ceiling · 329M measured here
+```
+
 **They are ceilings, not usage, and the header is graded accordingly.** The stack is overcommitted on purpose ([Rationing CPU and memory](ARCHITECTURE.md#rationing-cpu-and-memory)): a limit is what a service may take when it misbehaves, not what it holds, and the reference 16 GB host carries everything at 2.3× its RAM while sitting near 20% of those ceilings at idle. Colouring anything over 1× red would flag the shipped default, which is how a warning stops being read — so green means the selection fits even if every service peaked at once, amber is the ordinary overcommitted stack, and red starts at 2.5×, past what the machine this was tuned for was ever asked to carry. It is a hint for choosing between services, not a fit/no-fit verdict: what actually decides is which of them peak together, and the picker cannot know that about a service that has never run on this host. Once one has, `make doctor` says what it really took — including which ceilings are binding and which were never approached ([Monitoring](MONITORING.md#ceilings-and-what-psi-cannot-see)). The per-service comments in `compose/*.yaml` carry the measured idle figures for the rest.
+
+**Where the measured numbers come from.** `scripts/ram-usage.sh` reads each running container's cgroup, and files what it saw in `.ram-observed` beside `.env` — gitignored, specific to this machine, rewritten by every `make services`, `make enable`, `make disable` and `make doctor`. The file exists because the readings do not survive what they describe: `memory.peak` dies with the container, and a service that is switched off has no cgroup at all — which is exactly the service the picker is being asked about. So the peak is kept as a maximum across restarts, what a service holds survives it being disabled, and a sample from a container less than an hour old is allowed to seed a row but never to overwrite one, because a container that young is holding its startup footprint rather than its working set. Nothing is load-bearing about the file: delete it and the screen falls back to ceilings alone until the next command refills it.
 
 The whole layout is read out of `compose/*.yaml` (`homepage.group` for the section, `homepage.description` for the text, `pi-pcloud.companion-of` for the indent, `profiles:` for the hard dependencies, `mem_limit` for the ceilings), so the picker cannot drift from the stack. It is `scripts/services-picker.py`, standard-library `curses` only — nothing to install on Raspberry Pi OS, and on a host without `python3` you simply use `make enable` / `make disable` instead. All three targets wrap `scripts/services.sh`, which is what actually writes `.env` and runs the hooks.
 

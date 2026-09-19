@@ -35,8 +35,8 @@ The command is a symlink to `scripts/pi-pcloud` inside the checkout, so `git pul
 | `make logs` | Follow live logs |
 | `make doctor` | Report anything outside its threshold: disk, RAM, swap, temperature, load, containers, restarts, backups — then which memory ceilings are actually binding and which were never approached ([Monitoring](MONITORING.md#ceilings-and-what-psi-cannot-see)), then whether each secret still agrees with its consumers |
 | `make services` | List optional services, whether each is enabled, what the running containers hold right now, and the RAM ceilings of the selection |
-| `make enable <service>` | Enable a service: update `COMPOSE_PROFILES`, start it, run its init hooks |
-| `make disable <service>` | Disable a service: update `COMPOSE_PROFILES` and stop it |
+| `make enable <service>` | Enable a service: update `COMPOSE_PROFILES`, start it, run its init hooks — then what it costs: its ceiling, and what it was last measured holding here |
+| `make disable <service>` | Disable a service: update `COMPOSE_PROFILES` and stop it — and say what that frees |
 | `make config` | Interactive checklist to choose which optional services run |
 | `make check-env` | Validate the required `.env` variables |
 | `make recovery-kit` | Print the five values that open the off-site backup, as two sheets to store apart — verified against the live repository first ([Monitoring](MONITORING.md#the-off-site-half-needs-a-key-that-is-not-on-this-machine)) |

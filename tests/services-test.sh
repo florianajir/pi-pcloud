@@ -265,8 +265,13 @@ contains "  and stremio-lan as disabled"      "$out" "⛔ stremio-lan disabled"
 
 {
     sed -n '/^compose_rows()/,/^}$/p' "$WORK/scripts/services.sh"
+    sed -n '/^observed_mib()/,/^}$/p' "$WORK/scripts/services.sh"
     sed -n '/^config_rows()/,/^}$/p' "$WORK/scripts/services.sh"
     sed -n '/^always_on_ram_mib()/,/^}$/p' "$WORK/scripts/services.sh"
+    sed -n '/^always_on_observed_mib()/,/^}$/p' "$WORK/scripts/services.sh"
+    # lib.sh is not sourced here, and ram-usage.sh is the only thing these reach
+    # for; it reads the cache from PROJECT_DIR, which is $WORK.
+    echo 'run_script() { sh "$PROJECT_DIR/scripts/$1" "$2"; }'
     echo '"$@"'
 } >"$WORK/rows.sh"
 sh "$WORK/rows.sh" config_rows >"$WORK/rows.txt"
@@ -301,6 +306,41 @@ ok "  while an optional one is on it" \
     "1024 1"
 ok "  and postgres never reaches the picker" \
     "$(grep -c '^postgres:' "$WORK/rows.txt")" 0
+
+# --- the measured columns beside them ----------------------------------------
+#
+# A ceiling is all there is to say about a service until this host has run it
+# once. ram-usage.sh files what it saw; config_rows joins it back on, so the
+# picker can put a number beside a box that is currently unticked - which is
+# the only box anyone needs a number for.
+
+ok "an unmeasured host reports zeroes, not blanks" \
+    "$(awk -F: '$7 !~ /^[0-9]+$/ || $8 !~ /^[0-9]+$/ { print $1 }' "$WORK/rows.txt" \
+        | tr '\n' ' ')" ""
+
+cat >"$WORK/.ram-observed" <<'OBS'
+# service held peak updated-epoch
+kavita 330 1024 1700000000
+freshrss 94 213 1700000000
+OBS
+sh "$WORK/rows.sh" config_rows >"$WORK/rows-observed.txt"
+ok "a measured service carries what it held and its peak" \
+    "$(awk -F: '$1 == "kavita" { print $6, $7, $8 }' "$WORK/rows-observed.txt")" \
+    "1024 330 1024"
+ok "  and an unmeasured one still carries only its ceiling" \
+    "$(awk -F: '$1 == "kapowarr" { print $6, $7, $8 }' "$WORK/rows-observed.txt")" \
+    "512 0 0"
+
+# The picker draws two header lines over two different populations, so the
+# always-on floor has to be handed over measured as well as declared.
+ok "the always-on floor has a measured half" \
+    "$(sh "$WORK/rows.sh" always_on_observed_mib)" "0 0"
+cat >>"$WORK/.ram-observed" <<'OBS'
+postgres 977 1100 1700000000
+OBS
+ok "  counting the core services and nothing else" \
+    "$(sh "$WORK/rows.sh" always_on_observed_mib)" "977 1100"
+rm -f "$WORK/.ram-observed"
 
 # The picker lists none of the always-on services, so their ceilings have to
 # reach it another way or every total it prints is short by a third.
@@ -374,13 +414,29 @@ print("KEYS:" + ",".join(
 # rounding error on 16 GB and a quarter of a 4 GB Pi.
 print("HEAVY:" + ",".join(
     str(picker.ram_key(1024, size)) for size in (4096, 8192, 16384)))
+
+# The measured half. The column carries what the service holds over what it may
+# take, the second header line totals the ticked set against the same always-on
+# floor the ceilings use, and the colour grades the peak once there is one.
+rows = load({"gluetun", "stremio", "comet"})
+view = {"base": 1024, "base_held": 400, "base_peak": 700, "ram": 8192}
+print("CELLS:" + ",".join(picker.ram_cell(row) for row in rows))
+print("MEASURED:" + str(picker.measured_line(rows, view)))
+print("GRADE:" + ",".join(
+    str(picker.row_key(row, 4096)) for row in rows if row["service"] == "stremio"))
+print("CEILING:" + str(picker.ram_key(1024, 4096)))
+print("UNMEASURED:" + str(picker.measured_line(load(set()),
+    {"base": 1024, "base_held": 0, "base_peak": 0, "ram": 8192})))
 PYCASE
 
+# ram and peak disagree on purpose: stremio is allowed 1 GB of a 4 GB host - a
+# quarter, which is "untick this first" - but has never held more than 900 MB,
+# which is not. comet has never run here at all.
 cat >"$WORK/picker-rows.txt" <<'ROWS'
-gluetun:Download::::256:on:VPN
-stremio:Video::gluetun:stremio-lan:1024:on:Streaming server
-comet::stremio:::512:on:Addon
-stremio-lan:Video:::stremio:1024:off:Casting
+gluetun:Download::::256:64:96:on:VPN
+stremio:Video::gluetun:stremio-lan:1024:300:900:on:Streaming server
+comet::stremio:::512:0:0:on:Addon
+stremio-lan:Video:::stremio:1024:0:0:off:Casting
 ROWS
 
 out="$(python3 "$WORK/picker-test.py" "$WORK/scripts/services-picker.py" "$WORK/picker-rows.txt" 2>&1 || true)"
@@ -392,6 +448,13 @@ contains "  and says which it left out"       "$out" "MSG:left unticked (conflic
 contains "the header sums the ticked ceilings" "$out" "RAM:RAM ceilings 2.8G of 8.0G · 0.3x"
 contains "  and grades them against the host"  "$out" "KEYS:ok,warn,over"
 contains "  a heavy service is one on a share" "$out" "HEAVY:over,warn,None"
+contains "the column pairs held with the ceiling" "$out" \
+    "CELLS:64M/256M,300M/1.0G,512M,1.0G"
+contains "the second header totals what was measured" "$out" \
+    "MEASURED:measured here 764M held, 1.7G at their peaks · 1 never run here"
+contains "a row is graded on its peak once there is one" "$out" "GRADE:warn"
+contains "  which its ceiling alone would have overstated" "$out" "CEILING:over"
+contains "and an unmeasured selection has no second line" "$out" "UNMEASURED:None"
 
 # --- the ceilings are reported outside the picker too ------------------------
 #
