@@ -33,15 +33,15 @@ The command is a symlink to `scripts/pi-pcloud` inside the checkout, so `git pul
 |---------|--------------|
 | `make status` | `systemctl status` for the stack unit and the Authelia log watcher |
 | `make logs` | Follow live logs |
-| `make doctor` | Report anything outside its threshold: disk, RAM, swap, temperature, load, containers, restarts, backups — then whether each secret still agrees with its consumers |
-| `make services` | List optional services, whether each is enabled, and the RAM ceilings of the selection |
+| `make doctor` | Report anything outside its threshold: disk, RAM, swap, temperature, load, containers, restarts, backups — then which memory ceilings are actually binding and which were never approached ([Monitoring](MONITORING.md#ceilings-and-what-psi-cannot-see)), then whether each secret still agrees with its consumers |
+| `make services` | List optional services, whether each is enabled, what the running containers hold right now, and the RAM ceilings of the selection |
 | `make enable <service>` | Enable a service: update `COMPOSE_PROFILES`, start it, run its init hooks |
 | `make disable <service>` | Disable a service: update `COMPOSE_PROFILES` and stop it |
 | `make config` | Interactive checklist to choose which optional services run |
 | `make check-env` | Validate the required `.env` variables |
 | `make recovery-kit` | Print the five values that open the off-site backup, as two sheets to store apart — verified against the live repository first ([Monitoring](MONITORING.md#the-off-site-half-needs-a-key-that-is-not-on-this-machine)) |
 | `make api-keys` | Print the gateway base URLs and the tokens that open them, to paste into a client on another machine ([Local AI](AI.md#the-key-that-is-not-password)) |
-| `make test` | Run the installer, CLI, `check-env`, start-sequence and compose-invariant suites (temporary copies only, no host changes) |
+| `make test` | Run the installer, CLI, `check-env`, service-selection, memory-reading, start-sequence and compose-invariant suites (temporary copies only, no host changes) |
 | `make lint` | Run every static check CI runs: shell syntax and `shellcheck -s dash` over every tracked shell file, `yamllint`, `ruff`, `hadolint`, `actionlint` and a `gitleaks` history scan. A gate whose tool is missing is reported as skipped; `LINT_STRICT=1` makes a skip fail |
 
 ### VPN and credentials

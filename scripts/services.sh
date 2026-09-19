@@ -619,22 +619,51 @@ always_on_ram_mib() {
     compose_rows | awk -F'|' '$10 == 0 { total += $9 } END { print total + 0 }'
 }
 
-# Host RAM in MiB, 0 when it cannot be read (no /proc, another kernel).
-host_ram_mib() {
-    awk '/^MemTotal:/ { printf "%d\n", $2 / 1024; exit }' /proc/meminfo 2>/dev/null || echo 0
+# MemTotal, MemAvailable, SwapTotal and SwapFree in MiB, in that order; four
+# zeroes when /proc/meminfo cannot be read (no /proc, another kernel). One
+# reader for all four: they are only ever wanted together.
+host_mem_mib() {
+    awk '
+        /^MemTotal:/     { total = $2 }
+        /^MemAvailable:/ { avail = $2 }
+        /^SwapTotal:/    { swtotal = $2 }
+        /^SwapFree:/     { swfree = $2 }
+        END {
+            printf "%d %d %d %d\n",
+                total / 1024, avail / 1024, swtotal / 1024, swfree / 1024
+        }
+    ' /proc/meminfo 2>/dev/null || echo "0 0 0 0"
 }
 
-# One line on what a selection can take at worst: the mem_limit ceilings of
-# everything it runs, always-on services included, against the RAM of this host.
+# What the running containers of this project hold right now, in MiB, and how
+# many of them there are. "0 0" whenever nothing can be measured - no Docker, a
+# stopped stack, a kernel without cgroup v2 - which is what ram_note branches
+# on rather than testing any of those conditions itself.
+measured_mib() {
+    run_script ram-usage.sh snapshot 2>/dev/null \
+        | awk '{ held += $2; n++ } END { printf "%d %d\n", held / 1048576, n + 0 }'
+}
+
+# What a selection costs, in one or two lines.
+#
+# The declared ceilings are the only figure this had for a long time, and on
+# their own they answer nothing: the shipped default declares 34G on a 16G host
+# and holds 8.5G of it, so the total barely moves when a service is toggled and
+# matches nothing the user can see in `free -h`. They stay - they are the only
+# number that responds to the selection at all, and the only one available
+# before a single container has ever run - but with what the stack actually
+# holds beside them whenever that can be read.
 #
 # Ceilings, not usage, and the difference is the whole point of the wording. The
 # stack ships overcommitted on purpose (docs/ARCHITECTURE.md, "Rationing CPU and
-# memory"): the reference 16 GB host carries the full stack at 2.3x its RAM and
-# sits near 20% of the ceilings at idle, because a limit is what a service may
-# take when it misbehaves, not what it holds. So the warning is not at 1x, which
-# any interesting selection crosses on a Pi, but past RAM_RATIO_WARN - more
-# ceiling than the machine the stack was tuned for was ever asked to carry.
+# memory"): a limit is what a service may take when it misbehaves, not what it
+# holds. So the unmeasured warning is not at 1x, which any interesting selection
+# crosses on a Pi, but past RAM_RATIO_WARN - more ceiling than the machine the
+# stack was tuned for was ever asked to carry.
 RAM_RATIO_WARN=2.5
+# Measured, there is a better question than the ratio: how much room is left.
+# Below this share of MemTotal, the next service enabled is paid for in swap.
+RAM_FREE_WARN_PCT=15
 
 ram_note() {
     _picked_ram="$(config_rows | awk -F: -v list="$1" '
@@ -643,13 +672,41 @@ ram_note() {
         END { print total + 0 }')"
     # LC_ALL=C: awk formats %.1f through the locale, and a fr_FR host would
     # print "2,3x" where the picker beside it prints "2.3x".
+    #
+    # Both readers hand over space-separated fields for awk to split, rather
+    # than one command substitution per figure: six of those to print two lines
+    # is how a display line starts costing more than what it displays.
     LC_ALL=C awk -v picked="$_picked_ram" -v core="$(always_on_ram_mib)" \
-        -v ram="$(host_ram_mib)" -v warn="$RAM_RATIO_WARN" '
+        -v warn="$RAM_RATIO_WARN" -v freewarn="$RAM_FREE_WARN_PCT" \
+        -v mem="$(host_mem_mib)" -v measured="$(measured_mib)" '
         function human(mib) {
             return mib >= 1024 ? sprintf("%.1fG", mib / 1024) : sprintf("%dM", mib)
         }
         BEGIN {
+            split(mem, m, " ")
+            ram = m[1]; avail = m[2]; swap_total = m[3]; swap_free = m[4]
+            split(measured, d, " ")
+            held = d[1]; running = d[2]
             total = picked + core
+
+            if (running > 0 && ram > 0) {
+                line = sprintf("🧠 RAM %s held by %d container%s · %s free of %s",
+                    human(held), running, (running == 1 ? "" : "s"),
+                    human(avail), human(ram))
+                if (swap_total > 0)
+                    line = line sprintf(" · swap %s of %s",
+                        human(swap_total - swap_free), human(swap_total))
+                print line
+                printf "   ceilings %s for this selection — %.1fx the host, overcommitted by design\n",
+                    human(total), total / ram
+                if (avail * 100 >= ram * freewarn) exit
+                printf "⚠️  Only %s free: the next service enabled is paid for in swap.\n", human(avail)
+                printf "   `make doctor` says which ceilings are already binding.\n"
+                exit
+            }
+
+            # Nothing running to measure - a fresh install, a stopped stack, a
+            # host without Docker. The declared total is all there is.
             if (ram <= 0) {
                 printf "🧠 RAM ceilings %s (always-on core included)\n", human(total)
                 exit

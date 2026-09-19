@@ -53,6 +53,14 @@ mkdir -p "$WORK/bin"
 cat >"$WORK/bin/docker" <<'STUB'
 #!/bin/sh
 set -eu
+# `docker ps` is what ram-usage.sh asks for the running containers, and it is
+# answered only when a test set RAM_STUB_PS. Everywhere else it fails, which is
+# how the rest of this suite keeps seeing the unmeasured note.
+if [ "${1:-}" = ps ]; then
+    [ -n "${RAM_STUB_PS:-}" ] || exit 1
+    printf '%s\n' "$RAM_STUB_PS"
+    exit 0
+fi
 [ "${1:-}" = compose ] && shift || exit 1
 # `up` is answered too, for the section that runs without DRY_RUN; everything
 # else is a command these tests never expect to reach a real daemon.
@@ -400,6 +408,30 @@ run_rc all list
 second="$(printf '%s\n' "$out" | sed -n 's/^🧠 RAM ceilings \([0-9.]*[MG]\).*/\1/p')"
 ok "  and a smaller selection is a smaller total" \
     "$(printf '%s\n%s\n' "$first" "$second" | sort -h | head -n1)" "$first"
+
+# --- and give way to what the stack actually holds ---------------------------
+#
+# The declared total is a near-constant: the shipped selection declares twice
+# this host's RAM, holds a quarter of it, and barely moves when one service is
+# toggled - so on its own it trains the reader to skip the line. When
+# ram-usage.sh can read the cgroups, the measured figure leads and the ceilings
+# follow it as context. Everything above this point runs with no `docker ps` to
+# answer, which is the other half of the rule.
+
+scope="$WORK/cgroup/system.slice/docker-d15ea5e.scope"
+mkdir -p "$scope"
+echo 268435456 >"$scope/memory.current"
+echo 268435456 >"$scope/memory.peak"
+echo 536870912 >"$scope/memory.max"
+printf 'low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n' >"$scope/memory.events"
+export CGROUP_ROOT="$WORK/cgroup" RAM_STUB_PS="kavita d15ea5e"
+
+run_rc all list
+contains "the note leads with what is held"    "$out" "🧠 RAM 256M held by 1 container ·"
+contains "  and the ceilings follow as context" "$out" "   ceilings "
+lacks "  so the ceiling total is no longer the headline" "$out" "🧠 RAM ceilings"
+
+unset CGROUP_ROOT RAM_STUB_PS
 
 # --- the hooks run with the privileges they were written for -----------------
 #
