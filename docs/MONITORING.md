@@ -34,7 +34,7 @@ To change the split, edit the topic constants at the top of `scripts/ntfy-pre-st
 
 ## Beszel — the hardware
 
-`https://beszel.<HOST_NAME>`, Authelia SSO only (password login is disabled), LAN-restricted by the Traefik `lan` middleware. The agent runs on the host network and hands metrics to the hub over a shared Unix socket; the hub stores them in PocketBase and pushes alerts to ntfy and SMTP.
+`https://beszel.<HOST_NAME>`, Authelia SSO only (password login is disabled), LAN-restricted by the Traefik `lan` middleware. The agent runs on the host network and pushes metrics over a WebSocket it opens *to* the hub at `beszel.<HOST_NAME>`, through Traefik — an `extra_hosts` entry pins that name to `HOST_LAN_IP` so the connection arrives from the host's own LAN address and clears `lan@docker` on the static part of the allowlist, not on the ISP-delegated entries. The hub stores the metrics in PocketBase and pushes alerts to ntfy and SMTP.
 
 `scripts/beszel-agent-bootstrap.py` runs on every start and configures the hub from `.env`: SMTP, S3 file storage and backups, the trusted proxy header, the Authelia OIDC client, the ntfy webhook, and the four resource alerts below. Nothing to click.
 

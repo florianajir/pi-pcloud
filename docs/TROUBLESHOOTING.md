@@ -420,7 +420,7 @@ docker compose logs nextcloud | grep -i mail
 
 ## Monitoring
 
-**Beszel agent not reporting.** `docker compose logs beszel-agent`. The hub reads the agent over the shared `beszel_socket` volume, and the agent reads container stats from the Docker socket. If the hub shows the system offline, restarting `beszel-agent` usually reconnects it.
+**Beszel agent not reporting.** `docker compose logs beszel-agent`. The agent opens a WebSocket *to* the hub at `beszel.<HOST_NAME>`, through Traefik, and reads container stats from the Docker socket. It is `network_mode: host`, and an `extra_hosts` entry pins `beszel.<HOST_NAME>` to `HOST_LAN_IP`, so it arrives from the host's own LAN address and is admitted by `lan@docker` — an allowlist that stopped covering the host, or a wrong `HOST_LAN_IP`, would show up here as an agent that never connects. `WebSocket connected host=…` in its log is the positive signal. If the hub shows the system offline, restarting `beszel-agent` usually reconnects it.
 
 **ntfy webhook silent.** Check that `config/ntfy/ntfy.env` holds the expected topic, then test directly:
 
