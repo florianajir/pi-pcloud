@@ -51,7 +51,13 @@ DEFAULTS_VERSION='"2"'
 # models.default_metadata. A config row, not a workspace one, so it needs no
 # admin account and applies from the first boot rather than the first SSO login.
 GLOBAL_META_MARKER="pi-pcloud.global_model_metadata"
-GLOBAL_META_VERSION='"1"'
+GLOBAL_META_VERSION='"2"'
+# Which built-in tool categories a model may use. Everything off but web search:
+# the whole set is what costs ~5000 tokens of schemas per message (see
+# apply_global_model_metadata), and web search is the one the chat toggle needs.
+# The categories are utils/tools.py's is_builtin_tool_enabled() keys, all of
+# which default to true - so the value is a deny list that has to be complete.
+BUILTIN_TOOLS_MAP='{"web_search": true, "time": false, "user_input": false, "files": false, "knowledge": false, "chats": false, "subagents": false, "memory": false, "image_generation": false, "code_interpreter": false, "notes": false, "channels": false, "tasks": false, "automations": false, "calendar": false, "notifications": false}'
 # The workspace row the Ollama-era naming left behind. Inert - get_all_models
 # drops a base-model override whose base no backend serves - but it shows up in
 # the model table and in every backup after it. Marked rather than deleted once,
@@ -379,7 +385,10 @@ SELECT
     (SELECT id FROM "user" WHERE role = 'admin' ORDER BY created_at LIMIT 1),
     NULL,
     '$LLAMA_MODEL',
-    '{"capabilities": {"builtin_tools": false}, "toolIds": ["server:$TOOLS_ID"]}',
+    -- No capabilities here: a key on the workspace row wins over
+    -- models.default_metadata, so pinning one would put this model alone
+    -- outside apply_global_model_metadata for good.
+    '{"toolIds": ["server:$TOOLS_ID"]}',
     '{}',
     extract(epoch from now())::bigint,
     extract(epoch from now())::bigint,
@@ -416,8 +425,7 @@ SELECT
     '$LLAMA_MODEL',
     -- toolIds too, or this path recreates the row without the tool the
     -- suggestions depend on.
-    jsonb_build_object('capabilities', jsonb_build_object('builtin_tools', false),
-                       'toolIds', jsonb_build_array('server:$TOOLS_ID'),
+    jsonb_build_object('toolIds', jsonb_build_array('server:$TOOLS_ID'),
                        'suggestion_prompts', \$j\$$SUGGESTIONS\$j\$::jsonb)::text,
     '{}',
     extract(epoch from now())::bigint,
@@ -637,6 +645,17 @@ SQL
 # this CPU before the model starts writing. Attaching tools to a chat explicitly
 # still works.
 #
+# So the switch stays on and BUILTIN_TOOLS_MAP turns off every category but web
+# search, rather than the whole switch going off. Those are not equivalent, and
+# the difference is the one thing in here that cannot be guessed from the UI:
+# ticking "web search" in a chat sets features.web_search, and
+# utils/middleware.py only acts on it two ways - it injects the search_web tool,
+# which needs built-in tools *on*, or it forces a RAG search, which needs
+# `function_calling: legacy` in the model's params. With built-in tools off and
+# native function calling, which is the default, the tick reaches neither branch
+# and searches nothing, silently. Nothing is injected while the tick is off
+# either: get_builtin_tools() gates the pair on features.web_search too.
+#
 # Global, not per model: utils/models.py merges this into every model and lets a
 # workspace row override it, so it covers the path routes' catalogues as they
 # change. Open WebUI reads none of the capability metadata providers publish, so
@@ -645,7 +664,8 @@ apply_global_model_metadata() {
     psql_owui -q <<SQL
 INSERT INTO config (key, value, updated_at)
 VALUES ('models.default_metadata',
-        '{"capabilities": {"builtin_tools": false}}'::json,
+        jsonb_build_object('capabilities', jsonb_build_object('builtin_tools', true),
+                           'builtinTools', '$BUILTIN_TOOLS_MAP'::jsonb)::json,
         extract(epoch from now())::bigint)
 -- Concatenation at both levels, not jsonb_set: create_missing only creates the
 -- *last* element of the path, so on a stored '{}' - which is what Open WebUI
@@ -657,7 +677,10 @@ ON CONFLICT (key) DO UPDATE
             coalesce(config.value::jsonb, '{}'::jsonb)
             || jsonb_build_object('capabilities',
                    coalesce(config.value::jsonb -> 'capabilities', '{}'::jsonb)
-                   || jsonb_build_object('builtin_tools', false))
+                   || jsonb_build_object('builtin_tools', true))
+            || jsonb_build_object('builtinTools',
+                   coalesce(config.value::jsonb -> 'builtinTools', '{}'::jsonb)
+                   || '$BUILTIN_TOOLS_MAP'::jsonb)
         )::json,
         updated_at = EXCLUDED.updated_at;
 SQL
@@ -761,7 +784,7 @@ main() {
     fi
 
     if [ "$(marker_present "$GLOBAL_META_MARKER" "$GLOBAL_META_VERSION")" = "f" ]; then
-        log "Turning the built-in tools off on every model (~5000 prompt tokens each)"
+        log "Built-in tools: web search only, on every model (the whole set is ~5000 prompt tokens a message)"
         if apply_global_model_metadata && mark_seeded "$GLOBAL_META_MARKER" "$GLOBAL_META_VERSION"; then
             changed=1
         else
