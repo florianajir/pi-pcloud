@@ -424,6 +424,19 @@ services:
       - "stremthru.${HOST_NAME:-pi.lan}:172.30.11.250"
     expose:
       - 3000
+    # The built-in Prowlarr scraper is initialised once, at startup, and never
+    # retried: reaching a Prowlarr that is not listening yet costs the scraper
+    # for the whole life of the container. It degrades silently - the container
+    # stays healthy and Traefik answers 200, but with no indexer list the
+    # preset's `Indexers` option is declared a string rather than a populated
+    # multi-select, so the stored value is rejected and the entire Prowlarr
+    # preset is dropped. Measured after a power cut: 2 streams on a title that
+    # returns 386 once Prowlarr is up. `required: false` because prowlarr sits
+    # behind its own profile and this service must still start without it.
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+        required: false
     environment:
       - TZ=${TIMEZONE:-Europe/Paris}
       - PORT=3000
