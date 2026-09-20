@@ -73,7 +73,12 @@ services:
       # The ai network is internal: scripts/llama-cpp-pre-start.sh seeds the
       # volume beforehand and OFFLINE stops the server from trying to fetch.
       - LLAMA_ARG_MODEL=/models/gemma-4-E2B-it-qat-Q4_0.gguf
-      - LLAMA_ARG_MMPROJ=/models/mmproj-gemma-4-E2B-it.gguf
+      # No LLAMA_ARG_MMPROJ. The vision/audio projector is loaded eagerly and
+      # is not mapped but copied: 2786M of anonymous memory with it against
+      # 1779M without, same build and same context, so a gigabyte for an input
+      # nothing offers - Open WebUI carries this model with "vision": false.
+      # fetch-models.sh still seeds the file, so image input is this one line
+      # and a restart away (and costs --cache-reuse, which mtmd disables).
       - LLAMA_ARG_OFFLINE=1
       # Speculative decoding off Gemma 4's multi-token-prediction head. CPU
       # generation is bandwidth bound, so verifying several drafted tokens in one
@@ -120,8 +125,12 @@ services:
       - "homepage.icon=mdi-brain"
     cpu_shares: *cpu-prio-idle
     cpuset: "1-3"
-    # Weights are mmap'd, and the cgroup counts those pages: 3.4G of model plus
-    # ~1G of vision projector, KV cache and compute buffers.
+    # mmap is only half of what the cgroup counts: 1.8G is anonymous - the Q4_0
+    # weights repacked into the ARM kernels, the 16k KV cache, the compute
+    # buffers - on top of what stays mapped of the 3.1G the model measures on
+    # disk. With the projector loaded that did not fit: an idle server sat at
+    # memory.peak == this ceiling and reclaimed 161 times in 2h, evicting its
+    # own weight pages and paying them back as latency on the next token.
     mem_limit: 6g
     memswap_limit: 8g
     oom_score_adj: *oom-score-deprioritize

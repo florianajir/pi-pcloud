@@ -51,7 +51,7 @@ All `environment:` entries on the `llama-cpp` service:
 | `LLAMA_ARG_N_PARALLEL` | `1` | One server slot; concurrent requests queue instead of splitting the three threads. |
 | `LLAMA_ARG_THREADS` | `3` | Matched to `cpuset: "1-3"`, leaving core 0 for Traefik and DNS. A 4th thread measured no faster. |
 | `LLAMA_ARG_SPEC_TYPE` | `draft-mtp` | Speculative decoding via Gemma 4's multi-token-prediction head; roughly doubles generation speed. Remove it and `LLAMA_ARG_SPEC_DRAFT_MODEL` to disable. |
-| `LLAMA_ARG_MMPROJ` | mmproj file | Vision/audio input. Removing it saves ~1 GB of RAM and re-enables `--cache-reuse`. |
+| `LLAMA_ARG_MMPROJ` | *unset* | Vision/audio input, off because it costs 1.0 GB resident (2786 MB of anonymous memory against 1779 MB) for a capability Open WebUI does not offer on this model, and because mtmd disables `--cache-reuse`. Point it at `/models/mmproj-gemma-4-E2B-it.gguf` — already in the volume — to turn image input on. |
 
 ### Where the weights live
 
