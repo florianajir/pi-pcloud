@@ -432,8 +432,15 @@ services:
       - "traefik.http.routers.open-webui.tls=true"
       - "traefik.http.services.open-webui.loadbalancer.server.port=8080"
     cpu_shares: *cpu-prio-idle
-    mem_limit: 1g
-    memswap_limit: 1536m
+    # Sized on what this holds before anyone logs in, not on what a chat costs:
+    # torch and the RAG embedding model (all-MiniLM-L6-v2, which
+    # sentence-transformers loads at startup) are resident from boot and are
+    # 640M of anonymous memory on their own. At 1g the page cache took the
+    # remainder, leaving it at 1019M of 1024M and reclaiming 336 times in 2h -
+    # and a web search, which fetches five pages and embeds them, had to come
+    # out of that same margin.
+    mem_limit: 1536m
+    memswap_limit: 2g
     oom_score_adj: *oom-score-deprioritize
 
   # The one gateway everything that speaks to a model or a tool goes through:
