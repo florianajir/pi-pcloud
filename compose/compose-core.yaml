@@ -355,6 +355,18 @@ services:
     container_name: pi-ddns-updater
     networks:
       - egress_ddns
+    # Not the stack's own resolver. unbound and pihole are containers, so for
+    # the first minute or two of a cold boot Docker's embedded 127.0.0.11 has
+    # no working upstream and answers `server misbehaving`. This one latches
+    # that: every public-IP provider fails at once, the record is marked
+    # `failure (public IP address not found)` and it stays unhealthy until a
+    # manual restart - unlike the other containers caught by the same race,
+    # which crash-loop and recover on their own. depends_on would not help:
+    # after a power cut the containers are started by their restart policy, and
+    # dockerd ignores depends_on entirely. It needs no internal name.
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
     environment:
       # It looks a name up *before* writing it, so the first AAAA publication
       # seeds a NODATA into the router's negative cache and the healthcheck then
