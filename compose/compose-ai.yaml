@@ -489,8 +489,12 @@ services:
       llama-cpp:
         condition: service_started
         required: false
-    # No healthcheck: the image is distroless, so there is no shell and no HTTP
-    # client to probe with. Uptime Kuma watches the container instead.
+    # No healthcheck: the image is distroless - no shell, no HTTP client, not
+    # even `true` - and the binary's only self-test is --validate-only, which
+    # reads the config file without touching the running listener. So Uptime
+    # Kuma's docker monitor proves the process is alive and nothing more: it
+    # stayed green through six crash-loops on the 2026-09-20 cold boot. The
+    # `route llm` monitor it provisions alongside is the readiness probe.
     labels:
       - "homepage.group=AI"
       - "homepage.name=Agentgateway"

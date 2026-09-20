@@ -221,6 +221,13 @@ ROUTES = [
     # The gluetun-served routers are the ones that silently vanish when gluetun
     # goes unhealthy; keep their check in the media group so it stays low noise.
     ("qbittorrent", "Media & Downloads"),
+    # agentgateway's image is distroless, so it can carry no container
+    # healthcheck and its docker monitor only ever proves the process is alive
+    # - it stayed green through six crash-loops on the 2026-09-20 cold boot.
+    # This is the only readiness signal it has: a 302 here is the gateway's own
+    # OIDC redirect, which it cannot serve until it is actually up. In its own
+    # group rather than External Chain, next to that docker monitor.
+    ("llm", "Automation & AI"),
 ]
 
 # Traefik answers 302/307 on the Authelia-protected routers (redirect to the SSO
@@ -235,6 +242,7 @@ ROUTE_SERVICES = {
     "auth": "authelia",
     "immich": "immich-server",
     "vault": "vaultwarden",
+    "llm": "agentgateway",
 }
 
 # Synthetic (non-container) monitor -> the compose service whose profile gates
