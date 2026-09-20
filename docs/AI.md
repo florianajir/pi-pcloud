@@ -36,7 +36,7 @@ Latency comes from prompt size, not the model. Three defaults exist purely becau
 
 - **Thinking is off** (`LLAMA_ARG_CHAT_TEMPLATE_KWARGS`). Gemma 4 otherwise spends ~500 tokens reasoning before the first visible word — over a minute of empty chat window for "how are you".
 - **One server slot** (`LLAMA_ARG_N_PARALLEL=1`). llama-server defaults to several and runs them concurrently, so two requests each generated at ~5 tok/s instead of one at ~10. Queueing is faster than sharing three threads.
-- **Open WebUI's built-in tools are off for every model**, along with title, tag, follow-up and search-query generation. The built-in tools (time, memory, chats, notes, knowledge, channels) inject ~5000 tokens of schemas into every message — roughly three minutes of prompt processing before the model starts. The other four are invisible extra LLM calls per message.
+- **Open WebUI's built-in tools are off for every model, bar web search**, along with title, tag, follow-up and search-query generation. The built-in tools (time, memory, chats, notes, knowledge, channels) inject ~5000 tokens of schemas into every message — roughly three minutes of prompt processing before the model starts. Web search is the exception because the composer's toggle does nothing without it — see [Web search](#web-search-searxng) — and its two schemas are injected only while that toggle is on. The other four are invisible extra LLM calls per message.
 
 All are re-enablable in **Admin Settings** and in the model's own **Capabilities**.
 
@@ -51,7 +51,7 @@ All `environment:` entries on the `llama-cpp` service:
 | `LLAMA_ARG_N_PARALLEL` | `1` | One server slot; concurrent requests queue instead of splitting the three threads. |
 | `LLAMA_ARG_THREADS` | `3` | Matched to `cpuset: "1-3"`, leaving core 0 for Traefik and DNS. A 4th thread measured no faster. |
 | `LLAMA_ARG_SPEC_TYPE` | `draft-mtp` | Speculative decoding via Gemma 4's multi-token-prediction head; roughly doubles generation speed. Remove it and `LLAMA_ARG_SPEC_DRAFT_MODEL` to disable. |
-| `LLAMA_ARG_MMPROJ` | mmproj file | Vision/audio input. Removing it saves ~1 GB of RAM and re-enables `--cache-reuse`. |
+| `LLAMA_ARG_MMPROJ` | *unset* | Vision/audio input, off because it costs 1.0 GB resident (2786 MB of anonymous memory against 1779 MB) for a capability Open WebUI does not offer on this model, and because mtmd disables `--cache-reuse`. Point it at `/models/mmproj-gemma-4-E2B-it.gguf` — already in the volume — to turn image input on. |
 
 ### Where the weights live
 
@@ -250,6 +250,14 @@ everything the path routes list, and keeps covering it as those catalogues chang
 Being a `config` row it also needs no admin account, so it applies from the first
 boot rather than the first SSO login.
 
+What the row holds is not the master switch but a category map, because the master
+switch takes web search down with it. `capabilities.builtin_tools` stays `true` and
+`meta.builtinTools` — `BUILTIN_TOOLS_MAP` in the hook — names the sixteen categories
+`utils/tools.py` knows, with `web_search` the only one left `true`. The keys all
+default to `true` upstream, so the map is a deny list that has to stay complete when
+a release adds a category. Nothing is injected while the chat toggle is off:
+`get_builtin_tools()` gates the search pair on `features.web_search` as well.
+
 That is as dynamic as this gets. Open WebUI reads **none** of the capability
 metadata providers publish — no `input_modalities`, no `supported_features` — so
 `vision` cannot switch itself on for the models that have it, and a transcription
@@ -327,6 +335,17 @@ and nothing to rotate.
 `searxng` is not an AI service and is also the Homepage search box — see
 [Architecture](ARCHITECTURE.md) — but it ships in the `open-webui` profile as well, because
 turning the toggle on with nothing behind it is a silent empty result set.
+
+**The toggle is not self-sufficient**, and this is the part nothing in the UI says.
+`utils/middleware.py` acts on `features.web_search` exactly two ways: it injects the
+`search_web` and `fetch_url` built-in tools, which the model then chooses to call, or
+it forces a RAG search over the results — and that second branch runs only when the
+model's params carry `function_calling: legacy`. Native function calling is the
+default, so with the built-in tools off the tick reaches neither branch: the model
+answers from memory, no search is made, and there is no error in any log. Hence
+`web_search` staying `true` in the category map above. The path was verified against
+`llama-server` directly: given the search schema, Gemma 4 E2B returns
+`finish_reason: tool_calls` with a `search_web` call rather than an answer.
 
 One setting on the SearXNG side is load-bearing, in `config/searxng/settings.yml`:
 `search.formats` must list `json`. Open WebUI's client sends `format=json`, and a SearXNG
