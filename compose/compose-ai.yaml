@@ -318,6 +318,14 @@ services:
     # the wrong value is copied into the database on first start and stays.
     entrypoint: ["bash", "-euc", "OAUTH_CLIENT_SECRET=$(cat /run/secrets/oidc_open-webui_secret); OPENAI_API_KEY=sk-$(cat /run/secrets/agentgateway_llm_key); export OAUTH_CLIENT_SECRET OPENAI_API_KEY; exec bash start.sh"]
     environment:
+      # start.sh generates this into /app/backend/.webui_secret_key, which is
+      # image, not volume: every `compose up` that replaces the container minted
+      # a new one, and a new one invalidates every session cookie and makes the
+      # stored OAuth tokens undecryptable ("Error decrypting tokens:
+      # InvalidToken"). So everybody was logged out by an unrelated update.
+      # Pointing it inside the data volume keeps the same key across recreates;
+      # start.sh still generates it on first boot.
+      - WEBUI_SECRET_KEY_FILE=/app/backend/data/.webui_secret_key
       - WEBUI_AUTH=true
       - ENABLE_LOGIN_FORM=false
       - CORS_ALLOW_ORIGIN=https://ai.${HOST_NAME:-pi.lan}
