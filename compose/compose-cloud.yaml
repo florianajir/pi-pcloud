@@ -728,32 +728,23 @@ services:
       - NTFY_AUTH_FILE=/var/lib/ntfy/user.db
       - NTFY_ENABLE_LOGIN=true
       - NTFY_AUTH_DEFAULT_ACCESS=deny-all
-      # Every publisher in this stack is a container, and none of them benefit
-      # from having an account: ntfy's rate limiter keys a visitor on the *user*
-      # only when that user has a tier, and these are all tierless, so each one
-      # falls back to `ip:<container address>` and gets the stock bucket - 60
-      # requests, then one per 5s. A burst that outruns that is refused with
-      # 42901, whatever it was carrying. Measured on Prowlarr in 2026-09: a flood
-      # of spurious grab notifications emptied its bucket and took 105 messages
-      # down with it, health alerts included (scripts/prowlarr-bootstrap.sh).
+      # Internal publishers are tierless, so ntfy keys them on `ip:<container
+      # address>` and hands each the stock bucket - 60 requests, then one per 5s.
+      # A burst that outruns it is refused with 42901 whatever it carries:
+      # measured 2026-09, a flood of spurious Prowlarr grabs took 105 unrelated
+      # messages down with it, health alerts included.
       #
-      # The whole /16 rather than the two segments that publish today. `frontend`
-      # is pinned at 172.30.11.0/24 in compose.yaml, but the `ntfy` segment has no
-      # ipam block and takes whatever the daemon pool (172.30.128.0/17) hands it -
-      # naming today's 172.30.132.0/24 would stop matching the first time that
-      # network is recreated, and silently. 172.30.0.0/16 spans both halves and is
-      # already the umbrella ALLOW_IP_RANGES uses.
+      # The whole /16 rather than today's segments: the `ntfy` network has no
+      # ipam block and takes whatever the daemon pool hands it, so a narrower
+      # range would stop matching the first time it is recreated, silently.
       #
-      # It does not exempt the internet, even though Traefik's own address is
-      # inside it: with NTFY_BEHIND_PROXY the limiter keys on the address read out
-      # of X-Forwarded-For, so a proxied request is bucketed under the real client
-      # rather than under 172.30.11.250 - and Traefik is configured with no
-      # forwardedHeaders.trustedIPs, so it overwrites a client-supplied header
-      # instead of believing it.
+      # This does not exempt the internet despite covering Traefik's address:
+      # with NTFY_BEHIND_PROXY the limiter keys on X-Forwarded-For, and Traefik
+      # sets no forwardedHeaders.trustedIPs, so it overwrites a client-supplied
+      # header rather than believing it.
       #
-      # Typos here are silent. An entry ntfy cannot parse or resolve is a startup
-      # WARN ("ignoring visitor request exemption") and nothing else, so check the
-      # log rather than assume - the service starts happily either way.
+      # Typos are silent - an unparseable entry is one startup WARN and nothing
+      # else, so read the log rather than assume.
       - NTFY_VISITOR_REQUEST_LIMIT_EXEMPT_HOSTS=172.30.0.0/16
       - NTFY_SMTP_SENDER_ADDR=${SMTP_HOST:-localhost}:${SMTP_PORT:-587}
       - NTFY_SMTP_SENDER_USER=${SMTP_USERNAME:-}
