@@ -814,7 +814,7 @@ services:
   # needs a Backrest mount it deliberately does not have today.
   stremthru:
     <<: *service-defaults
-    image: ghcr.io/muniftanjim/stremthru:0.105.0
+    image: ghcr.io/muniftanjim/stremthru:0.105.1
     container_name: pi-stremthru
     profiles: ["stremthru", "all"]
     networks:
