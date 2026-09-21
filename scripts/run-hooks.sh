@@ -82,7 +82,6 @@ nextcloud:nextcloud-pre-start.sh
 llama-cpp:llama-cpp-pre-start.sh
 agentgateway,open-webui:agentgateway-pre-start.sh
 stremio-lan:stremio-lan-pre-start.sh
-comet:comet-pre-start.sh
 aiostreams:aiostreams-pre-start.sh
 aiometadata:aiometadata-pre-start.sh
 n8n:n8n-pre-start.sh

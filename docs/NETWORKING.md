@@ -88,9 +88,7 @@ it is how remote nodes reach the control plane to enrol and reconnect from outsi
 `lan@docker`-free router over the addon protocol and its playback path —
 `aiostreams-public@docker` on `/stremio/<uuid>/<encryptedPassword>/` plus
 `/api/v1/debrid/playback/`, `aiometadata-public@docker` on `/stremio/<uuid>/`.
-`comet.<HOST_NAME>` is **not** in this list any more: nothing installs Comet directly, AIOStreams
-wraps it as a scraper over `frontend`, and its public router was deleted. `stremthru.<HOST_NAME>`
-is not in it either, for the same reason and despite also carrying a second router:
+`stremthru.<HOST_NAME>` is **not** in this list, despite also carrying a second router:
 `stremthru-addon@docker` drops `authelia@docker` so AIOStreams can fetch the Torz manifest
 server-side, but it keeps `lan@docker` — AIOStreams reaches it over `frontend`, and it is
 AIOStreams, not a client, that resolves those results. AIOStreams and AIOMetadata each carry a *third*
@@ -314,7 +312,7 @@ Three things that mode needs, none of them obvious:
   both profiles, since it is a plain defect.
 - **`CASTING_DISABLED=`.** The image sets it to `1`, and `/casting` answers 404 to every client.
   Only its truthiness is read, so `0` would still disable it: it must be empty.
-- **`extra_hosts` pointing `stremio.<HOST_NAME>` and `comet.<HOST_NAME>` at Traefik's frontend
+- **`extra_hosts` pointing `stremio.<HOST_NAME>` and `aiostreams.<HOST_NAME>` at Traefik's frontend
   address.** A macvlan child cannot reach its parent host, so any public record aimed at
   `HOST_LAN_IP` is unusable from inside — upstream fetches fail with `EHOSTUNREACH`.
 

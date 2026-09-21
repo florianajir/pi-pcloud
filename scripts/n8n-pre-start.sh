@@ -9,7 +9,7 @@ set -eu
 # workflow code n8n hands out. It must never fall back to a shared default.
 #
 # Not derived from PASSWORD - machine-to-machine, no login behind it - so
-# rotate-password.sh leaves it alone, like Comet's and ntfy's own secrets.
+# rotate-password.sh leaves it alone, like ntfy's own secrets.
 
 . "$(dirname "$0")/lib.sh"
 

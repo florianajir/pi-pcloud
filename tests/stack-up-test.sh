@@ -278,7 +278,7 @@ ok       "all plus stremio-lan is refused"    "$rc" 1
 contains "and the reason is named"            "$out" "stremio-lan"
 
 # Exact entries only: the substring must not make stremio-lan match stremio.
-run_rc stremio-lan,comet
+run_rc stremio-lan,aiostreams
 ok       "no substring match on the guard"    "$rc" 0
 
 # --- ordering and the compose call ------------------------------------------

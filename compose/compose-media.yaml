@@ -146,7 +146,7 @@ services:
       - "traefik.http.routers.stremio-root.priority=30"
       - "traefik.http.routers.stremio-root.tls=true"
       - "traefik.http.routers.stremio-root.service=noop@internal"
-      # No authelia, same reason as comet below: a cast receiver fetches the stream
+      # No authelia: a cast receiver fetches the stream
       # itself and cannot pass an interactive SSO login. It was also denying every client
       # including the LAN, since stremio.<HOST_NAME> has no access_control rule and
       # Authelia's default_policy is deny.
@@ -256,7 +256,7 @@ services:
     # the frontend network instead, or upstream fetches fail with EHOSTUNREACH.
     extra_hosts:
       - "stremio.${HOST_NAME:-pi.lan}:172.30.11.250"
-      - "comet.${HOST_NAME:-pi.lan}:172.30.11.250"
+      - "aiostreams.${HOST_NAME:-pi.lan}:172.30.11.250"
     labels:
       - "homepage.group=Video"
       - "homepage.name=Stremio"
@@ -274,7 +274,7 @@ services:
       - "traefik.http.routers.stremio-lan-root.priority=80"
       - "traefik.http.routers.stremio-lan-root.tls=true"
       - "traefik.http.routers.stremio-lan-root.service=noop@internal"
-      # No authelia, same reason as the gluetun-hosted router and as comet.
+      # No authelia, same reason as the gluetun-hosted router.
       - "traefik.http.routers.stremio-lan.rule=Host(`stremio.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.stremio-lan.entrypoints=websecure"
       - "traefik.http.routers.stremio-lan.middlewares=frame-deny@docker,lan@docker"
@@ -287,98 +287,11 @@ services:
       - "traefik.http.middlewares.stremio-lan-webui-redirect.redirectregex.replacement=https://app.strem.io/shell-v4.4/?streamingServer=https%3A%2F%2F$${1}"
       - "traefik.http.middlewares.stremio-lan-webui-redirect.redirectregex.permanent=false"
 
-  comet:
-    <<: *service-defaults
-    # No semver image tags are published; pin latest (currently v2.54.1) by digest.
-    image: ghcr.io/g0ldyy/comet:latest@sha256:dca62133336e02784d02aaad861381820674d1c8e3e98a03797610b81ee4defe
-    container_name: pi-comet
-    profiles: ["comet", "all"]
-    networks:
-      - frontend
-    expose:
-      - 8000
-    environment:
-      - TZ=${TIMEZONE:-Europe/Paris}
-      - FASTAPI_HOST=0.0.0.0
-      - FASTAPI_PORT=8000
-      - FASTAPI_WORKERS=1
-      # Single uvicorn process keeps the footprint small on the Pi (gunicorn preloads extra workers).
-      - USE_GUNICORN=False
-      - DATABASE_TYPE=sqlite
-      - DATABASE_PATH=/data/comet.db
-      # CONFIGURE_PAGE_PASSWORD prefixes addon URLs with /s/<PUBLIC_API_TOKEN>/, so the
-      # token must outlive recreates - the default /app/data is ephemeral and every
-      # recreate would mint a new one, breaking already-installed addons.
-      - PUBLIC_API_TOKEN_FILE=/data/public_api_token.txt
-      # TorBox is only the debrid — it checks and streams hashes, it does not find
-      # torrents. With no scraper enabled Comet returns zero results.
-      - SCRAPE_TORRENTIO=True
-      - SCRAPE_MEDIAFUSION=True
-      - SCRAPE_ZILEAN=True
-    # TorBox itself is configured per-user in the /configure web UI (paste the TorBox
-    # API key there); ADMIN_DASHBOARD_PASSWORD and CONFIGURE_PAGE_PASSWORD gate Comet's
-    # own admin dashboard and configuration page, and are generated once by
-    # scripts/comet-pre-start.sh. Deliberately not in `environment:` above: Compose lets
-    # `environment:` win over `env_file:`, so a ${PASSWORD} fallback there would silently
-    # shadow the generated secrets. env_file values are frozen at container creation -
-    # after a rotation use `up -d`, never `restart`.
-    env_file:
-      - path: ./config/comet/comet.env
-        required: false
-    volumes:
-      - comet_data:/data
-    labels:
-      - "homepage.group=Video"
-      - "pi-pcloud.companion-of=stremio"
-      - "homepage.name=Comet"
-      - "homepage.href=https://comet.${HOST_NAME:-pi.lan}"
-      - "homepage.description=Stream source addon for Stremio"
-      - "homepage.icon=stremio.png"
-      - "traefik.enable=true"
-      - "traefik.docker.network=frontend"
-      # One router, and nothing of Comet's reaches the internet: LAN/tailnet only
-      # (lan@docker covers the tailscale ranges), no authelia, because Stremio clients
-      # fetch the manifest/stream endpoints programmatically and cannot pass an
-      # interactive login. No `priority` either - it existed only to order this router
-      # against the public one, and this host now has a single router.
-      #
-      # That public router published /s/<PUBLIC_API_TOKEN>/ so an addon installed
-      # straight onto a Stremio account resolved off-tailnet. Nothing installs Comet
-      # directly any more: AIOStreams wraps it as a scraper, reaches it over `frontend`
-      # (inside the allowlist) and gets back results carrying an `infoHash` and no `url`
-      # of their own - measured on a real title, 156 streams, every one of them
-      # infoHash-only - so the link a client actually plays is AIOStreams'
-      # /api/v1/debrid/playback/, published on *its* router instead.
-      #
-      # Deleting this router also takes a debrid API key off the internet: a
-      # /s/<token>/<config>/ URL carries the configured debrid credentials in plaintext
-      # base64, where the AIOStreams link encrypts them under SECRET_KEY. Rotate the
-      # TorBox key if an addon URL of that shape was ever installed on a client.
-      #
-      # CONFIGURE_PAGE_PASSWORD stays set even though no password form is public now: it
-      # is what mounts the Stremio endpoints under /s/<PUBLIC_API_TOKEN>/ in the first
-      # place, and that prefix is baked into the addon URL AIOStreams is configured with.
-      # Unsetting it moves every endpoint back to the root and breaks that configuration.
-      - "traefik.http.routers.comet.rule=Host(`comet.${HOST_NAME:-pi.lan}`)"
-      - "traefik.http.routers.comet.entrypoints=websecure"
-      - "traefik.http.routers.comet.middlewares=frame-deny@docker,lan@docker"
-      - "traefik.http.routers.comet.tls=true"
-      - "traefik.http.services.comet.loadbalancer.server.port=8000"
-    healthcheck:
-      <<: *healthcheck-default
-      # The image left its Alpine base and ships neither wget nor curl.
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
-      # First boot blocks ~2-3 min downloading anime mappings before the API serves.
-      start_period: 180s
-    cpu_shares: *cpu-prio-normal
-    mem_limit: 512m
-    oom_score_adj: *oom-score-deprioritize
-
   # Two separate Stremio addons, both installed client-side: AIOStreams resolves
   # streams, AIOMetadata resolves catalogs and metadata. Neither replaces the
   # other.
   #
-  # Both on `frontend` rather than in gluetun's namespace, the same call as comet:
+  # Both on `frontend` rather than in gluetun's namespace:
   # with a debrid service nothing peer-to-peer leaves this host, and these two
   # only ever talk to APIs. Turning on AIOStreams' P2P presets or its built-in
   # proxy changes that, and would mean moving it behind gluetun - losing its own
@@ -407,7 +320,7 @@ services:
     # Every stack hostname this service might fetch, pinned to Traefik on
     # `frontend`. Not optional once `dns:` above points at public resolvers: the
     # public records for these names answer with the WAN address, so without
-    # these entries a request to our own Comet or AIOMetadata leaves the host,
+    # these entries a request to our own AIOMetadata or StremThru leaves the host,
     # hairpins back through the router and arrives at Traefik from the WAN IP -
     # slow, and matched by the *public* router, which carries rate-limit-auth at
     # 10 req/s. Same reasoning as stremio-lan's entries further up.
@@ -419,7 +332,6 @@ services:
       # container resolves its own name too.
       - "aiostreams.${HOST_NAME:-pi.lan}:172.30.11.250"
       # Upstream addons that live in this stack.
-      - "comet.${HOST_NAME:-pi.lan}:172.30.11.250"
       - "aiometadata.${HOST_NAME:-pi.lan}:172.30.11.250"
       - "stremthru.${HOST_NAME:-pi.lan}:172.30.11.250"
     expose:
@@ -560,7 +472,7 @@ services:
       - "homepage.icon=stremio.png"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
-      # Two routers on one host, the same split comet uses. The catch-all is
+      # Two routers on one host. The catch-all is
       # LAN/tailnet only, and carries no authelia@docker: forward-auth would 401
       # the Stremio client, and the operator pages have Authelia through OIDC.
       - "traefik.http.routers.aiostreams.rule=Host(`aiostreams.${HOST_NAME:-pi.lan}`)"
@@ -580,7 +492,7 @@ services:
       # upfront - so leaving it out of this rule let an off-tailnet client list
       # streams and play none of them. Measured on one client: 200 on
       # /stremio/.../stream/movie, 403 twelve seconds later on the playback link,
-      # then a fallback to a Comet addon it still had installed directly. The rest
+      # then a fallback to another addon it still had installed directly. The rest
       # of /api/v1/* stays LAN-only, the dashboard and the built-in proxy included.
       #
       # Only this URL shape is covered, and the other two would reproduce the bug
@@ -592,9 +504,9 @@ services:
       # and nothing in this stack feeds AIOStreams usenet. Turning either on means
       # revisiting this rule.
       #
-      # Same credential-in-URL model as the addon path, and tighter than the job's
-      # alternative: the blob is encrypted with SECRET_KEY, where Comet's own
-      # /playback/ carries the debrid API key in plaintext base64.
+      # Same credential-in-URL model as the addon path: the blob is encrypted
+      # with SECRET_KEY rather than carrying the debrid API key in plaintext
+      # base64, which is what the naive version of this URL shape does.
       #
       # A regexp rather than !PathPrefix(`/stremio/configure`), which was what
       # shipped first and covered only the instance-level page: the one that
@@ -610,7 +522,7 @@ services:
       - "traefik.http.routers.aiostreams-public.entrypoints=websecure"
       # Not about auth here: every stream request fans out to a dozen upstream
       # addons and a debrid API from the Pi's own WAN IP, so an unmetered public
-      # endpoint is an outbound amplifier. comet's reasoning.
+      # endpoint is an outbound amplifier.
       - "traefik.http.routers.aiostreams-public.middlewares=frame-deny@docker,rate-limit-auth@docker"
       - "traefik.http.routers.aiostreams-public.tls=true"
       - "traefik.http.routers.aiostreams-public.priority=20"
@@ -669,7 +581,7 @@ services:
   aiometadata:
     <<: *service-defaults
     # No semver tags on ghcr (only `latest` and v.testing.*), so pin latest -
-    # currently v2.17.2 - by digest, as comet does.
+    # currently v2.17.2 - by digest.
     image: ghcr.io/cedya77/aiometadata:latest@sha256:89f61077d895ffc12055e65435c5dd98dc680724fcb95cf1b0566afc455cbd31
     container_name: pi-aiometadata
     profiles: ["aiometadata", "all"]
@@ -753,7 +665,7 @@ services:
       - "homepage.icon=stremio.png"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
-      # Same two-router split as aiostreams and comet; no authelia@docker,
+      # Same two-router split as aiostreams; no authelia@docker,
       # because the operator pages already redirect to Authelia through OIDC.
       - "traefik.http.routers.aiometadata.rule=Host(`aiometadata.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.aiometadata.entrypoints=websecure"

@@ -5,7 +5,7 @@
 #
 # Use this after PASSWORD has been exposed (leaked, shoulder-surfed, committed,
 # etc). It does NOT rotate ADMIN_USER, EMAIL, or any of the independent
-# per-service secrets (NTFY_*_PASSWORD, Comet's config/comet/comet.env, Backrest's
+# per-service secrets (NTFY_*_PASSWORD, Backrest's
 # config/backrest/backrest.env, the Vaultwarden admin token, OIDC client secrets,
 # S3/backup keys) - those aren't derived from PASSWORD and don't need touching here.
 # AIOStreams' SECRET_KEY is in that set and must *never* rotate: it encrypts every
