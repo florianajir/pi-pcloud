@@ -301,23 +301,14 @@ ensure_ntfy_notification() {
     # the prowlarr user's credentials by then (it is, once ntfy-pre-start ran + ntfy recreated).
     schema="$(px_curl -H "X-Api-Key: $KEY" "$API/notification/schema" 2>/dev/null)"
 
-    # onGrab stays off. A "grab" here is any hit on /api/v1/indexer/{id}/download, not a
-    # release sent to a download client: AIOStreams' Prowlarr scraper calls that endpoint
-    # once per result to read an infoHash out of the .torrent, for every indexer that
-    # publishes neither a magnet nor a hash of its own. Measured 2026-09-18..21, 1631 of
-    # 1647 grabs were exactly that - one Stremio stream list at a time, all on the single
-    # indexer here whose search results carry a null magnetUrl and a null infoHash.
+    # onGrab stays off: a "grab" is any hit on /api/v1/indexer/{id}/download, and
+    # AIOStreams' scraper calls it once per result to read an infoHash out of the
+    # .torrent. Measured 2026-09-18..21, 1631 of 1647 grabs were that, not a release
+    # sent anywhere - enough to empty Prowlarr's ntfy bucket and drop 105 messages
+    # with 42901, health alerts among them.
     #
-    # And they were not merely noisy: at that rate they empty Prowlarr's own publish
-    # bucket on ntfy, which rate-limits per visitor - by container IP here, because a
-    # visitor is keyed on the user only when that user has a tier, and none do. 105 of
-    # them came back 42901, so any health alert Prowlarr had to raise during a burst was
-    # dropped with them - the notifications this hook exists for.
-    #
-    # Nothing is lost by dropping them. The real grabs come from Shelfmark, which already
-    # publishes to this same topic itself (scripts/shelfmark-pre-start.sh), and qBittorrent
-    # notifies again when the download finishes (scripts/qbittorrent-bootstrap.sh). What is
-    # left below is what only Prowlarr can report: its own health and updates.
+    # Nothing is lost: real grabs are announced by Shelfmark and again by qBittorrent
+    # on completion. What stays below is what only Prowlarr can report.
     payload="$(printf '%s' "$schema" | jq -c \
         --arg name "$NTFY_NOTIFICATION_NAME" --arg url "$NTFY_URL" --arg topic "$NTFY_TOPIC" \
         --arg user "prowlarr" --arg pass "$pw" '
@@ -343,28 +334,18 @@ ensure_ntfy_notification() {
     esac
 }
 
-# The bundled tr4ker definition maps every torznab attribute the tracker sends except
-# the one that costs the most to be missing: infohash. Without it Prowlarr answers
-# searches with `infoHash: null`, so a consumer that needs the hash - AIOStreams'
-# Prowlarr scraper - has to fetch the .torrent of every result to read it out of the
-# file. The tracker declares `requestDelay: 1`, so those fetches serialise at roughly
-# one a second: 16 of them took 29s, measured, against the 30s timeout that preset
-# runs with. The attribute is in the feed already (category, downloadvolumefactor,
-# grabs, infohash, leechers, peers, seeders, size, uploadvolumefactor) and `infohash`
-# is a first-class field in the v11 Cardigann schema.
+# The bundled tr4ker definition maps every torznab attribute the feed sends except
+# infohash, so Prowlarr answers `infoHash: null` and a consumer that needs the hash
+# must fetch the .torrent of every result. The tracker declares `requestDelay: 1`, so
+# those serialise: 16 of them took 29s against a 30s timeout.
 #
-# It cannot be fixed by editing the bundled file. Prowlarr restores the whole of
-# /config/Definitions from its own bundle on start - measured by patching tr4ker.yml,
-# restarting, and finding all 576 files back at one uniform mtime - so an in-place
-# edit survives exactly until the restart needed to load it. A sibling with a unique
-# id, name and filename is the only thing that persists, which is what
+# Editing the bundled file does not work - Prowlarr restores all of
+# /config/Definitions from its own bundle on start, so the edit dies with the restart
+# needed to load it. Only a sibling with a unique id, name and filename persists, as
 # yggreborn-api-patched and internetarchive-ua already are.
 #
-# Derived from the bundled file at every start rather than vendored as a frozen copy:
-# upstream fixes and category changes then keep arriving, and the day upstream maps
-# infohash itself this file stops differing from its source and can be deleted. The
-# tracker API key is not in here - it belongs to the indexer entry in Prowlarr, which
-# is registered against this definition once and then left alone.
+# Derived at every start rather than vendored, so upstream fixes keep arriving and
+# this file can be deleted the day upstream maps infohash itself.
 TR4KER_DEFINITION="/config/Definitions/tr4ker.yml"
 TR4KER_PATCHED="/config/Definitions/Custom/tr4ker-patched.yml"
 
