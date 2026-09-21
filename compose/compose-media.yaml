@@ -870,7 +870,7 @@ services:
       # sawtoothed between 733 and 908 MiB against a 1 GiB cap. Deliberately not
       # higher: SQLite's page cache is off-heap, so this has to leave room for
       # what the Go runtime is not accounting for.
-      - GOMEMLIMIT=800MiB
+      - GOMEMLIMIT=768MiB
       # SQLite, on upstream's own advice: "SQLite is the recommended database for
       # the vast majority of the users. You don't really need PostgreSQL."
       # (docs/configuration/database-and-cache.md). It stops being near-empty
@@ -932,7 +932,32 @@ services:
       # Queries only: no token is sent, since peerAuthToken is parsed off the URI
       # and this one carries none.
       - STREMTHRU_PEER_URI=https://stremthru.13377001.xyz
-    # Budget ~5 GB here, not the tens of megabytes the SideKick-only era used.
+    # FIRST RUN IS EXPENSIVE, AND IT IS A ONE-OFF. On an empty volume the two
+    # catch-up workers have 1.58M torrents to chew through, and the ceilings
+    # below are sized for the *steady* state, not for that. Measured end to end
+    # on this host: ~3 hours, and it needs `mem_limit: 8g` + `GOMEMLIMIT=6400MiB`
+    # temporarily to get through it. Leave those raised until
+    #   select count(*) from imdb_torrent
+    # stops climbing and matches `torrent_info`, then put them back.
+    #
+    # Why it cannot simply be left to run at 1g: map-imdb-torrent pulls 10 000
+    # unmapped hashes and processes them in 10 concurrent chunks
+    # (internal/worker/map_imdb_torrent.go - both sizes hardcoded, and the
+    # Postgres branch only makes them bigger). That allocates past 8 GiB without
+    # finishing one batch, and never returns the heap. It survives anyway because
+    # each chunk is committed before the OOM, so progress is never lost - the
+    # container just cycles. Do not "fix" that loop by lowering the ceiling; it
+    # is the drain making progress.
+    #
+    # Two traps if you ever redo this:
+    #   - `docker inspect` reports `oom=false, exit=0`. It is wrong. The kernel
+    #     kills tini, not the Go process, so only `dmesg | grep CONSTRAINT_MEMCG`
+    #     tells the truth.
+    #   - parse-torrent has `Interval: 5m` and *no* RunAtStartupAfter, so
+    #     restarting the container more often than every 5 minutes starves it
+    #     completely while looking like it is helping the other worker.
+    #
+    # Budget ~5 GB of disk here, not the tens of megabytes the SideKick-only era used.
     # Measured on first sync, and none of it is the SQLite file (149 MB):
     #   hashlists/  3.4 GB - `dmm_hashlist` is a *git clone* of
     #               github.com/debridmediamanager/hashlists (14 853 files plus a
@@ -995,14 +1020,28 @@ services:
       # the landing page and answers before the database migrations finish.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/v0/health"]
       start_period: 30s
-    cpu_shares: *cpu-prio-normal
-    # The 128m that stood here was measured when this service was a Go binary
-    # serving one HTMX page. `torz` makes it a different animal: 384m was not
-    # enough - it sat at 92% within three minutes of first boot and would have
-    # OOM-killed mid-import, which restarts the import. Measured on the initial
-    # sync, the expensive moment: plateaus at ~430 MiB while streaming the IMDb
-    # dataset into SQLite. Steady state afterwards is far lower; this ceiling is
-    # sized for the import, not the idle.
+    # A hard ceiling, not just a weight, and it is the first-run drain this is
+    # for. `cpu_shares` alone does nothing here: it only arbitrates *between*
+    # containers under contention, and never stopped this one taking all four
+    # cores on its own. Measured - map-imdb-torrent runs 10 concurrent chunks and
+    # pushed the host to a 5-minute load average of 27.78 while serving this
+    # household's DNS and VPN. With `cpus` at 1.5 the same work ran at a load of
+    # 3 to 6, and no container ever went unhealthy.
+    #
+    # Free in steady state: once the mapping is drained, this service measures
+    # 0.00% CPU across a full hour. So this costs nothing in normal operation and
+    # is what stops a clean install from hurting the household for three hours.
+    cpus: 1.5
+    cpu_shares: *cpu-prio-batch
+    # Sized against a measured burst, not against the first run - see the block
+    # above `volumes:` for why those are two different numbers.
+    #
+    # Measured after the drain completed, on a fresh restart: 194 MiB peak across
+    # a full 60-minute cycle with every worker tick included (map-imdb-torrent's
+    # 30-minute tick adds ~34 MiB when it has nothing to do). Ten parallel Torz
+    # stream queries take it to 437 MiB, and it stays there - Go does not return
+    # the heap - so that is the number this ceiling is built on, with roughly
+    # 2.3x headroom.
     mem_limit: 1g
     oom_score_adj: *oom-score-deprioritize
 
