@@ -298,12 +298,30 @@ ensure_ntfy_notification() {
     # Prowlarr posts a test notification to ntfy on save, so ntfy must be reachable with
     # the prowlarr user's credentials by then (it is, once ntfy-pre-start ran + ntfy recreated).
     schema="$(px_curl -H "X-Api-Key: $KEY" "$API/notification/schema" 2>/dev/null)"
+
+    # onGrab stays off. A "grab" here is any hit on /api/v1/indexer/{id}/download, not a
+    # release sent to a download client: AIOStreams' Prowlarr scraper calls that endpoint
+    # once per result to read an infoHash out of the .torrent, for every indexer that
+    # publishes neither a magnet nor a hash of its own. Measured 2026-09-18..21, 1631 of
+    # 1647 grabs were exactly that - one Stremio stream list at a time, all on the single
+    # indexer here whose search results carry a null magnetUrl and a null infoHash.
+    #
+    # And they were not merely noisy: at that rate they empty Prowlarr's own publish
+    # bucket on ntfy, which rate-limits per visitor - by container IP here, because a
+    # visitor is keyed on the user only when that user has a tier, and none do. 105 of
+    # them came back 42901, so any health alert Prowlarr had to raise during a burst was
+    # dropped with them - the notifications this hook exists for.
+    #
+    # Nothing is lost by dropping them. The real grabs come from Shelfmark, which already
+    # publishes to this same topic itself (scripts/shelfmark-pre-start.sh), and qBittorrent
+    # notifies again when the download finishes (scripts/qbittorrent-bootstrap.sh). What is
+    # left below is what only Prowlarr can report: its own health and updates.
     payload="$(printf '%s' "$schema" | jq -c \
         --arg name "$NTFY_NOTIFICATION_NAME" --arg url "$NTFY_URL" --arg topic "$NTFY_TOPIC" \
         --arg user "prowlarr" --arg pass "$pw" '
         (.[] | select(.implementation == "Ntfy"))
         | .name = $name
-        | .onGrab = true
+        | .onGrab = false
         | .onHealthIssue = true
         | .onHealthRestored = true
         | .onApplicationUpdate = true
