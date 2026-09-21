@@ -459,7 +459,7 @@ validate_service() {
 #                              service and summed into the picker's header
 # The companion and the profile list are different relations on purpose:
 # qbittorrent needs gluetun but is a service in its own right, listed under
-# Download, while comet only makes sense under stremio. Both propagate when a
+# Download, while aiostreams only makes sense under stremio. Both propagate when a
 # box is toggled; only companion-of nests. A service with no section label
 # borrows its companion, else "Other".
 compose_rows() {

@@ -25,7 +25,7 @@ Files rather than stdio: curses owns the terminal, so a captured stdout would
 either swallow the UI or the result.
 
 Three relations reach us, and they are deliberately different. `companion-of` is
-"pointless on its own" -- comet only makes sense with stremio, n8n-runners with
+"pointless on its own" -- aiostreams only makes sense with stremio, n8n-runners with
 n8n -- and is drawn as an indented row. `needs` is "cannot run without", which
 crosses sections: qbittorrent is a download service listed under Download, but
 it runs inside gluetun's network namespace. `conflicts-with` is the opposite:
@@ -124,9 +124,9 @@ def need_met(rows, service):
     """True if a needed service is ticked, or something standing in for it is.
 
     A conflicts-with pair is one service in two modes, so whatever needs one
-    mode is served by the other: comet is a stremio addon and runs against
+    mode is served by the other: aiostreams is a stremio addon and runs against
     stremio or stremio-lan indifferently (compose/compose-media.yaml gives stremio-lan its own
-    extra_hosts entry for exactly that). Without this, comet's companion-of
+    extra_hosts entry for exactly that). Without this, aiostreams' companion-of
     would make it a hard dependant of the VPN mode alone, and the picker would
     be the one place unable to express a setup the rest of the stack supports.
     """
@@ -196,8 +196,8 @@ def toggle(rows, index):
     """Flip one box and carry along whatever cannot run beside it.
 
     Ticking pulls in everything the service needs; unticking drops everything
-    that needs it. Both walk the graph, so comet pulls in stremio and gluetun,
-    and dropping gluetun drops stremio and comet with it. Ticking also drops
+    that needs it. Both walk the graph, so aiostreams pulls in stremio and gluetun,
+    and dropping gluetun drops stremio and aiostreams with it. Ticking also drops
     the services it conflicts with, since the stack refuses to start with both.
     """
     on = not rows[index]["on"]

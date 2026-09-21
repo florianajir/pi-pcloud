@@ -43,7 +43,7 @@ MIN_ROUTERS = 20
 MIN_PROBES = 10
 
 # Only these three matchers are read. `PathRegexp` is deliberately not among
-# them: comet's public router excludes a path with one, and a probe aimed at an
+# them: aiostreams' public router excludes a path with one, and a probe aimed at an
 # excluded path would test the router next in priority instead. A matcher
 # negated with `!` is skipped for the same reason.
 MATCHER = re.compile(r"(!\s*)?(Host|PathPrefix|Path)\(\s*`([^`]+)`")

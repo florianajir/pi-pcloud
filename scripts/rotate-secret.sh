@@ -58,7 +58,6 @@ Targets:
                                                  -> config.json, Beszel's PocketBase settings
   beszel-token    Beszel agent universal token   -> agent.env, the agent container
   n8n-runner      n8n task-broker token          -> config/n8n/n8n.env, n8n + n8n-runners
-  comet           Comet's admin/configure logins -> config/comet/comet.env
   vaultwarden     Vaultwarden /admin token       -> the secrets dir, vaultwarden
   ntfy            every ntfy password and token  -> ntfy.env and every publisher
   redis-auth      the shared Redis password      -> the secrets dir, valkey's included
@@ -73,7 +72,7 @@ EOF
 
 case "$TARGET" in
     "") usage; exit 1 ;;
-    --list) printf '%s\n' backrest-auth restic-s3 restic-usb s3-keys beszel-token n8n-runner comet vaultwarden ntfy redis-auth; exit 0 ;;
+    --list) printf '%s\n' backrest-auth restic-s3 restic-usb s3-keys beszel-token n8n-runner vaultwarden ntfy redis-auth; exit 0 ;;
 esac
 
 # --- Rollback bookkeeping -----------------------------------------------------
@@ -502,7 +501,6 @@ do_check() {
         s3-keys)       check_s3_keys ;;
         beszel-token)  check_generated_env_file "${PROJECT_DIR}/config/beszel-agent/agent.env" TOKEN "agent.env" pi-beszel-agent ;;
         n8n-runner)    check_generated_env_file "${PROJECT_DIR}/config/n8n/n8n.env" N8N_RUNNERS_AUTH_TOKEN "n8n.env" pi-n8n ;;
-        comet)         check_generated_env_file "${PROJECT_DIR}/config/comet/comet.env" ADMIN_DASHBOARD_PASSWORD "comet.env" pi-comet ;;
         vaultwarden)   check_secret_file "$(resolve_data_location_path)/authelia-config/secrets/vaultwarden_admin_token" "the Vaultwarden admin token" ;;
         redis-auth)    check_redis_auth ;;
         ntfy)          check_generated_env_file "${PROJECT_DIR}/config/ntfy/ntfy.env" NTFY_AUTH_USERS "ntfy.env" pi-ntfy ;;
@@ -518,7 +516,6 @@ do_rotate() {
         s3-keys)       rotate_s3_keys ;;
         beszel-token)  rotate_beszel_token ;;
         n8n-runner)    rotate_generated_env_file "${PROJECT_DIR}/config/n8n/n8n.env" n8n-pre-start.sh n8n n8n-runners ;;
-        comet)         rotate_generated_env_file "${PROJECT_DIR}/config/comet/comet.env" comet-pre-start.sh comet ;;
         vaultwarden)   rotate_vaultwarden ;;
         ntfy)          rotate_ntfy ;;
         redis-auth)    rotate_redis_auth ;;

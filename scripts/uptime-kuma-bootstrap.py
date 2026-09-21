@@ -144,7 +144,6 @@ GROUPS = [
             "pi-qbittorrent",
             "pi-stremio",
             "pi-stremio-lan",
-            "pi-comet",
             "pi-aiostreams",
             "pi-aiometadata",
             "pi-stremthru",

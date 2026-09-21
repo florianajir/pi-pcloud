@@ -229,7 +229,7 @@ COMPOSE_PROFILES=                                             # core services on
 
 **Core services always run** (they carry no profile): `traefik`, `authelia`, `lldap`, `postgres`, `redis`, `pihole`, `unbound`, `headscale`, `tailscale`, `ntfy`, `backrest`, `ddns-updater`, `homepage`. Pi-hole and Unbound stay core because subdomain resolution depends on the Pi-hole wildcard record; Headscale and Tailscale stay core because they provide remote access to everything else.
 
-**Optional services:** `beszel`, `beszel-agent`, `uptime-kuma`, `dockhand`, `n8n`, `n8n-runners`, `headplane`, `immich-server`, `immich-machine-learning`, `nextcloud`, `gluetun`, `qbittorrent`, `stremio`, `stremio-lan`, `comet`, `aiostreams`, `aiometadata`, `stremthru`, `prowlarr`, `kapowarr`, `flaresolverr`, `kavita`, `shelfmark`, `audiobookshelf`, `freshrss`, `searxng`, `trilium`, `changedetection`, `forgejo`, `vaultwarden`, `llama-cpp`, `piper`, `parakeet`, `system-tools`, `open-webui`, `agentgateway`, `prometheus`, `grafana`.
+**Optional services:** `beszel`, `beszel-agent`, `uptime-kuma`, `dockhand`, `n8n`, `n8n-runners`, `headplane`, `immich-server`, `immich-machine-learning`, `nextcloud`, `gluetun`, `qbittorrent`, `stremio`, `stremio-lan`, `aiostreams`, `aiometadata`, `stremthru`, `prowlarr`, `kapowarr`, `flaresolverr`, `kavita`, `shelfmark`, `audiobookshelf`, `freshrss`, `searxng`, `trilium`, `changedetection`, `forgejo`, `vaultwarden`, `llama-cpp`, `piper`, `parakeet`, `system-tools`, `open-webui`, `agentgateway`, `prometheus`, `grafana`.
 
 `stremio` and `stremio-lan` are the same server in two networking modes and are **mutually exclusive** — they share one data volume and the same Traefik host rules. `stremio` is the default (VPN); pick `stremio-lan` only to cast to a DLNA/UPnP renderer, and read the trade-off in [Networking → Casting](NETWORKING.md#casting-to-a-dlna-renderer) first. `stremio-lan` is not part of `all`.
 
@@ -280,10 +280,10 @@ measured here 8.6G held, 22.6G at their peaks · 5 never run here
  [x] qbittorrent            72M/512M  Torrent client (VPN protected)
 ── Video ─────────────────────────────────────────────────────────────────
  [x] stremio                    1.0G  Movie and TV streaming (VPN protected)
- [x]   comet               280M/512M  Stream source addon for Stremio
+ [x]   aiostreams          190M/768M  Stream aggregator and filtering for Stremio
 ```
 
-Ticking propagates along both dependency relations — the hard ones in the table above, and the companion indent — transitively, so the screen always shows a set the stack can actually run: unticking `gluetun` unticks `qbittorrent`, `kapowarr`, `stremio` and — through `stremio` — `comet`. The footer names whatever moved.
+Ticking propagates along both dependency relations — the hard ones in the table above, and the companion indent — transitively, so the screen always shows a set the stack can actually run: unticking `gluetun` unticks `qbittorrent`, `kapowarr`, `stremio` and — through `stremio` — `aiostreams`. The footer names whatever moved.
 
 **The pair beside each service is what it holds here over what it may take.** The right-hand number is the service’s `mem_limit` — the ceiling `compose/*.yaml` gives it — and the third header line adds the ticked ones up plus the always-on services the screen never lists (Traefik, Authelia, Postgres, Pi-hole … 4.9G between them). The left-hand one is what `scripts/ram-usage.sh` last measured that service holding on *this* host, and it is missing for one the host has never run — `stremio` above, which is off in favour of `stremio-lan`. The fourth header line totals the measured side over the same population and says how many of the ticked services it has nothing to say about.
 

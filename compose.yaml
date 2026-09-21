@@ -138,7 +138,6 @@ volumes:
   open_webui_data:
   ddns_data:
   stremio_data:
-  comet_data:
   aiostreams_data:
   aiometadata_data:
   stremthru_data:

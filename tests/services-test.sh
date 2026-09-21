@@ -384,28 +384,28 @@ def ticked(rows):
 
 
 # Ticking one mode drops the other, and everything left without a mode at all.
-rows = load({"gluetun", "stremio", "comet"})
+rows = load({"gluetun", "stremio", "aiometadata"})
 picker.toggle(rows, index(rows, "stremio-lan"))
 print("SWITCH:" + ticked(rows))
 
-# comet is a companion of stremio, but it runs against either mode: reaching it
+# aiometadata is a companion of stremio, but it runs against either mode: reaching it
 # from stremio-lan must not silently switch the user back to the VPN one.
 rows = load({"gluetun", "stremio-lan"})
-picker.toggle(rows, index(rows, "comet"))
+picker.toggle(rows, index(rows, "aiometadata"))
 print("COMPANION:" + ticked(rows))
 
 # Dropping the mode outright still drops what needed it.
-rows = load({"gluetun", "stremio", "comet"})
+rows = load({"gluetun", "stremio", "aiometadata"})
 print("DROP:" + picker.toggle(rows, index(rows, "stremio")) + "|" + ticked(rows))
 
-rows = load({"gluetun", "stremio", "comet"})
+rows = load({"gluetun", "stremio", "aiometadata"})
 print("MSG:" + picker.set_all(rows, True))
 print("ALL:" + ticked(rows))
 
 # The header adds up what is ticked plus the always-on floor it is handed, and
 # says which of the three things that is on this host: gluetun, stremio and
-# comet are 1792 MiB on top of a 1024 MiB floor.
-rows = load({"gluetun", "stremio", "comet"})
+# aiometadata are 1792 MiB on top of a 1024 MiB floor.
+rows = load({"gluetun", "stremio", "aiometadata"})
 print("RAM:" + picker.ram_line(rows, {"base": 1024, "ram": 8192})[0])
 print("KEYS:" + ",".join(
     picker.ram_line(rows, {"base": 1024, "ram": size})[1] for size in (8192, 2048, 512)))
@@ -418,7 +418,7 @@ print("HEAVY:" + ",".join(
 # The measured half. The column carries what the service holds over what it may
 # take, the second header line totals the ticked set against the same always-on
 # floor the ceilings use, and the colour grades the peak once there is one.
-rows = load({"gluetun", "stremio", "comet"})
+rows = load({"gluetun", "stremio", "aiometadata"})
 view = {"base": 1024, "base_held": 400, "base_peak": 700, "ram": 8192}
 print("CELLS:" + ",".join(picker.ram_cell(row) for row in rows))
 print("MEASURED:" + str(picker.measured_line(rows, view)))
@@ -431,19 +431,19 @@ PYCASE
 
 # ram and peak disagree on purpose: stremio is allowed 1 GB of a 4 GB host - a
 # quarter, which is "untick this first" - but has never held more than 900 MB,
-# which is not. comet has never run here at all.
+# which is not. aiometadata has no measurement in this fixture at all.
 cat >"$WORK/picker-rows.txt" <<'ROWS'
 gluetun:Download::::256:64:96:on:VPN
 stremio:Video::gluetun:stremio-lan:1024:300:900:on:Streaming server
-comet::stremio:::512:0:0:on:Addon
+aiometadata::stremio:::512:0:0:on:Addon
 stremio-lan:Video:::stremio:1024:0:0:off:Casting
 ROWS
 
 out="$(python3 "$WORK/picker-test.py" "$WORK/scripts/services-picker.py" "$WORK/picker-rows.txt" 2>&1 || true)"
-contains "ticking a mode unticks the other"   "$out" "SWITCH:gluetun,comet,stremio-lan"
-contains "a companion follows either mode"    "$out" "COMPANION:gluetun,comet,stremio-lan"
-contains "dropping the mode drops the rest"   "$out" "DROP:also unticked: comet|gluetun"
-contains "select-all keeps the first mode"    "$out" "ALL:gluetun,stremio,comet"
+contains "ticking a mode unticks the other"   "$out" "SWITCH:gluetun,aiometadata,stremio-lan"
+contains "a companion follows either mode"    "$out" "COMPANION:gluetun,aiometadata,stremio-lan"
+contains "dropping the mode drops the rest"   "$out" "DROP:also unticked: aiometadata|gluetun"
+contains "select-all keeps the first mode"    "$out" "ALL:gluetun,stremio,aiometadata"
 contains "  and says which it left out"       "$out" "MSG:left unticked (conflict): stremio-lan"
 contains "the header sums the ticked ceilings" "$out" "RAM:RAM ceilings 2.8G of 8.0G · 0.3x"
 contains "  and grades them against the host"  "$out" "KEYS:ok,warn,over"
