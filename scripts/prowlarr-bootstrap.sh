@@ -2,6 +2,8 @@
 # Bootstrap Prowlarr (idempotent, best-effort — warns, never fails the start):
 #   1. register qBittorrent as a download client
 #   2. register FlareSolverr as an indexer proxy (Cloudflare solver) with a tag
+#   3. maintain a patched tr4ker definition that maps the infohash the feed sends
+#   4. point a health/update notification at ntfy
 # Prowlarr shares gluetun's network namespace, so qBittorrent (localhost:8080),
 # FlareSolverr (localhost:8191) and the Prowlarr API (localhost:9696) are all reachable
 # from inside the container. The API key is read straight from config.xml
@@ -341,6 +343,79 @@ ensure_ntfy_notification() {
     esac
 }
 
+# The bundled tr4ker definition maps every torznab attribute the tracker sends except
+# the one that costs the most to be missing: infohash. Without it Prowlarr answers
+# searches with `infoHash: null`, so a consumer that needs the hash - AIOStreams'
+# Prowlarr scraper - has to fetch the .torrent of every result to read it out of the
+# file. The tracker declares `requestDelay: 1`, so those fetches serialise at roughly
+# one a second: 16 of them took 29s, measured, against the 30s timeout that preset
+# runs with. The attribute is in the feed already (category, downloadvolumefactor,
+# grabs, infohash, leechers, peers, seeders, size, uploadvolumefactor) and `infohash`
+# is a first-class field in the v11 Cardigann schema.
+#
+# It cannot be fixed by editing the bundled file. Prowlarr restores the whole of
+# /config/Definitions from its own bundle on start - measured by patching tr4ker.yml,
+# restarting, and finding all 576 files back at one uniform mtime - so an in-place
+# edit survives exactly until the restart needed to load it. A sibling with a unique
+# id, name and filename is the only thing that persists, which is what
+# yggreborn-api-patched and internetarchive-ua already are.
+#
+# Derived from the bundled file at every start rather than vendored as a frozen copy:
+# upstream fixes and category changes then keep arriving, and the day upstream maps
+# infohash itself this file stops differing from its source and can be deleted. The
+# tracker API key is not in here - it belongs to the indexer entry in Prowlarr, which
+# is registered against this definition once and then left alone.
+TR4KER_DEFINITION="/config/Definitions/tr4ker.yml"
+TR4KER_PATCHED="/config/Definitions/Custom/tr4ker-patched.yml"
+
+ensure_tr4ker_patched_definition() {
+    if ! docker exec "$PROWLARR_CONTAINER" test -f "$TR4KER_DEFINITION" 2>/dev/null; then
+        return 0
+    fi
+
+    # Built to a temp path and only moved into place when it differs, so an unchanged
+    # run neither rewrites the file nor restarts Prowlarr.
+    if docker exec -i "$PROWLARR_CONTAINER" sh -s "$TR4KER_DEFINITION" "$TR4KER_PATCHED" <<'PATCH'
+set -eu
+src="$1"
+dst="$2"
+tmp="$dst.building"
+mkdir -p "$(dirname "$dst")"
+awk '
+  /^id: tr4ker$/   { print "id: tr4ker-patched"; next }
+  /^name: TR4KER$/ { print "name: TR4KER (patched)"; next }
+  /^    imdbid:$/ && !inserted {
+    print "    infohash:"
+    print "      selector: \"[name=infohash]\""
+    print "      attribute: value"
+    inserted = 1
+  }
+  { print }
+' "$src" > "$tmp"
+grep -q '^    infohash:' "$tmp"
+grep -q '^id: tr4ker-patched$' "$tmp"
+if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then
+    rm -f "$tmp"
+    exit 9
+fi
+mv "$tmp" "$dst"
+exit 0
+PATCH
+    then
+        log "Wrote the patched tr4ker definition; restarting Prowlarr to load it"
+        docker restart "$PROWLARR_CONTAINER" >/dev/null 2>&1 || true
+        wait_for_prowlarr || return 0
+    else
+        status=$?
+        if [ "$status" -eq 9 ]; then
+            log "Patched tr4ker definition already current, skipping"
+        else
+            docker exec "$PROWLARR_CONTAINER" rm -f "$TR4KER_PATCHED.building" 2>/dev/null || true
+            log "WARNING: could not build the patched tr4ker definition"
+        fi
+    fi
+}
+
 main() {
     container_is_running "$PROWLARR_CONTAINER" || { log "Prowlarr not running, skipping"; return 0; }
 
@@ -349,6 +424,8 @@ main() {
 
     wait_for_prowlarr || return 0
 
+    # First: it may restart Prowlarr, and the calls below want a live API.
+    ensure_tr4ker_patched_definition
     ensure_download_client
     ensure_flaresolverr_proxy
     ensure_ntfy_notification
