@@ -451,6 +451,28 @@ services:
       # default) limits a non-trusted user to a whitelist, which on a
       # single-operator instance only breaks the sync.
       - SEL_SYNC_ACCESS=all
+      # Our own StremThru, not upstream's. Both StremThru presets ship a *public
+      # third-party instance* as their default URL (packages/core/src/config/
+      # schema/presets.ts: https://stremthru.13377001.xyz/stremio/...), so
+      # enabling the Torz preset in the dashboard without this line would send
+      # every query - and, in store mode, the TorBox key - to a host nobody here
+      # controls. Same class of default as the one comet's SCRAPE_* flags avoid,
+      # and the same fix the built-in Prowlarr scraper gets below.
+      #
+      # The Traefik hostname rather than http://stremthru:8080, and it has to be:
+      # torz builds its stream URLs from the *request* host
+      # (shared.ExtractRequestBaseURL, which reads the forwarded headers and
+      # ignores STREMTHRU_BASE_URL), so an internal URL here would hand a client
+      # a link to a name it cannot resolve. `extra_hosts` above already pins this
+      # one to Traefik so the request does not hairpin out to the WAN. Reaching
+      # it needs the stremthru-addon router, which is the half without
+      # forward-auth - see that service.
+      #
+      # Only Torz. STREMTHRU_STORE_URL is deliberately left at its default
+      # because the Store preset is not enabled: pointing it here would require
+      # `stremio_store` on that service, and the TorBox library is not something
+      # this stack surfaces yet.
+      - STREMTHRU_TORZ_URL=https://stremthru.${HOST_NAME:-pi.lan}/stremio/torz
       # Operator login only: the dashboard, plus the configuration page via
       # AIOSTREAMS_AUTH_REQUIRED. /stremio/<uuid>/<password>/* stays a bearer
       # credential in a URL - Stremio is a headless client with no cookie jar -
@@ -800,18 +822,33 @@ services:
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
 
-  # Stremio's own UI can neither reorder addons nor disable part of one, and both
-  # are needed to put AIOMetadata's catalogs and metadata in front of Cinemeta's.
-  # The community answer is a hosted tool you hand your Stremio password to;
-  # StremThru does the same job on our own host, and with the feature flag below
-  # it does not even persist the credential - `vault` is what would store a
+  # Two jobs, both narrow.
+  #
+  # SideKick, the original one: Stremio's own UI can neither reorder addons nor
+  # disable part of one, and both are needed to put AIOMetadata's catalogs and
+  # metadata in front of Cinemeta's. The community answer is a hosted tool you
+  # hand your Stremio password to; StremThru does the same job on our own host,
+  # and it does not even persist the credential - `vault` is what would store a
   # Stremio account server-side, and it is off, so the only login path left puts
   # the authKey in an HttpOnly cookie in the browser and reads it back per
-  # request (internal/stremio/sidekick/sidekick.go).
+  # request (internal/stremio/sidekick/sidekick.go). Turn `vault` on and that
+  # stops being true: the account lands in the SQLite below, encrypted with
+  # STREMTHRU_VAULT_SECRET, and this service then needs a Backrest mount it
+  # deliberately does not have today.
   #
-  # Turn `vault` back on and that stops being true: the account lands in the
-  # SQLite below, encrypted with STREMTHRU_VAULT_SECRET, and this service then
-  # needs a Backrest mount it deliberately does not have today.
+  # Torz, the second: a stream source for AIOStreams, on the same footing as
+  # comet. It contributes what nothing else here indexes - the DebridMediaManager
+  # hashlists and the torrent database shared between StremThru instances -
+  # rather than another view of the trackers Prowlarr already covers.
+  #
+  # Point it at p2p (the store dropdown on its configure page, or the preset's
+  # "Include P2P" in AIOStreams) and it answers with infoHash-only results, no
+  # `url` of its own, exactly like comet: AIOStreams then resolves them through
+  # TorBox and hands the client its own encrypted /api/v1/debrid/playback/ link.
+  # Choosing a store here instead makes torz build the playback URL itself, with
+  # the debrid token encoded into the path (internal/stremio/torz/stream.go sets
+  # stream.URL and clears InfoHash) - which works, but moves a credential into a
+  # URL for no gain, since AIOStreams is already holding that key.
   stremthru:
     <<: *service-defaults
     image: ghcr.io/muniftanjim/stremthru:0.105.1
@@ -827,19 +864,76 @@ services:
       - STREMTHRU_BASE_URL=https://stremthru.${HOST_NAME:-pi.lan}
       # SQLite, on upstream's own advice: "SQLite is the recommended database for
       # the vast majority of the users. You don't really need PostgreSQL."
-      # (docs/configuration/database-and-cache.md). With only the addon below
-      # enabled it holds nothing but its own schema.
+      # (docs/configuration/database-and-cache.md). It stops being near-empty
+      # with `torz` on: the peer-pulled torrent database lands here, so this file
+      # grows with use rather than staying at its schema.
       - STREMTHRU_DATABASE_URI=sqlite://./data/stremthru.db
-      # One feature, not fifteen. StremThru ships a debrid proxy, a usenet
-      # engine, a torrent indexer aggregator, a SABnzbd endpoint, a WebDAV share
-      # and five more Stremio addons, all enabled by default - none of which this
-      # stack wants, and several of which overlap AIOStreams. Naming a feature
-      # with no +/- prefix enables *only* it.
+      # An allowlist, not a toggle list. Naming a feature with no +/- prefix
+      # enables *only* the named ones (internal/config/feature.go: once
+      # `enabled` is non-empty, IsEnabled answers false for everything absent
+      # from it). So every default-on feature this stack wants has to be spelled
+      # out here - dropping `dmm_hashlist` or `imdb_title` from the line silently
+      # turns them off even though upstream ships both enabled.
       #
-      # Measured, not assumed: with this set, /stremio/wrap, /stremio/store,
-      # /stremio/torz, /stremio/list, /stremio/newz and /v0/store all answer 404,
-      # and only /stremio/sidekick/ and /v0/health remain.
-      - STREMTHRU_FEATURE=stremio_sidekick
+      # Two traps in the same parser, both fatal rather than ignored: `anime`
+      # and `stremio_p2p` start out in the *disabled* list, so naming either bare
+      # is a log.Fatalf("feature conflict") at boot, and `+` on anything that is
+      # not pre-disabled is the same crash. `+x` also only lifts x out of
+      # `disabled` - it never adds it to `enabled`, so under an allowlist like
+      # this one `+stremio_p2p` on its own still leaves the feature off.
+      #
+      # What is on, and why:
+      #   stremio_sidekick  the addon-collection editor (the original reason this
+      #                     service exists - Stremio's own UI cannot reorder)
+      #   torz              the torrent half: unlocks the crowdsourced hash
+      #                     database and /v0/torznab/api
+      #   stremio_torz      the Stremio addon over it, consumed by AIOStreams
+      #   dmm_hashlist      DebridMediaManager hashlists - the actual new source.
+      #                     Verified not a duplicate of anything already here:
+      #                     AIOStreams' Knaben builtin queries api.knaben.org (a
+      #                     live tracker metasearch) and AIOStreams has no DMM
+      #                     source at all (`dmmCast` is the casting addon)
+      #   imdb_title        title matching for torz; useless without it
+      #   meta              /v0/meta/id-map/: IMDB<->TMDB<->TVDB<->Trakt locally
+      #
+      # Still off, deliberately: `newz` and everything over it (SABnzbd, WebDAV,
+      # the Newz addon) needs a usenet subscription this stack has not got and a
+      # Sonarr/Radarr to feed, `stremio_wrap` is a frontal duplicate of
+      # AIOStreams, `stremio_list` overlaps AIOMetadata's catalogues,
+      # `probe_media_info` spends Pi CPU re-deriving what AIOStreams already
+      # parses out of filenames, and `stremio_p2p` only widens the configure
+      # page's store dropdown (internal/stremio/shared/store.go) - the p2p store
+      # code itself is accepted whether or not the feature is on, which is what
+      # AIOStreams relies on below.
+      #
+      # `vault` is a special case: HasVault() checks IsDisabled, not IsEnabled,
+      # so it is off *only* because STREMTHRU_VAULT_SECRET is empty - setting
+      # that variable turns it on without this line changing. Leave it empty
+      # until stremthru_data is mounted into Backrest (compose-monitoring.yaml),
+      # because vault is what would persist a Stremio account and a debrid key
+      # here. `sync` (Stremio<->Trakt, Stremio<->Stremio) is gated behind it.
+      - STREMTHRU_FEATURE=stremio_sidekick,torz,stremio_torz,dmm_hashlist,imdb_title,meta
+      # Where the crowdsourced half comes from. Unset, StremThru peers with
+      # upstream's own public instance (the default is base64'd in
+      # internal/config/config.go, and decodes to https://stremthru.13377001.xyz)
+      # - that peer *is* the shared torrent database, so `-`, which disables
+      # peering entirely, would leave torz with nothing but what this host has
+      # seen itself. Pinned to the literal rather than left implicit because an
+      # outbound dependency on a third party should be readable in this file.
+      # Queries only: no token is sent, since peerAuthToken is parsed off the URI
+      # and this one carries none.
+      - STREMTHRU_PEER_URI=https://stremthru.13377001.xyz
+    # Budget ~5 GB here, not the tens of megabytes the SideKick-only era used.
+    # Measured on first sync, and none of it is the SQLite file (149 MB):
+    #   hashlists/  3.4 GB - `dmm_hashlist` is a *git clone* of
+    #               github.com/debridmediamanager/hashlists (14 853 files plus a
+    #               1.4 GB .git), pulled periodically, so it is permanent and
+    #               grows rather than being scratch space
+    #   imdb/       1.1 GB - title.basics.tsv.gz from datasets.imdbws.com,
+    #               required because torz resolves a title per stream request
+    #               (internal/stremio/torz/stream.go calls imdb_title.Get)
+    # Not in Backrest, and correctly so: every byte above is re-downloadable, and
+    # the only thing here that would be worth a backup is the vault, which is off.
     volumes:
       - stremthru_data:/app/data
     labels:
@@ -851,15 +945,40 @@ services:
       - "homepage.icon=stremio.png"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
-      # Forward-auth, unlike the other three Stremio services here, and it is the
-      # feature flag that makes it safe: SideKick is a browser UI with no Stremio
-      # client fetching anything from it, so there is no headless caller to 401.
-      # The product name rather than a function one - this is the tool that edits
-      # the addon collection, not something the household opens daily.
+      # Two routers on one host, the same split comet and aiostreams use - but
+      # inverted: here the *catch-all* is the one carrying forward-auth. It
+      # covers SideKick, the dashboard and every configure page, all of them
+      # browser UIs with no headless caller to 401. The product name rather than
+      # a function one - this is the tool that edits the addon collection, not
+      # something the household opens daily.
       - "traefik.http.routers.stremthru.rule=Host(`stremthru.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.stremthru.entrypoints=websecure"
       - "traefik.http.routers.stremthru.middlewares=frame-deny@docker,lan@docker,authelia@docker"
       - "traefik.http.routers.stremthru.tls=true"
+      - "traefik.http.routers.stremthru.priority=10"
+      # The addon protocol, carved out of the above because AIOStreams fetches
+      # /stremio/torz/<userdata>/manifest.json and .../stream/... server-side and
+      # cannot pass an interactive login - authelia@docker 401s it, and the
+      # failure is the quiet kind: AIOStreams drops the preset and the stream
+      # list is simply shorter.
+      #
+      # Still LAN/tailnet only. Nothing off-host needs this: AIOStreams reaches
+      # it over `frontend`, which is inside lan@docker's allowlist, and it is
+      # AIOStreams - not a client - that resolves the results. Publishing it
+      # would also put a debrid token on the internet the moment a store-mode
+      # config is used, since torz encodes its userdata into the stream URL.
+      #
+      # /configure is carved back out so the configure page keeps Authelia, the
+      # same regexp trick and the same reason as aiostreams-public: the page that
+      # matters is the per-userdata one at /stremio/torz/<userdata>/configure, so
+      # a plain PathPrefix on /stremio/torz/configure would miss it. `$$` is
+      # compose's escape for a literal `$`.
+      - "traefik.http.routers.stremthru-addon.rule=Host(`stremthru.${HOST_NAME:-pi.lan}`) && PathPrefix(`/stremio/torz`) && !PathRegexp(`/configure(/|$$)`)"
+      - "traefik.http.routers.stremthru-addon.entrypoints=websecure"
+      - "traefik.http.routers.stremthru-addon.middlewares=frame-deny@docker,lan@docker"
+      - "traefik.http.routers.stremthru-addon.tls=true"
+      - "traefik.http.routers.stremthru-addon.priority=20"
+      - "traefik.http.routers.stremthru-addon.service=stremthru"
       - "traefik.http.services.stremthru.loadbalancer.server.port=8080"
     healthcheck:
       <<: *healthcheck-relaxed
@@ -868,9 +987,14 @@ services:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/v0/health"]
       start_period: 30s
     cpu_shares: *cpu-prio-normal
-    # Measured: 24.6 MiB idle. A Go binary serving one HTMX page, so this is the
-    # stack's floor rather than a number derived from a peak.
-    mem_limit: 128m
+    # The 128m that stood here was measured when this service was a Go binary
+    # serving one HTMX page. `torz` makes it a different animal: 384m was not
+    # enough - it sat at 92% within three minutes of first boot and would have
+    # OOM-killed mid-import, which restarts the import. Measured on the initial
+    # sync, the expensive moment: plateaus at ~430 MiB while streaming the IMDb
+    # dataset into SQLite. Steady state afterwards is far lower; this ceiling is
+    # sized for the import, not the idle.
+    mem_limit: 1g
     oom_score_adj: *oom-score-deprioritize
 
   prowlarr:

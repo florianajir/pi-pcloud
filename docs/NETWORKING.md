@@ -89,7 +89,11 @@ it is how remote nodes reach the control plane to enrol and reconnect from outsi
 `aiostreams-public@docker` on `/stremio/<uuid>/<encryptedPassword>/` plus
 `/api/v1/debrid/playback/`, `aiometadata-public@docker` on `/stremio/<uuid>/`.
 `comet.<HOST_NAME>` is **not** in this list any more: nothing installs Comet directly, AIOStreams
-wraps it as a scraper over `frontend`, and its public router was deleted. AIOStreams and AIOMetadata each carry a *third*
+wraps it as a scraper over `frontend`, and its public router was deleted. `stremthru.<HOST_NAME>`
+is not in it either, for the same reason and despite also carrying a second router:
+`stremthru-addon@docker` drops `authelia@docker` so AIOStreams can fetch the Torz manifest
+server-side, but it keeps `lan@docker` — AIOStreams reaches it over `frontend`, and it is
+AIOStreams, not a client, that resolves those results. AIOStreams and AIOMetadata each carry a *third*
 `lan@docker`-free router for the paths that cost nothing upstream and only want a looser limiter:
 `aiostreams-catalog@docker` (catalogues, metadata, the manifest, and `/static/` — the small .mp4
 status clips the playback route redirects to) and `aiometadata-art@docker` (artwork). All of it is
