@@ -504,9 +504,8 @@ services:
       # and nothing in this stack feeds AIOStreams usenet. Turning either on means
       # revisiting this rule.
       #
-      # Same credential-in-URL model as the addon path: the blob is encrypted
-      # with SECRET_KEY rather than carrying the debrid API key in plaintext
-      # base64, which is what the naive version of this URL shape does.
+      # Same credential-in-URL model as the addon path, and the blob is encrypted
+      # with SECRET_KEY rather than carrying the debrid API key in clear.
       #
       # A regexp rather than !PathPrefix(`/stremio/configure`), which was what
       # shipped first and covered only the instance-level page: the one that
