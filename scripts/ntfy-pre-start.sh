@@ -25,7 +25,7 @@ BCRYPT_IMAGE="${BCRYPT_IMAGE:-pi-backrest:local}"
 # do-not-disturb rule on the phone independently. Publishers only ever get
 # access to the topic they belong to (see AUTH_ACCESS_VALUE below).
 #   monitoring - service health: uptime-kuma, beszel, dockhand, backrest
-#   downloads  - grabs and completed downloads: prowlarr, qbittorrent, shelfmark
+#   downloads  - grabs and completed downloads: qbittorrent, shelfmark, prowlarr (health only)
 #   security   - authelia failed logins and regulation bans
 #   watches    - changes on a watched web page: changedetection
 NTFY_MONITORING_TOPIC="monitoring"
