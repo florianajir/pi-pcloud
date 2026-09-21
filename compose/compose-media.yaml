@@ -862,6 +862,15 @@ services:
       - TZ=${TIMEZONE:-Europe/Paris}
       - STREMTHRU_PORT=8080
       - STREMTHRU_BASE_URL=https://stremthru.${HOST_NAME:-pi.lan}
+      # ~78% of mem_limit, the same shape dockhand and grafana already use. A Go
+      # runtime cannot see a cgroup limit, so without this it grows its heap
+      # until the kernel kills it - and an OOM kill here restarts the workers
+      # from the top, which is the one thing that turns a slow catch-up into a
+      # loop. Measured during the initial sync, with no GOMEMLIMIT set: the heap
+      # sawtoothed between 733 and 908 MiB against a 1 GiB cap. Deliberately not
+      # higher: SQLite's page cache is off-heap, so this has to leave room for
+      # what the Go runtime is not accounting for.
+      - GOMEMLIMIT=800MiB
       # SQLite, on upstream's own advice: "SQLite is the recommended database for
       # the vast majority of the users. You don't really need PostgreSQL."
       # (docs/configuration/database-and-cache.md). It stops being near-empty
