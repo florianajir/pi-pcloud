@@ -297,7 +297,7 @@ services:
 
   open-webui:
     <<: *service-defaults
-    image: ghcr.io/open-webui/open-webui:v0.11.3
+    image: ghcr.io/open-webui/open-webui:v0.11.4
     container_name: pi-open-webui
     profiles: ["open-webui", "all"]
     networks:
