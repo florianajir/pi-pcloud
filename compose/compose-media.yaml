@@ -737,7 +737,7 @@ services:
   # that key - resolves them behind its own encrypted playback link.
   stremthru:
     <<: *service-defaults
-    image: ghcr.io/muniftanjim/stremthru:0.105.1
+    image: ghcr.io/muniftanjim/stremthru:0.105.2
     container_name: pi-stremthru
     profiles: ["stremthru", "all"]
     networks:
