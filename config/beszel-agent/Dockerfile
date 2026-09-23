@@ -1,7 +1,7 @@
 # Extends the official beszel-agent image with smartmontools for S.M.A.R.T. support.
 # The agent binary is statically compiled Go, so it runs fine on Alpine.
 # Kept in lockstep with the beszel hub tag in compose/compose-monitoring.yaml — bump both together.
-FROM henrygd/beszel-agent:0.19.0 AS upstream
+FROM henrygd/beszel-agent:0.20.0 AS upstream
 
 FROM alpine:3.24
 # Pinned to the major: alpine:3.24 above is the reproducibility boundary, and
