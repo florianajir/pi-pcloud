@@ -57,7 +57,7 @@ x-healthcheck-fast: &healthcheck-fast
 # key, so each mode is its own thin service over this shared body.
 x-stremio-common: &stremio-common
   <<: *service-defaults
-  image: stremio/server:v4.21.1
+  image: stremio/server:v4.21.2
   environment:
     - NO_CORS=1
     - TZ=${TIMEZONE:-Europe/Paris}
