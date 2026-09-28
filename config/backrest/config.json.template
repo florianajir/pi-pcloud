@@ -82,7 +82,8 @@
         "*.sqlite-wal",
         "*.sqlite-shm",
         "*.log",
-        "*.log.*"
+        "*.log.*",
+        "!/userdata/tuwunel-backups/**"
       ],
       "schedule": {
         "cron": "0 4 * * *",

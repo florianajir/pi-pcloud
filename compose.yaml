@@ -163,6 +163,12 @@ volumes:
   # that config/grafana/ does not already provision.
   prometheus_data:
   grafana_data:
+  # Volumes rather than DATA_LOCATION binds so the RocksDB sits on the NVMe -
+  # see the tuwunel service. backrest takes media and backups, never the live
+  # database.
+  tuwunel_data:
+  tuwunel_media:
+  tuwunel_backups:
 
 networks:
   dns_internal:

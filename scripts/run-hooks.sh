@@ -72,6 +72,8 @@ vaultwarden:vaultwarden-pre-start.sh
 freshrss:freshrss-pre-start.sh
 searxng,open-webui:searxng-pre-start.sh
 trilium:trilium-pre-start.sh
+tuwunel:tuwunel-pre-start.sh
+element,tuwunel:element-pre-start.sh
 qbittorrent:qbittorrent-pre-start.sh
 prowlarr:prowlarr-pre-start.sh
 kapowarr:kapowarr-pre-start.sh

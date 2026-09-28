@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up the Tuwunel database before backrest's daily snapshot
+
+[Timer]
+# Local time, like backrest's CLOCK_LOCAL 04:00 schedule. The backup itself
+# takes seconds. Not Persistent: a run caught up at boot would signal a server
+# that is still starting, and the next night's run is the one backrest takes.
+OnCalendar=*-*-* 03:45:00
+
+[Install]
+WantedBy=timers.target

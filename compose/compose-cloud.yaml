@@ -610,6 +610,195 @@ services:
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
 
+  # The family chat: a Matrix homeserver, reached from Element Web (the service
+  # below) and from Element X on phones. Tuwunel, the conduwuit successor, keeps
+  # everything in an embedded RocksDB, so it takes neither a Postgres role nor
+  # the shared Redis. See the PR body for why not Synapse or continuwuity.
+  tuwunel:
+    <<: *service-defaults
+    image: ghcr.io/matrix-construct/tuwunel:v1.9.3@sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0
+    container_name: pi-tuwunel
+    profiles: ["tuwunel", "all"]
+    # Root in the container, but with no capability beyond DAC_READ_SEARCH and
+    # a read-only root filesystem - verified at v1.9.3 by running it exactly
+    # like this. Not uid 1000: the database lives in named volumes (below), a
+    # new named volume is created root-owned, and this Nix image has no path
+    # Docker could copy another owner from. DAC_READ_SEARCH is what lets root
+    # without CAP_DAC_OVERRIDE read the 0600 client secret, which belongs to
+    # the project owner.
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+    security_opt:
+      - no-new-privileges:true
+    # The first start after an upgrade can run a RocksDB migration, and a kill
+    # half-way leaves a database no admin command repairs (upstream
+    # docs/deploying/docker.md). Docker's default is SIGKILL after 10 s; a
+    # server that is not migrating exits on SIGTERM in well under a second, so
+    # this only ever waits on a migration.
+    stop_grace_period: 30m
+    networks:
+      # Traefik, Authelia's discovery document, and the push gateway a phone
+      # registers for notifications: nothing else.
+      - frontend
+    extra_hosts:
+      # Fetched at the first sign-in, not at start. Verified at v1.9.3 that
+      # ip_range_denylist, whose default covers 172.16.0.0/12, does not refuse
+      # this address.
+      - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
+    expose:
+      - 8008
+    environment:
+      # Permanent: it is the suffix of every user and room ID
+      # (@alice:chat.<HOST_NAME>), and a database created under one name cannot
+      # be moved to another. chat.<HOST_NAME> rather than <HOST_NAME> itself,
+      # so no /.well-known delegation has to be served from an apex this stack
+      # routes nothing on - and it is the one name users type into Element X.
+      - TUWUNEL_SERVER_NAME=chat.${HOST_NAME:-pi.lan}
+      # The default is loopback only.
+      - TUWUNEL_ADDRESS=0.0.0.0
+      # A family server: LAN and tailnet only, like its router below, so there
+      # is no :8448 to federate on and no reason to accept a remote server.
+      - TUWUNEL_ALLOW_FEDERATION=false
+      # Upstream appends an emoji to every new display name by default.
+      - TUWUNEL_NEW_USER_DISPLAYNAME_SUFFIX=
+      # journald stores the escape codes verbatim otherwise; Tuwunel only
+      # suppresses them when it logs to journald itself.
+      - TUWUNEL_LOG_COLORS=false
+      # Upstream's 24 MiB refuses many of the videos a phone records.
+      - TUWUNEL_MAX_REQUEST_SIZE=100 MiB
+      # Defaults to 128 + 64 per core - 384 MB here, which alone would outgrow
+      # mem_limit as the database grows.
+      - TUWUNEL_DB_CACHE_CAPACITY_MB=128
+      # Uploads out of the database directory and into a volume of their own,
+      # so backrest can take them without ever reading the live RocksDB.
+      - TUWUNEL_STORAGE_PROVIDER__MEDIA__LOCAL__BASE_PATH=/var/lib/tuwunel-media
+      # Serves /.well-known/matrix/client, and doubles as the issuer of the
+      # built-in OAuth server: Element X only signs in through that
+      # ("next-gen auth"), which Tuwunel then brokers to Authelia below.
+      - TUWUNEL_WELL_KNOWN__CLIENT=https://chat.${HOST_NAME:-pi.lan}
+      # A consistent online backup on SIGUSR2, which tuwunel-backup.timer sends
+      # before backrest's 04:00 snapshot - backrest has no Docker socket to send
+      # it itself, and a live RocksDB copied file by file is not a restorable
+      # database. RocksDB's BackupEngine shares unchanged files between backups,
+      # so the second one costs only what changed.
+      - TUWUNEL_DATABASE_BACKUP_PATH=/var/lib/tuwunel-backups
+      - TUWUNEL_DATABASE_BACKUPS_TO_KEEP=2
+      - TUWUNEL_ADMIN_SIGNAL_EXECUTE=["server backup-database"]
+      # Accounts come from LLDAP through Authelia: password registration stays
+      # at its default (off), and an account is created on the first SSO
+      # sign-in. The first one also becomes the server admin
+      # (grant_admin_to_first_user), so the owner signs in first.
+      - TUWUNEL_IDENTITY_PROVIDER__0__BRAND=Authelia
+      # The provider's ID inside Tuwunel. Stored identities hang off it, so
+      # renaming it orphans every account.
+      - TUWUNEL_IDENTITY_PROVIDER__0__CLIENT_ID=tuwunel
+      - TUWUNEL_IDENTITY_PROVIDER__0__CLIENT_SECRET_FILE=/run/secrets/oidc_tuwunel_secret
+      - TUWUNEL_IDENTITY_PROVIDER__0__ISSUER_URL=https://auth.${HOST_NAME:-pi.lan}
+      - TUWUNEL_IDENTITY_PROVIDER__0__CALLBACK_URL=https://chat.${HOST_NAME:-pi.lan}/_matrix/client/unstable/login/sso/callback/tuwunel
+      - TUWUNEL_IDENTITY_PROVIDER__0__DEFAULT=true
+      # The localpart is preferred_username, the LLDAP uid. Refuse the sign-in
+      # rather than hand out a random @xk3f... when that is not usable.
+      - TUWUNEL_IDENTITY_PROVIDER__0__UNIQUE_ID_FALLBACKS=false
+    volumes:
+      # Named volumes on the NVMe rather than DATA_LOCATION binds, for the
+      # reason the Postgres cluster left DATA_LOCATION: it is a USB disk whose
+      # bridge acknowledges fsync before the platter has the data, which a
+      # power cut turns into a corrupt RocksDB.
+      - tuwunel_data:/var/lib/tuwunel
+      - tuwunel_media:/var/lib/tuwunel-media
+      - tuwunel_backups:/var/lib/tuwunel-backups
+      - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_tuwunel_secret.txt:/run/secrets/oidc_tuwunel_secret:ro
+    healthcheck:
+      <<: *healthcheck-default
+      # The image's own probe: it reads the same environment and requests
+      # /_tuwunel/server_version on the configured listener.
+      test: ["CMD", "tuwunel", "--health-check"]
+      # The image's own start period, for the same migration as
+      # stop_grace_period above: an `unhealthy` there invites the restart that
+      # kills it half-way.
+      start_period: 30m
+    labels:
+      - "homepage.group=Communication"
+      - "homepage.name=Chat"
+      - "homepage.icon=element.png"
+      - "homepage.href=https://chat.${HOST_NAME:-pi.lan}"
+      - "homepage.description=Family chat (Matrix)"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # Element Web owns chat.<HOST_NAME>; the Matrix API shares the hostname
+      # under the three prefixes a client calls, and this longer rule wins on
+      # Traefik's rule-length priority.
+      #
+      # No authelia@docker: Element and Element X hold a Matrix access token,
+      # not an Authelia session, and could not pass the portal on /_matrix.
+      # Tuwunel runs the OIDC flow against Authelia itself.
+      - "traefik.http.routers.tuwunel.rule=Host(`chat.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/_matrix`) || PathPrefix(`/_tuwunel`) || PathPrefix(`/.well-known/matrix`))"
+      - "traefik.http.routers.tuwunel.entrypoints=websecure"
+      - "traefik.http.routers.tuwunel.middlewares=lan@docker"
+      - "traefik.http.routers.tuwunel.tls=true"
+      - "traefik.http.services.tuwunel.loadbalancer.server.port=8008"
+    cpu_shares: *cpu-prio-normal
+    # Measured on this host at v1.9.3: 38 MiB idle, 56 MiB after 300 messages,
+    # a 5 MiB upload and an initial sync. The ceiling is for the 128 MB block
+    # cache above filling as the history grows.
+    mem_limit: 384m
+    oom_score_adj: *oom-score-deprioritize
+
+  element:
+    <<: *service-defaults
+    image: ghcr.io/element-hq/element-web:v1.12.29@sha256:da32e88c8dafe2c3d4f40ca5e90ab2f43a7c9ac35f0977ec7662dcb4fdcd56d8
+    container_name: pi-element
+    # Started by the tuwunel profile too, like flaresolverr under prowlarr: a
+    # homeserver with no web client is not the chat anyone enabled.
+    profiles: ["element", "tuwunel", "all"]
+    # Static files behind nginx, which already runs as its own user. The entrypoint
+    # renders the nginx conf into conf.d on every start, hence that tmpfs.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+      - /etc/nginx/conf.d:uid=101,gid=101
+    networks:
+      - frontend
+    expose:
+      - 8080
+    environment:
+      # Above 1024, so the unprivileged nginx needs no capability to bind it.
+      - ELEMENT_WEB_PORT=8080
+    volumes:
+      # Rendered by scripts/element-pre-start.sh from config/element/.
+      - ${DATA_LOCATION:-./data}/element/config.json:/app/config.json:ro
+    healthcheck:
+      <<: *healthcheck-light
+      # The image's own probe, pointed at the port set above.
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/config.json"]
+    labels:
+      - "homepage.description=Web client for the family chat"
+      - "pi-pcloud.companion-of=tuwunel"
+      - "traefik.enable=true"
+      - "traefik.docker.network=frontend"
+      # Element sends no frame policy of its own, and frame-deny@docker's DENY
+      # would break it: the file download button and the Jitsi and widget pages
+      # are same-origin iframes. SAMEORIGIN keeps other sites from framing it.
+      - "traefik.http.middlewares.element-frame.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN"
+      - "traefik.http.routers.element.rule=Host(`chat.${HOST_NAME:-pi.lan}`)"
+      - "traefik.http.routers.element.entrypoints=websecure"
+      - "traefik.http.routers.element.middlewares=element-frame@docker,lan@docker"
+      - "traefik.http.routers.element.tls=true"
+      - "traefik.http.services.element.loadbalancer.server.port=8080"
+    cpu_shares: *cpu-prio-batch
+    # Measured on this host at v1.12.29: 10 MiB serving the app.
+    mem_limit: 64m
+    oom_score_adj: *oom-score-deprioritize
+
   n8n:
     <<: *service-defaults
     image: n8nio/n8n:2.41.3
