@@ -729,13 +729,16 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
       # Element Web owns chat.<HOST_NAME>; the Matrix API shares the hostname
-      # under the three prefixes a client calls, and this longer rule wins on
-      # Traefik's rule-length priority.
+      # under the prefixes a client calls, and this longer rule wins on
+      # Traefik's rule-length priority. /.well-known/openid-configuration is
+      # the built-in OAuth server's discovery document at its issuer (the
+      # well_known.client URL): a client that finds the issuer through
+      # auth_issuer rather than auth_metadata fetches it there.
       #
       # No authelia@docker: Element and Element X hold a Matrix access token,
       # not an Authelia session, and could not pass the portal on /_matrix.
       # Tuwunel runs the OIDC flow against Authelia itself.
-      - "traefik.http.routers.tuwunel.rule=Host(`chat.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/_matrix`) || PathPrefix(`/_tuwunel`) || PathPrefix(`/.well-known/matrix`))"
+      - "traefik.http.routers.tuwunel.rule=Host(`chat.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/_matrix`) || PathPrefix(`/_tuwunel`) || PathPrefix(`/.well-known/matrix`) || Path(`/.well-known/openid-configuration`))"
       - "traefik.http.routers.tuwunel.entrypoints=websecure"
       - "traefik.http.routers.tuwunel.middlewares=lan@docker"
       - "traefik.http.routers.tuwunel.tls=true"

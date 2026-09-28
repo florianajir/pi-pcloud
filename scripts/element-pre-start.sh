@@ -50,14 +50,17 @@ main() {
 
     if [ -f "$config_file" ] && [ "$(cat "$config_file")" = "$rendered" ]; then
         log "Element Web config already up to date"
-        return 0
+    else
+        write_file_atomic "$config_file" printf '%s\n' "$rendered" \
+            || die "Failed to write $config_file"
+        log "Rendered Element Web config for $server"
     fi
 
-    write_file_atomic "$config_file" printf '%s\n' "$rendered" \
-        || die "Failed to write $config_file"
+    # Outside the branch: write_file_atomic leaves its mktemp 0600, and an
+    # unchanged file left that way by an interrupted run would otherwise never
+    # become readable to the container's nginx user.
     safe_chmod 644 "$config_file"
     fix_ownership "$data_dir"
-    log "Rendered Element Web config for $server"
 }
 
 main "$@"

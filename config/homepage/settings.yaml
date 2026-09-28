@@ -59,6 +59,10 @@ layout:
       style: row
       columns: 2
       icon: mdi-notebook-outline
+    Communication:
+      style: row
+      columns: 2
+      icon: mdi-chat
     Video:
       style: row
       columns: 2
