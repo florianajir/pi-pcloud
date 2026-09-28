@@ -167,7 +167,7 @@ services:
   # Network Stack
   headscale:
     <<: *service-defaults
-    image: headscale/headscale:v0.29.3
+    image: headscale/headscale:v0.29.4
     container_name: pi-headscale
     command: serve
     environment:
