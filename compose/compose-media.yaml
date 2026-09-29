@@ -581,7 +581,7 @@ services:
     <<: *service-defaults
     # No semver tags on ghcr (only `latest` and v.testing.*), so pin latest -
     # currently v2.17.2 - by digest.
-    image: ghcr.io/cedya77/aiometadata:latest@sha256:286c9203cad57e0b04a32fe58529374f3d927ae67902f2ff1a269bb34027d9cb
+    image: ghcr.io/cedya77/aiometadata:latest@sha256:686ef8b98ff3f76e48daa4021ad33bf3d859f64ab3ec1983fc1d7d665f483661
     container_name: pi-aiometadata
     profiles: ["aiometadata", "all"]
     networks:
