@@ -298,7 +298,7 @@ services:
   # Traefik router to the namespace, as stremio already does.
   aiostreams:
     <<: *service-defaults
-    image: ghcr.io/viren070/aiostreams:v2.35.3
+    image: ghcr.io/viren070/aiostreams:v2.35.4
     container_name: pi-aiostreams
     profiles: ["aiostreams", "all"]
     networks:
