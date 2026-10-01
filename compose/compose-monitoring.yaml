@@ -723,6 +723,13 @@ services:
       - ${DATA_LOCATION:-./data}/prowlarr:/userdata/prowlarr:ro
       - ${DATA_LOCATION:-./data}/kapowarr/db:/userdata/kapowarr-db:ro
       - ${DATA_LOCATION:-./data}/shelfmark:/userdata/shelfmark:ro
+      # The chat: uploaded files, and the RocksDB backup tuwunel-backup.timer
+      # has it write at 03:45 - never tuwunel_data, a live RocksDB copied file
+      # by file is not a database that restores. The plan re-includes the
+      # backup's WAL files after its blanket `*.log` exclusion: the backup's
+      # manifest lists them, so restoring without them fails verification.
+      - tuwunel_media:/userdata/tuwunel-media:ro
+      - tuwunel_backups:/userdata/tuwunel-backups:ro
       # The two Stremio addons. db.sqlite holds every saved addon configuration,
       # and losing it means every installed addon URL in the household stops
       # resolving. Both are WAL-mode and written while the snapshot runs, so

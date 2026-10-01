@@ -4,10 +4,10 @@ Open WebUI at `https://ai.<HOST_NAME>` is a full chat assistant running entirely
 
 The two hostnames say who they are for: `ai.` is the human UI, `llm.` is the gateway clients POST to. `llm.` used to be `agent.`, a synonym of `ai.` for the opposite kind of caller - a person on one, a client library on the other. The old name is gone with no redirect, so a stale bookmark gets Traefik's 404; only admins ever typed it.
 
-`chat.<HOST_NAME>` is **reserved and deliberately unused**: it is the name a
-human-to-human messaging service should get, and for everyone outside this
-repository "chat" means talking to people, not to a model. Nothing here may
-claim it.
+`chat.<HOST_NAME>` is not the AI's: it was held back for a human-to-human
+messaging service, because for everyone outside this repository "chat" means
+talking to people, not to a model. The family's Matrix chat (Tuwunel + Element,
+see [Architecture](ARCHITECTURE.md#what-each-service-is-for)) now lives there.
 
 | Piece | Role | Network |
 |-------|------|---------|

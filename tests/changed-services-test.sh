@@ -67,6 +67,11 @@ printf 'COMPOSE_PROFILES=kavita,ntfy\n' >"$WORK/.env"
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
 git -C "$WORK" init -q
+# Every commit below may start `git maintenance run --auto`, which detaches by
+# default and can still be writing into .git when the EXIT trap removes $WORK:
+# `rm -rf` then fails on a directory that refilled under it, and the test exits
+# non-zero with every assertion passed (CI, git 2.55).
+git -C "$WORK" config maintenance.auto false
 git -C "$WORK" add -A
 git -C "$WORK" commit -qm base
 

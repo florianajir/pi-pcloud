@@ -168,7 +168,7 @@ The group decides the check interval, the retry budget and the ntfy priority:
 | **Core** | traefik, authelia, lldap, postgres, redis, unbound, pihole, ddns-updater, ntfy, DNS resolution | 60 s | 5 (critical) | each monitor |
 | **Remote Access** | headscale, headplane, tailscale, gluetun, VPN public IP | 60 s | 4 (high) | each monitor |
 | **External Chain** | route checks, TLS certificate | 120 s | 4 (high) | each monitor |
-| **Personal Data** | immich, immich-ml, nextcloud, vaultwarden, kavita, audiobookshelf, freshrss, trilium, forgejo, changedetection, backrest, backup freshness | 120 s | 3 | each monitor |
+| **Personal Data** | immich, immich-ml, nextcloud, vaultwarden, kavita, audiobookshelf, freshrss, trilium, forgejo, tuwunel, element, changedetection, backrest, backup freshness | 120 s | 3 | each monitor |
 | **Media & Downloads** | qbittorrent, stremio, stremio-lan, aiostreams, aiometadata, stremthru, prowlarr, kapowarr, flaresolverr, shelfmark, route qbittorrent | 300 s | 2 (low) | the group only |
 | **Tools & Observability** | homepage, beszel, beszel-agent, dockhand, prometheus, grafana | 300 s | 2 (low) | the group only |
 | **Automation & AI** | n8n, n8n-runners, open-webui, llama-cpp, piper, searxng, agentgateway | 300 s | 2 (low) | the group only |
@@ -416,9 +416,9 @@ Two plans. `s3-backup` carries everything off-site; `usb-env` is a small local o
 | | |
 |---|---|
 | **Runs** | Nightly at 04:00 |
-| **Backs up** | `/userdata/` — Immich, Nextcloud (data, config, themes), LLDAP, Vaultwarden, Uptime Kuma, Authelia config and secrets, Beszel, Open WebUI, and the small unrecoverable state: Headscale (node keys, ACLs), Headplane, n8n, ntfy ACLs, Kavita, Pi-hole, Traefik's ACME certificates, qBittorrent, Prowlarr, Kapowarr, Shelfmark, Audiobookshelf, FreshRSS, Trilium, changedetection.io (watch list, settings and history snapshots), Forgejo (the bare repositories and LFS objects — the one mount here that is not a second copy of something, since a branch pushed only to this forge exists nowhere else) |
-| **Excludes** | Immich thumbnails, encoded video and model cache; Nextcloud previews and thumbnails; Open WebUI's model cache; Kavita's cache and its own backups; Pi-hole's query log, list cache and `gravity.db`; Prowlarr's log database; Shelfmark's cover cache; Audiobookshelf's `/metadata` (covers and cached art, which are not mounted at all); FreshRSS's article cache, favicons and per-user log; Forgejo's issue index, persistent queues, file sessions, generated repository archives, `tmp/` and log directory; Trilium's own rotating database copies (`backup/`), its `tmp/` and any anonymized debug copy — `sqlite-backup.sh` already takes a consistent one; every SQLite `-wal`/`-shm`; the stale pre-PostgreSQL `.db` stubs; `*.log` and rotations — all regenerable or replaced by a consistent copy |
-| **Databases** | Dumped by pre-snapshot hooks: `nextcloud` and `vaultwarden` (fatal on error), `authelia`, `lldap`, `open-webui`, `immich`, `freshrss`, `forgejo`. SQLite services get consistent copies from `scripts/sqlite-backup.sh` |
+| **Backs up** | `/userdata/` — Immich, Nextcloud (data, config, themes), LLDAP, Vaultwarden, Uptime Kuma, Authelia config and secrets, Beszel, Open WebUI, and the small unrecoverable state: Headscale (node keys, ACLs), Headplane, n8n, ntfy ACLs, Kavita, Pi-hole, Traefik's ACME certificates, qBittorrent, Prowlarr, Kapowarr, Shelfmark, Audiobookshelf, FreshRSS, Trilium, changedetection.io (watch list, settings and history snapshots), Forgejo (the bare repositories and LFS objects — the one mount here that is not a second copy of something, since a branch pushed only to this forge exists nowhere else), Tuwunel (uploaded files, and the RocksDB backup described below) |
+| **Excludes** | Immich thumbnails, encoded video and model cache; Nextcloud previews and thumbnails; Open WebUI's model cache; Kavita's cache and its own backups; Pi-hole's query log, list cache and `gravity.db`; Prowlarr's log database; Shelfmark's cover cache; Audiobookshelf's `/metadata` (covers and cached art, which are not mounted at all); FreshRSS's article cache, favicons and per-user log; Forgejo's issue index, persistent queues, file sessions, generated repository archives, `tmp/` and log directory; Trilium's own rotating database copies (`backup/`), its `tmp/` and any anonymized debug copy — `sqlite-backup.sh` already takes a consistent one; every SQLite `-wal`/`-shm`; the stale pre-PostgreSQL `.db` stubs; `*.log` and rotations — all regenerable or replaced by a consistent copy. One exception is re-included after that last pattern: `/userdata/tuwunel-backups/**`, whose RocksDB write-ahead logs are named `*.log` and are listed in the backup's own manifest |
+| **Databases** | Dumped by pre-snapshot hooks: `nextcloud` and `vaultwarden` (fatal on error), `authelia`, `lldap`, `open-webui`, `immich`, `freshrss`, `forgejo`. SQLite services get consistent copies from `scripts/sqlite-backup.sh`. Tuwunel's RocksDB is never read live: `tuwunel-backup.timer` sends it `SIGUSR2` at 03:45, which runs `server backup-database` into the `tuwunel_backups` volume (two kept, unchanged files shared between them), and that is what the 04:00 snapshot takes |
 | **Retention** | 7 daily, 4 weekly, 4 monthly |
 | **Maintenance** | Prune Sundays at 03:00 (25% unused); monthly integrity check that also re-reads 5% of the pack data; stale locks released before every run |
 | **Destination** | Your S3 bucket, restic-encrypted and deduplicated |
@@ -443,6 +443,20 @@ Pi-hole's `gravity.db` is excluded outright. 670k of its rows are block-list dom
 Services on PostgreSQL (nextcloud, authelia, lldap, open-webui, immich, vaultwarden) are covered by `scripts/db-backup.sh` instead and are deliberately absent from that list. Their leftover SQLite files — `lldap/users.db`, `nextcloud-data/owncloud.db`, `open-webui-data/webui.db`, last written before those services moved to PostgreSQL — are excluded too, because restoring one would be actively misleading.
 
 Restore those dumps **as the `postgres` superuser**, not as the service role: `config/postgres/init-databases.sh` grants each schema's default privileges as `postgres`, so the `ALTER DEFAULT PRIVILEGES` lines the dump carries are refused with `permission denied to change default privileges` when the service role replays its own dump. The dumps also open with a `\restrict` line, which only `psql` 17.6 and newer understands — use the client inside the Backrest container (`config/backrest/Dockerfile` pins it to the server major), not whatever `psql` the host happens to have.
+
+### Tuwunel's RocksDB
+
+The chat database is the one store here that is neither dumped nor copied by a hook: restic reading a live RocksDB file by file would capture SST files a compaction is deleting underneath it, and what that restores is not a database. Tuwunel takes the backup itself instead. `tuwunel-backup.timer`, installed by `make install-system`, sends `SIGUSR2` to `pi-tuwunel` at 03:45, and `TUWUNEL_ADMIN_SIGNAL_EXECUTE` turns that into `server backup-database` — a RocksDB BackupEngine backup into the `tuwunel_backups` volume, flushed first, keeping two and sharing unchanged files between them. The 04:00 snapshot takes that volume and `tuwunel_media` (the uploads); the live `tuwunel_data` is not mounted into backrest at all. The timer's `ExecCondition` skips it, rather than failing it, when the `tuwunel` profile is off.
+
+To restore, stop the server and run the binary once with `--restore-backup` against the same volumes — verified at v1.9.3 by wiping the live database and signing back in afterwards:
+
+```bash
+docker compose stop tuwunel
+docker compose run --rm --no-deps tuwunel --restore-backup --maintenance --execute "server shutdown"
+docker compose up -d tuwunel
+```
+
+`--restore-backup=<id>` picks another backup than the newest (`!admin server list-backups` in the admin room lists them). After an off-site restore, put `/userdata/tuwunel-backups` back into the `tuwunel_backups` volume and `/userdata/tuwunel-media` into `tuwunel_media` first. Restore replaces the files in `tuwunel_data`, so keep a copy of that volume if the one you are replacing may still be wanted.
 
 ### Three eyes on the same question
 

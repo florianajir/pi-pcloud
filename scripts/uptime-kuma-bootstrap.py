@@ -126,6 +126,8 @@ GROUPS = [
             # Beside the other two: a repository pushed only here has no second
             # copy anywhere, so an outage nobody notices is the expensive kind.
             "pi-forgejo",
+            "pi-tuwunel",
+            "pi-element",
             # Beside FreshRSS: down, it quietly stops watching, and what is lost
             # is a notification nobody knows to expect.
             "pi-changedetection",

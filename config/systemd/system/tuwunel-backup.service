@@ -1,0 +1,12 @@
+[Unit]
+Description=Tuwunel online database backup, for backrest's 04:00 snapshot
+After=docker.service pi-pcloud.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Skipped, not failed, when the tuwunel profile is off (see nextcloud-cron.service).
+ExecCondition=/bin/sh __PROJECT_PATH__/scripts/run-if-enabled.sh tuwunel
+# Tuwunel runs `server backup-database` on SIGUSR2 (TUWUNEL_ADMIN_SIGNAL_EXECUTE
+# in compose). backrest cannot send it: it has no Docker socket.
+ExecStart=/usr/bin/docker kill --signal=USR2 pi-tuwunel

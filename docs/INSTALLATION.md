@@ -89,7 +89,7 @@ Visit `https://auth.<HOST_NAME>` and sign in with an LLDAP account. Admin users 
 
 Everything is wired to SSO already — just visit it and you'll be redirected to the portal:
 
-`https://nextcloud.<HOST_NAME>` · `https://immich.<HOST_NAME>` · `https://vault.<HOST_NAME>` · `https://ai.<HOST_NAME>` · `https://llm.<HOST_NAME>/ui` · `https://beszel.<HOST_NAME>` · `https://uptime.<HOST_NAME>` · `https://n8n.<HOST_NAME>` · `https://dockhand.<HOST_NAME>`
+`https://nextcloud.<HOST_NAME>` · `https://immich.<HOST_NAME>` · `https://vault.<HOST_NAME>` · `https://ai.<HOST_NAME>` · `https://llm.<HOST_NAME>/ui` · `https://beszel.<HOST_NAME>` · `https://uptime.<HOST_NAME>` · `https://n8n.<HOST_NAME>` · `https://dockhand.<HOST_NAME>` · `https://chat.<HOST_NAME>`
 
 `https://homepage.<HOST_NAME>` is a dashboard listing all of them, with live widgets. The full list with its protection model is in [Security](SECURITY.md#per-service-protection).
 
@@ -181,6 +181,20 @@ Two things worth knowing:
   do not revoke it under **Settings → API Keys**. It is inside the directory Backrest
   snapshots, so a restore brings it back; [Troubleshooting](TROUBLESHOOTING.md#books-and-audiobooks)
   has the path back in if both copies are gone.
+
+### 7. Chat — sign in yourself first
+
+The first account to sign in to `https://chat.<HOST_NAME>` becomes the Matrix server's
+admin (Tuwunel's `grant_admin_to_first_user`) and is joined to its admin room, where
+`!admin` commands run. So sign in before anyone else does, with your own LLDAP account.
+
+- **Accounts are created on the first SSO sign-in**, named after the LLDAP uid
+  (`@alice:chat.<HOST_NAME>`). That suffix is the server name, and it is permanent: a
+  database created under one `HOST_NAME` cannot move to another.
+- **On a phone, use Element X** and type `chat.<HOST_NAME>` as the server. It signs in
+  through Tuwunel's own OAuth server, which hands over to Authelia. Like every LAN-only
+  service here, it only connects over the LAN or the tailnet.
+- **Nobody outside this server can join a room or message one** — federation is off.
 
 ## Next steps
 

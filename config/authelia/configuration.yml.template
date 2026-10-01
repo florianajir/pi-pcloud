@@ -638,6 +638,36 @@ __OIDC_PRIVATE_KEY__
         # from the UserInfo response, which it parses as plain JSON.
         userinfo_signed_response_alg: none
 
+      - client_id: tuwunel
+        client_name: Chat
+        client_secret: '{{ secret "/config/secrets/oidc_tuwunel_secret_hash" }}'
+        public: false
+        authorization_policy: one_factor
+        consent_mode: implicit
+        # The one callback for both flows Tuwunel brokers here: Element Web's
+        # legacy SSO and Element X's next-gen auth, whose OAuth server is
+        # Tuwunel itself. `tuwunel` is the provider's client_id in compose,
+        # which Tuwunel also uses as the path segment.
+        redirect_uris:
+          - 'https://chat.__HOST_NAME__/_matrix/client/unstable/login/sso/callback/tuwunel'
+        # Observed at v1.9.3: the authorize request carries an S256 challenge.
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        # Tuwunel's own default scope set. No `groups`: nothing reads it - the
+        # server admin is whoever signs in first (grant_admin_to_first_user),
+        # and the localpart comes from preferred_username in `profile`.
+        scopes:
+          - openid
+          - profile
+          - email
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+        # What Tuwunel's own Authelia guide registers
+        # (docs/authentication/providers/authelia.md).
+        token_endpoint_auth_method: client_secret_post
+
       - client_id: grafana
         client_name: Grafana
         client_secret: '{{ secret "/config/secrets/oidc_grafana_secret_hash" }}'
