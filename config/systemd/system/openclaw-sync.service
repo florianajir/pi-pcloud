@@ -1,0 +1,12 @@
+[Unit]
+Description=Push the family assistant's memory to Forgejo and refresh its knowledge base
+After=docker.service pi-pcloud.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Skipped, not failed, when the openclaw profile is off (see nextcloud-cron.service).
+ExecCondition=/bin/sh __PROJECT_PATH__/scripts/run-if-enabled.sh openclaw
+# On the host, not in the agent's container: the Forgejo token is mounted into
+# nothing but the throwaway container this script starts.
+ExecStart=/usr/bin/python3 __PROJECT_PATH__/scripts/openclaw-sync.py

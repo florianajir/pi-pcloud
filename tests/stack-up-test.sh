@@ -71,8 +71,8 @@ write_stubs() {
 # later is covered without touching this test.
 
 declared="$(hook_entries | sed 's/.*://' | sort -u)"
-for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*-bootstrap.sh \
-             "$REPO_DIR"/scripts/*-bootstrap.py; do
+for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*-pre-start.py \
+             "$REPO_DIR"/scripts/*-bootstrap.sh "$REPO_DIR"/scripts/*-bootstrap.py; do
     name="$(basename "$path")"
 
     # A .py that runs somewhere other than the host is declared through its
@@ -107,8 +107,8 @@ done
 # safe_chmod is the signal because it is lib.sh's host-path helper: a bootstrap
 # that writes inside a container (shelfmark's, through `docker exec`) chowns to
 # the service's own uid instead and must not appear here.
-for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*bootstrap.sh \
-             "$REPO_DIR"/scripts/*bootstrap.py; do
+for path in "$REPO_DIR"/scripts/*-pre-start.sh "$REPO_DIR"/scripts/*-pre-start.py \
+             "$REPO_DIR"/scripts/*bootstrap.sh "$REPO_DIR"/scripts/*bootstrap.py; do
     grep -qE 'safe_chmod[ (](0o)?6[0-7][0-7]' "$path" || continue
     name="$(basename "$path")"
     if grep -q 'fix_ownership' "$path"; then

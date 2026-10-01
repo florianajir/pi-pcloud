@@ -187,6 +187,48 @@ routes:
             custom:
               formats:
                 - type: completions
+  # The family assistant's one model (compose/compose-ai.yaml, openclaw). A
+  # route of its own rather than an llm: virtualModel, for two reasons measured
+  # on v1.5.0: every llm: model is listed on /v1/models, so Open WebUI would
+  # offer it to everyone, and a `failover` virtualModel does not retry the next
+  # target on a 429, 413 or 503 anyway - it is an alias, which this is too.
+  #
+  # The key below is valid here and nowhere else, and `overrides` replaces
+  # whatever model the client names, so OpenClaw asks for `assistant` and
+  # changing the model or the provider is an edit to this block alone.
+  - name: assistant
+    gateways: default
+    matches:
+      - path:
+          pathPrefix: /assistant/v1
+    policies:
+      urlRewrite:
+        path:
+          prefix: /
+      apiKey:
+        mode: strict
+        keys:
+          - key: ${OPENCLAW_LLM_KEY}
+            metadata:
+              user: openclaw
+      backendTLS:
+        hostname: api.groq.com
+      backendAuth:
+        key: ${GROQ_API_KEY}
+      ai:
+        overrides:
+          model: openai/gpt-oss-120b
+        routes:
+          /chat/completions: completions
+    backends:
+      - ai:
+          name: assistant
+          hostOverride: api.groq.com:443
+          pathPrefix: /openai/v1
+          provider:
+            custom:
+              formats:
+                - type: completions
 mcp:
   gateways: default
   policies:

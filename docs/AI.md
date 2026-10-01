@@ -18,6 +18,7 @@ see [Architecture](ARCHITECTURE.md#what-each-service-is-for)) now lives there.
 | `parakeet` | Speech-to-text | `ai` |
 | `system-tools` | OpenAPI tool server answering questions about the host | `ai`, `frontend` |
 | `searxng` | Metasearch engine behind the chat's web search | `ai`, `frontend` |
+| `openclaw` | The family assistant, `@assistant` in the Matrix chat — [below](#the-family-assistant-openclaw) | `ai`, `assistant` |
 
 Everything without `frontend` sits on the internal `ai` network with no route to the internet.
 
@@ -128,6 +129,7 @@ each surface has to gate itself:
 | `/ui` | `ui.policies.oidc` | Authelia, `admin_only` — the `admin` group with 2FA |
 | `/v1` | `llm.policies.apiKey`, `mode: strict` | 401 without a key |
 | `/groq/v1`, `/openrouter/v1` | each route's own `policies.apiKey` | 401 without a key |
+| `/assistant/v1` | its own `policies.apiKey`, OpenClaw's key alone | 401 for every other key, Open WebUI's included |
 | `/mcp` | `mcp.policies.apiKey`, `mode: strict` | 401 without a key — a *different* key from `/v1`'s |
 
 The third row repeats the second rather than inheriting it: `llm.policies.apiKey`
@@ -299,6 +301,114 @@ discover them.
 - **Environment expansion runs over the raw file, comments included.** A dollar-brace reference written
   in a comment as an example is looked up like any other and fails the start with
   `error looking key '…' up`.
+
+## The family assistant (OpenClaw)
+
+`@assistant:chat.<HOST_NAME>` is a bot account on the family's Matrix server. Anyone in LLDAP can
+open a direct chat with it from Element Web or Element X; encrypted DMs work, because the bot runs
+end-to-end encryption itself. Behind it is [OpenClaw](https://github.com/openclaw/openclaw), chosen
+over Hermes and Goose for its background capabilities (heartbeat, scheduled jobs, memory
+consolidation), all of which are switched **off** for now. The PR that added it carries the full
+vetting: release line, measurements, and the advisories it was checked against.
+
+| Piece | Where |
+|-------|-------|
+| The gateway and its agents | `openclaw` in `compose/compose-ai.yaml`, config rendered by `scripts/openclaw-pre-start.py` |
+| Plugin, bot account, people, Forgejo side | `scripts/openclaw-bootstrap.py` (post-start) |
+| Memory and knowledge base in Forgejo | `scripts/openclaw-sync.py`, every quarter hour by `openclaw-sync.timer` |
+| The model | agentgateway's `/assistant/v1` route |
+| What the agents know about the knowledge base | `config/openclaw/skills/household-knowledge/SKILL.md` |
+
+### One agent per person
+
+Every LLDAP account except the service accounts (`lldap_strict_readonly`, `lldap_password_manager`)
+gets an agent of its own, with its own workspace (`MEMORY.md`, `memory/`), bound to that person's
+Matrix ID. That account list is also the DM allowlist, and every room is ignored. A shared agent was
+measured and rejected: OpenClaw injects the workspace's `MEMORY.md` into every DM session, so with one
+agent, Bob's context carried what Alice had asked it to remember — and the upstream trust model
+treats anyone allowed to DM a gateway as able to steer it, so isolation is per agent or not at all.
+
+The list is read from LLDAP at post-start, cached in `${DATA_LOCATION}/openclaw/people.json`, and the
+gateway is restarted when it changes. A new family member therefore gets an assistant at the next
+`make update` or reboot, not the moment their account exists.
+
+### Isolated rather than sandboxed
+
+OpenClaw's own sandbox runs tools in sibling containers through a container-engine socket (Docker,
+Podman), or on a separate host over SSH. Neither belongs here, so the boundary is drawn the other way:
+
+- **No tool that executes, browses or fetches.** `tools.deny` removes the runtime, browser, web,
+  automation and node groups; `exec` is `deny`; the file tools are confined to the agent's own
+  workspace. What is left is reading and writing its notes, memory search and the reply.
+- **No route out.** The container sits on `ai` (agentgateway) and `assistant` (Tuwunel, Forgejo),
+  both internal. A prompt injection has nowhere to send what it finds.
+- **A config the agent cannot change.** The JSON is mounted read-only with `OPENCLAW_CONFIG_READONLY`,
+  which closes the "model edits its own config" class of advisory.
+- **No inbound surface.** The gateway binds loopback inside its container, behind a token, with the
+  Control UI and the terminal off. There is no Traefik router.
+
+The image's own entrypoint is bypassed: it runs `openclaw doctor --fix` before every start, which
+refreshes plugins from npm, and which exits 1 against a read-only config. The bootstrap installs the
+Matrix plugin instead, pinned to the image's version, from a throwaway container — the only moment
+anything of this service reaches the internet — together with the native crypto binding the plugin
+would otherwise download at runtime.
+
+### The model behind `assistant`
+
+OpenClaw asks agentgateway for a model called `assistant`, on `/assistant/v1`. That route accepts
+OpenClaw's key and no other, and `overrides` replaces the model name with the real one, so switching
+models or providers is an edit to that one block of `config/agentgateway/config.yaml` and a
+`docker compose up -d agentgateway` — nothing in OpenClaw changes. It is a route rather than an
+`llm:` virtual model for two reasons, both measured on v1.5.0: every `llm:` model shows up on
+`/v1/models`, so Open WebUI would offer it to the whole family; and a `failover` virtual model does not
+fall through to its next target on a 429, 413 or 503, so it would not have bought a fallback anyway.
+
+**Groq's free tier cannot carry it.** A turn is not the message: it is OpenClaw's instructions, the
+tool schemas and the injected workspace files, about 9,900 tokens before anyone has said anything —
+and Groq's free tier allows 8,000 tokens per minute for `openai/gpt-oss-120b`, so the very first request
+comes back `413 Request too large … tokens per minute`, which OpenClaw reports as a context overflow.
+The route still points at Groq. Moving it to OpenRouter is the same block with `hostOverride:
+openrouter.ai:443`, `pathPrefix: /api/v1`, `backendTLS.hostname: openrouter.ai` and
+`${OPENROUTER_API_KEY}`, plus `defaults: {max_tokens: 8192}` for the reason the `/openrouter/v1` route
+gives; with that account's privacy settings, Zero Data Retention can be enforced for every request.
+
+### Memory and knowledge in Forgejo
+
+When Forgejo runs, the bootstrap creates a local, *restricted* user `assistant` and two private
+repositories owned by the stack owner — `ADMIN_USER` if that account exists in Forgejo, otherwise the
+one Forgejo administrator — with the bot as a write collaborator on both and on nothing else:
+
+- **`assistant-memory`**: each person's workspace on its own branch, committed and pushed directly.
+  Every branch is protected against force-push, so an agent's history cannot be rewritten away.
+  Edits the owner makes on a person's branch are merged back at the next sync, and win where both
+  sides changed the same lines.
+- **`knowledge`**: the curated knowledge base. `main` takes pushes from the owner and nothing else,
+  and needs one approval. A read-only export sits beside the workspaces, where every agent's memory
+  search indexes it. An agent proposes a change by writing files under `knowledge-proposals/` in its
+  workspace; the sync turns that into one pull request per person (an AGit push to `refs/for/main`,
+  updated in place while it is open), and empties the folder once the pull request is merged or closed.
+
+All of that is `scripts/openclaw-sync.py`, never the agent: the Forgejo token is mounted into nothing
+but the throwaway container the timer starts, its git directories live outside the workspaces, and its
+git runs with hooks disabled, so nothing an agent writes is ever executed. Until Forgejo runs, the
+memory simply stays in the `openclaw_state` volume, which Backrest snapshots either way.
+
+### Operating it
+
+- **The bot account** is created through Tuwunel's shared-secret endpoint, with the password in
+  `${DATA_LOCATION}/openclaw/secrets/openclaw.json`. If that file is lost, the account still exists
+  but no longer accepts the new password, and the bootstrap stops with a message saying so. Reset
+  the password from Tuwunel's admin room (`!admin users reset-password assistant`), then put it in
+  `matrixPassword` and restart `openclaw`.
+- **Encryption**: the bootstrap creates a server-side room-key backup for the bot's device the first
+  time. A crypto store lost to an unclean shutdown (upstream issue #158784) is then restorable with
+  `openclaw matrix verify backup restore`, rather than leaving every encrypted DM unreadable.
+- **The CLI** runs inside the container: `docker exec pi-openclaw node openclaw.mjs channels status`,
+  `… agents list`, `… matrix verify status`. Each call is a second Node process in the same cgroup —
+  about 400 MiB — which is why `mem_limit` is above what the gateway alone measured.
+- **Upgrades** follow the image: the bootstrap reinstalls the plugin whenever the image's version
+  changes, with the gateway stopped during the install, since two OpenClaw processes on one state
+  database contend for its leases.
 
 ## How Open WebUI is wired
 

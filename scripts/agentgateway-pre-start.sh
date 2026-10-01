@@ -30,7 +30,7 @@ main() {
     local data_dir="" secrets_dir="" cookie_file="" key_file="" agent_key_file=""
     local client_secret="" cookie_secret="" llm_api_key="" agent_api_key=""
     local trilium_key_file="" mcp_key_file="" trilium_llm_key="" mcp_api_key=""
-    local trilium_etapi_token=""
+    local trilium_etapi_token="" openclaw_key_file="" openclaw_llm_key=""
 
     data_dir="$(resolve_data_location_path)/agentgateway"
     secrets_dir="$data_dir/secrets"
@@ -39,6 +39,7 @@ main() {
     agent_key_file="$secrets_dir/agent_api_key"
     trilium_key_file="$secrets_dir/trilium_llm_key"
     mcp_key_file="$secrets_dir/mcp_api_key"
+    openclaw_key_file="$secrets_dir/openclaw_llm_key"
 
     mkdir -p "$secrets_dir"
     safe_chmod 700 "$secrets_dir"
@@ -90,6 +91,15 @@ main() {
         safe_chmod 600 "$mcp_key_file"
         log "Generated the agentgateway MCP API key"
     fi
+    # The assistant's credential, valid on its /assistant/v1 route and nowhere
+    # else: whatever a prompt talks the agent into, this key reaches one model.
+    # scripts/openclaw-pre-start.py hands it to OpenClaw.
+    if [ ! -s "$openclaw_key_file" ]; then
+        write_file_atomic "$openclaw_key_file" generate_secret \
+            || die "Failed to generate the OpenClaw LLM API key"
+        safe_chmod 600 "$openclaw_key_file"
+        log "Generated the OpenClaw LLM API key"
+    fi
     # -R, and after the writes: a root-run systemd boot leaves both a 0700
     # directory the next non-root run cannot mktemp in and 0600 files it cannot
     # read, and this is a blocking pre-start hook.
@@ -100,6 +110,7 @@ main() {
     agent_api_key="sk-$(cat "$agent_key_file")"
     trilium_llm_key="sk-$(cat "$trilium_key_file")"
     mcp_api_key="sk-$(cat "$mcp_key_file")"
+    openclaw_llm_key="sk-$(cat "$openclaw_key_file")"
 
     # Minted post-start by scripts/trilium-bootstrap.sh, which re-runs this
     # hook and recreates agentgateway once it holds the real one - so the gap
@@ -118,9 +129,9 @@ main() {
     fi
 
     mkdir -p "$AGW_ENV_DIR"
-    printf 'OIDC_COOKIE_SECRET=%s\nUI_CLIENT_SECRET=%s\nLLM_API_KEY=%s\nAGENT_API_KEY=%s\nTRILIUM_LLM_KEY=%s\nMCP_API_KEY=%s\nTRILIUM_ETAPI_TOKEN=%s\n' \
+    printf 'OIDC_COOKIE_SECRET=%s\nUI_CLIENT_SECRET=%s\nLLM_API_KEY=%s\nAGENT_API_KEY=%s\nTRILIUM_LLM_KEY=%s\nMCP_API_KEY=%s\nTRILIUM_ETAPI_TOKEN=%s\nOPENCLAW_LLM_KEY=%s\n' \
         "$cookie_secret" "$client_secret" "$llm_api_key" "$agent_api_key" \
-        "$trilium_llm_key" "$mcp_api_key" "$trilium_etapi_token" \
+        "$trilium_llm_key" "$mcp_api_key" "$trilium_etapi_token" "$openclaw_llm_key" \
         | write_secret_file "$AGW_ENV_FILE" \
         || die "Failed to write $AGW_ENV_FILE"
     safe_chmod 600 "$AGW_ENV_FILE"

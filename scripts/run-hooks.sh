@@ -72,8 +72,8 @@ vaultwarden:vaultwarden-pre-start.sh
 freshrss:freshrss-pre-start.sh
 searxng,open-webui:searxng-pre-start.sh
 trilium:trilium-pre-start.sh
-tuwunel:tuwunel-pre-start.sh
-element,tuwunel:element-pre-start.sh
+tuwunel,openclaw:tuwunel-pre-start.sh
+element,tuwunel,openclaw:element-pre-start.sh
 qbittorrent:qbittorrent-pre-start.sh
 prowlarr:prowlarr-pre-start.sh
 kapowarr:kapowarr-pre-start.sh
@@ -82,7 +82,8 @@ shelfmark:shelfmark-pre-start.sh
 audiobookshelf:audiobookshelf-pre-start.sh
 nextcloud:nextcloud-pre-start.sh
 llama-cpp:llama-cpp-pre-start.sh
-agentgateway,open-webui:agentgateway-pre-start.sh
+agentgateway,open-webui,openclaw:agentgateway-pre-start.sh
+openclaw:openclaw-pre-start.py
 stremio-lan:stremio-lan-pre-start.sh
 aiostreams:aiostreams-pre-start.sh
 aiometadata:aiometadata-pre-start.sh
@@ -108,6 +109,7 @@ shelfmark:shelfmark-settings-bootstrap.sh
 audiobookshelf:audiobookshelf-bootstrap.sh
 open-webui:open-webui-bootstrap.sh
 trilium:trilium-bootstrap.sh
+openclaw:openclaw-bootstrap.py
 changedetection:changedetection-bootstrap.sh
 homepage-widgets-bootstrap.sh
 '

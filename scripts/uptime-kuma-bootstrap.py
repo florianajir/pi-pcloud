@@ -194,6 +194,9 @@ GROUPS = [
             "pi-searxng",
             # agentgateway's only check: distroless, so it has no healthcheck.
             "pi-agentgateway",
+            # Low, like the chat models: what it holds is pushed to Forgejo, and
+            # an outage is an unanswered message, not lost data.
+            "pi-openclaw",
         ],
     },
     {

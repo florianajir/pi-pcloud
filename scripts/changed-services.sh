@@ -83,7 +83,7 @@ PER_INVOCATION='db-backup.sh sqlite-backup.sh'
 # rotate-password.sh and rotate-secret.sh do rewrite secrets containers read -
 # but only when *run*, and they restart what they touch themselves. Editing
 # their code changes nothing about a stack nobody has re-run them on.
-# wan-allowlist-sync.sh is the same shape, on a timer.
+# wan-allowlist-sync.sh and openclaw-sync.py are the same shape, on a timer.
 #
 # authelia-ntfy-watch.sh carries a service's name but is not its config: it runs
 # on the host as pi-pcloud-authelia-ntfy.service, which `make update` restarts
@@ -100,7 +100,8 @@ PER_INVOCATION='db-backup.sh sqlite-backup.sh'
 HOST_ONLY='api-keys.sh authelia-ntfy-watch.sh changed-services.sh
 configure-kernel-params.sh configure-swap.sh lint.sh pg-major-upgrade.sh
 pi-pcloud ram-usage.sh recovery-kit.sh rotate-password.sh rotate-secret.sh
-sarif-merge.py services.sh services-picker.py wan-allowlist-sync.sh'
+sarif-merge.py services.sh services-picker.py wan-allowlist-sync.sh
+openclaw-sync.py'
 
 # config/ files a container reads only while it initialises for the first time,
 # spelled as the path under config/. config/postgres/init-databases.sh is
