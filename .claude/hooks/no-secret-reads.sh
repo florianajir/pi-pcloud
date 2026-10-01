@@ -101,7 +101,8 @@ fi
 # Anything that prints file content. sed/awk/grep/jq are in here deliberately:
 # a targeted extraction is exactly how the Kavita TokenKey leaked - the redaction
 # keyed on the wrong field name, matched nothing, and printed the file whole.
-READERS="$READER_LEAD"'(cat|bat|tac|nl|less|more|head|tail|strings|xxd|od|base64|sed|awk|grep|egrep|rg|jq|yq|dd|tee|php|node|python3?)([ \t]|$)'
+READER_WORDS='(cat|bat|tac|nl|less|more|head|tail|strings|xxd|od|base64|sed|awk|grep|egrep|rg|jq|yq|dd|tee|php|node|python3?)'
+READERS="$READER_LEAD$READER_WORDS"'([ \t]|$)'
 
 # Paths that hold real secrets. The `.template` and `.dist` forms are
 # deliberately NOT matched - they carry placeholders, and reading them is how
@@ -124,8 +125,49 @@ strip_doc_paths() {
     sed -E 's#[^[:space:];&|()"'"'"']*\.(md|markdown)([[:space:];&|)"'"'"']|$)#\2#g'
 }
 
+# A recursive reader names no secret path, so everything above sees only a
+# directory: `grep -rn trilium config/agentgateway/` printed agentgateway.env's
+# values on 2026-10-01. A reader that walks a tree must therefore say what it
+# leaves out, and *.env alone is not enough - config/homepage/secrets/ holds API
+# keys with no extension at all. GNU grep's --exclude-dir also applies to a
+# directory given on the command line, so naming a secrets/ dir directly is
+# covered by the same exclusion.
+RECURSIVE_READERS="$READER_LEAD"'((grep|egrep|fgrep)([ \t]+[^;&|]*)?[ \t]+(-[A-Za-z0-9]*[rR][A-Za-z0-9]*|--recursive|--dereference-recursive|--directories=recurse|-d[ \t]*recurse)([ \t]|$)|rg([ \t]|$)|find[ \t][^;&|]*[ \t]-(exec|execdir|ok|okdir)[ \t]+([^;&|]*[ \t'"'"'"])?'"$READER_WORDS"'([ \t]|$)|find[ \t][^;&]*\|[ \t]*xargs([ \t]+[^;&|]*)?[ \t]+'"$READER_WORDS"'([ \t]|$))'
+
+QUOTE='['"'"'"]?'
+ENV_EXCLUDED='(--exclude(=|[ \t]+)'"$QUOTE"'|(-g|--glob|--iglob)(=|[ \t]+)'"$QUOTE"'!|(!|\\!|-not)[ \t]+-i?name[ \t]+'"$QUOTE"')\\?\*\.env'"$QUOTE"'([ \t;&|)]|$)'
+SECRET_DIRS_EXCLUDED='(--exclude-dir(=|[ \t]+)'"$QUOTE"'secrets|(-g|--glob|--iglob)(=|[ \t]+)'"$QUOTE"'!(\*\*/)?secrets(/\*\*)?/?|(!|\\!|-not)[ \t]+-path[ \t]+'"$QUOTE"'\*/secrets(/\*)?|-path[ \t]+'"$QUOTE"'\*/secrets'"$QUOTE"'[ \t]+-prune)'"$QUOTE"'([ \t;&|)]|$)'
+
+# Rendered configs under the data directory carry secrets inline (Authelia's
+# configuration.yml, Backrest's config.json), with no extension to exclude.
+DATA_PATHS='(^|[ \t'"'"'"=])(\./)?data/|/mnt/|DATA_LOCATION|/var/lib/docker/'
+
+# git grep searches tracked files only, and every secret here is gitignored, so
+# it is renamed out of the way rather than matched as a reader. The tokens in
+# between exclude command separators: `git status; grep -r ...` must still be
+# seen as a grep.
+without_git_grep() {
+    sed -E 's/(^|[^[:alnum:]_-])git([[:space:]]+[^[:space:];&|()]+)*[[:space:]]+grep/\1git-grep/g'
+}
+
+# The exclusions themselves spell `*.env` and `*/secrets/*`, which the SECRETS
+# test would otherwise take for the very reads they prevent.
+strip_exclusions() {
+    sed -E "s#$ENV_EXCLUDED# #g; s#$SECRET_DIRS_EXCLUDED# #g"
+}
+
+if printf '%s\n' "$cmd" | without_git_grep | grep -qE "$RECURSIVE_READERS"; then
+    if printf '%s' "$cmd" | grep -qE "$DATA_PATHS"; then
+        deny 'A recursive read over the data directory reaches rendered configs that carry secrets inline. Name the files, or use git grep for tracked files.'
+    fi
+    if ! { printf '%s' "$cmd" | grep -qE "$ENV_EXCLUDED" \
+        && printf '%s' "$cmd" | grep -qE "$SECRET_DIRS_EXCLUDED"; }; then
+        deny "A recursive reader walks into .env files and secrets/ directories that no path in the command names. Exclude both (grep --exclude='*.env' --exclude-dir=secrets; rg -g '!*.env' -g '!secrets'; find ! -name '*.env' ! -path '*/secrets/*'), or use git grep for tracked files."
+    fi
+fi
+
 if printf '%s' "$cmd" | grep -qE "$READERS" \
-    && printf '%s\n' "$cmd" | strip_doc_paths | grep -qE "$SECRETS"; then
+    && printf '%s\n' "$cmd" | strip_doc_paths | strip_exclusions | grep -qE "$SECRETS"; then
     deny 'This command reads a file that holds real secrets.'
 fi
 
