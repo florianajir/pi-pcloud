@@ -395,11 +395,11 @@ memory simply stays in the `openclaw_state` volume, which Backrest snapshots eit
 
 ### Operating it
 
-- **The bot account** is created through Tuwunel's shared-secret endpoint, with the password in
-  `${DATA_LOCATION}/openclaw/secrets/openclaw.json`. If that file is lost, the account still exists
-  but no longer accepts the new password, and the bootstrap stops with a message saying so. Reset
-  the password from Tuwunel's admin room (`!admin users reset-password assistant`), then put it in
-  `matrixPassword` and restart `openclaw`.
+- **The bot account** is created through Tuwunel's shared-secret endpoint, with the password
+  `OPENCLAW_MATRIX_PASSWORD` in `config/openclaw/openclaw.env`. If that file is lost, the account
+  still exists but no longer accepts the new password, and the bootstrap stops with a message saying
+  so. Reset the password from Tuwunel's admin room (`!admin users reset-password assistant`), put it
+  in that variable, and `docker compose up -d openclaw` — an `env_file` is read at container creation.
 - **Encryption**: the bootstrap creates a server-side room-key backup for the bot's device the first
   time. A crypto store lost to an unclean shutdown (upstream issue #158784) is then restorable with
   `openclaw matrix verify backup restore`, rather than leaving every encrypted DM unreadable.

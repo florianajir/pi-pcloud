@@ -50,7 +50,7 @@ PROVISIONING_TOKEN = "assistant-provisioning"
 # The shared-secret registration MAC covers the account's admin flag, spelled
 # as one of two fixed words (Synapse's protocol, which Tuwunel implements).
 REGISTER_AS_USER = b"notadmin"
-# The image's `node` user, the same uid openclaw-pre-start.py pins.
+# The image's `node` user, which the state volume's files belong to.
 CONTAINER_UID = 1000
 
 # Every generation of the plugin's install: a reinstall writes a sibling
@@ -98,12 +98,12 @@ def data_dir():
     return resolve_data_location_path() / "openclaw"
 
 
-def read_secrets():
-    path = data_dir() / "secrets" / "openclaw.json"
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        die(f"cannot read {path} ({exc}); openclaw-pre-start.py has not run")
+def matrix_password():
+    path = pilib.PROJECT_DIR / "config" / "openclaw" / "openclaw.env"
+    value = pilib.read_env_value_from_file(path, "OPENCLAW_MATRIX_PASSWORD")
+    if not value:
+        die(f"no OPENCLAW_MATRIX_PASSWORD in {path}; openclaw-pre-start.py has not run")
+    return value
 
 
 # --- 1. The Matrix plugin ---
@@ -217,8 +217,8 @@ def ensure_bot_account(server_name, password):
         # whether that existing account is ours.
         if not matrix_login_works(user_id, password):
             die(
-                f"{user_id} exists but does not accept the password in "
-                f"{data_dir() / 'secrets' / 'openclaw.json'}; see docs/AI.md (assistant account)"
+                f"{user_id} exists but does not accept OPENCLAW_MATRIX_PASSWORD from "
+                "config/openclaw/openclaw.env; see docs/AI.md (Operating it)"
             )
 
     pilib.write_file_atomic(marker, user_id + "\n")
@@ -483,7 +483,7 @@ def main():
     # changes after it calls for the restart at the end.
     if ensure_plugin() and docker("start", CONTAINER).returncode != 0:
         die(f"could not start {CONTAINER} after the plugin install")
-    restart = ensure_bot_account(f"chat.{host_name}", read_secrets()["matrixPassword"])
+    restart = ensure_bot_account(f"chat.{host_name}", matrix_password())
     restart = sync_people() or restart
     ensure_forgejo(host_name)
     if not restart:

@@ -380,10 +380,12 @@ distroless — no shell — so the `export $(cat …)` entrypoint the other serv
 an `env_file` is. Those values are frozen at container creation: pick a change up with
 `docker compose up -d agentgateway`, not `restart`.
 
-The assistant keeps its own under `${DATA_LOCATION}/openclaw/secrets/`, owned by uid 1000 because
-OpenClaw's file secret provider refuses a file another uid owns. `openclaw.json` there holds the
-gateway token, the bot's Matrix password and a copy of `openclaw_llm_key`, written by
-`scripts/openclaw-pre-start.py` and mounted read-only. `forgejo_token` beside it is the bot's
+The assistant keeps its own in `config/openclaw/openclaw.env` (mode `600`, gitignored): the gateway
+token, the bot's Matrix password and a copy of `openclaw_llm_key`, written by
+`scripts/openclaw-pre-start.py`. An `env_file` rather than a mounted secrets file, because OpenClaw's
+file provider refuses a file another uid owns, and a hook not run as root cannot chown one to the
+container's; its config resolves the three through an `env` provider whose allowlist names exactly
+those. `${DATA_LOCATION}/openclaw/secrets/forgejo_token` is the bot's
 `write:repository` token for its two repositories, minted by `scripts/openclaw-bootstrap.py` and
 mounted into nothing but the throwaway container `openclaw-sync.timer` starts: the agent never holds
 a Forgejo credential. Provisioning the repositories needs the owner's rights once, so the bootstrap

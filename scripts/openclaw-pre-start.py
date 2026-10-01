@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-start for OpenClaw, the family assistant: its secrets and its whole config.
+"""Pre-start for OpenClaw, the family assistant: its env_file and its whole config.
 
 OpenClaw reads one JSON config, mounted read-only (OPENCLAW_CONFIG_READONLY in
 compose), so everything the gateway does is decided here and nothing a model
@@ -25,45 +25,47 @@ generates the key this hands over. Idempotent.
 """
 
 import json
-import os
 import secrets
 
-from pilib import die, fix_ownership, get_env_value, log, resolve_data_location_path, safe_chmod, write_file_atomic
-
-# The image runs as `node`, and OpenClaw's file secret provider refuses a file
-# another uid owns - the same pin agentgateway-pre-start.sh makes for its data.
-CONTAINER_UID = 1000
-CONTAINER_GID = 1000
+from pilib import (
+    PROJECT_DIR,
+    die,
+    fix_ownership,
+    get_env_value,
+    log,
+    read_env_value_from_file,
+    resolve_data_location_path,
+    safe_chmod,
+    write_file_atomic,
+)
 
 STATE_DIR = "/home/node/.openclaw"
-SECRETS_IN_CONTAINER = "/run/secrets/openclaw.json"
 BOT_LOCALPART = "assistant"
 
+# An env_file, read by the Docker daemon, rather than a mounted secrets file:
+# OpenClaw's file provider refuses a file another uid owns, and a hook run by
+# anyone but root - CI's runner, a non-root `make update` - cannot chown one to
+# the container's uid. Same shape and same trade as agentgateway.env.
+ENV_FILE = PROJECT_DIR / "config" / "openclaw" / "openclaw.env"
+GATEWAY_TOKEN = "OPENCLAW_GATEWAY_TOKEN"
+MATRIX_PASSWORD = "OPENCLAW_MATRIX_PASSWORD"
+LLM_KEY = "OPENCLAW_LLM_KEY"
 
-def secret_ref(pointer):
-    return {"source": "file", "provider": "pi", "id": pointer}
+
+def secret_ref(name):
+    return {"source": "env", "provider": "pi", "id": name}
 
 
-def ensure_secrets(data_dir):
+def ensure_env_file():
     """The gateway token and the bot's Matrix password are minted once and kept;
     the LLM key is copied from agentgateway's on every run, so a rotation there
-    reaches the assistant at the next start."""
-    secrets_dir = data_dir / "secrets"
-    secrets_dir.mkdir(parents=True, exist_ok=True)
-    safe_chmod(0o700, secrets_dir)
-    secrets_file = secrets_dir / "openclaw.json"
-    if secrets_file.is_dir():
+    reaches the assistant at the next `up -d` (env_file values are frozen at
+    container creation)."""
+    if ENV_FILE.is_dir():
         try:
-            secrets_file.rmdir()
+            ENV_FILE.rmdir()
         except OSError:
-            die(f"{secrets_file} is a non-empty directory; remove it by hand")
-
-    current = {}
-    if secrets_file.is_file():
-        try:
-            current = json.loads(secrets_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            die(f"cannot read {secrets_file}: {exc}")
+            die(f"{ENV_FILE} is a non-empty directory; remove it by hand")
 
     key_file = resolve_data_location_path() / "agentgateway" / "secrets" / "openclaw_llm_key"
     try:
@@ -73,29 +75,22 @@ def ensure_secrets(data_dir):
     if not llm_key:
         die(f"{key_file} is empty")
 
-    wanted = {
-        "gatewayToken": current.get("gatewayToken") or secrets.token_hex(32),
-        "matrixPassword": current.get("matrixPassword") or secrets.token_hex(32),
-        "llmKey": f"sk-{llm_key}",
+    values = {
+        GATEWAY_TOKEN: read_env_value_from_file(ENV_FILE, GATEWAY_TOKEN) or secrets.token_hex(32),
+        MATRIX_PASSWORD: read_env_value_from_file(ENV_FILE, MATRIX_PASSWORD) or secrets.token_hex(32),
+        LLM_KEY: f"sk-{llm_key}",
     }
-    if wanted != current:
-        write_file_atomic(secrets_file, json.dumps(wanted))
-        log("Wrote OpenClaw's secrets")
-    safe_chmod(0o600, secrets_file)
-    return secrets_dir, secrets_file
-
-
-def hand_over(data_dir, secrets_paths):
-    """Everything to the project owner, so a non-root `make update` and the
-    post-start bootstrap can write here - then the secrets to the container's
-    uid, the one owner OpenClaw's file provider accepts. Both are 1000 on a
-    standard install; where they differ, the container's needs win."""
-    fix_ownership(data_dir)
-    for path in secrets_paths:
-        try:
-            os.chown(path, CONTAINER_UID, CONTAINER_GID)
-        except OSError:
-            log(f"WARNING: could not chown {path} to {CONTAINER_UID}; OpenClaw will refuse its secrets")
+    rendered = "".join(f"{name}={value}\n" for name, value in values.items())
+    try:
+        unchanged = ENV_FILE.read_text(encoding="utf-8") == rendered
+    except OSError:
+        unchanged = False
+    if not unchanged:
+        ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+        write_file_atomic(ENV_FILE, rendered)
+        log(f"Wrote {ENV_FILE.name}")
+    safe_chmod(0o600, ENV_FILE)
+    fix_ownership(ENV_FILE)
 
 
 def read_people(data_dir):
@@ -156,12 +151,14 @@ def render_config(people, host_name, timezone):
             # so no port is published and no Control UI is served.
             "mode": "local",
             "bind": "loopback",
-            "auth": {"mode": "token", "token": secret_ref("/gatewayToken")},
+            "auth": {"mode": "token", "token": secret_ref(GATEWAY_TOKEN)},
             "controlUi": {"enabled": False},
             "terminal": {"enabled": False},
         },
         "update": {"checkOnStart": False},
-        "secrets": {"providers": {"pi": {"source": "file", "path": SECRETS_IN_CONTAINER, "mode": "json"}}},
+        # An explicit allowlist: the provider resolves these three and no other
+        # variable of the container's environment.
+        "secrets": {"providers": {"pi": {"source": "env", "allowlist": [GATEWAY_TOKEN, MATRIX_PASSWORD, LLM_KEY]}}},
         "models": {
             "mode": "replace",
             "catalogRefresh": {"enabled": False},
@@ -171,7 +168,7 @@ def render_config(people, host_name, timezone):
                     # model behind `assistant` is chosen there, not here.
                     "baseUrl": "http://agentgateway:4000/assistant/v1",
                     "api": "openai-completions",
-                    "apiKey": secret_ref("/llmKey"),
+                    "apiKey": secret_ref(LLM_KEY),
                     "timeoutSeconds": 300,
                     "models": [
                         {
@@ -243,7 +240,7 @@ def render_config(people, host_name, timezone):
                 "homeserver": "http://tuwunel:8008",
                 "network": {"dangerouslyAllowPrivateNetwork": True},
                 "userId": f"@{BOT_LOCALPART}:{server_name}",
-                "password": secret_ref("/matrixPassword"),
+                "password": secret_ref(MATRIX_PASSWORD),
                 "deviceName": "Assistant",
                 "encryption": True,
                 # Every invite, because a DM cannot be told from a room at
@@ -267,7 +264,7 @@ def main():
     data_dir = resolve_data_location_path() / "openclaw"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    secrets_paths = ensure_secrets(data_dir)
+    ensure_env_file()
 
     people = read_people(data_dir)
     config_file = data_dir / "openclaw.json"
@@ -285,7 +282,10 @@ def main():
         write_file_atomic(config_file, rendered)
         log(f"Rendered OpenClaw's config for {len(people)} people")
     safe_chmod(0o644, config_file)
-    hand_over(data_dir, secrets_paths)
+    # The whole directory, not only the file: the bootstrap writes its markers
+    # and the people list here, and a root-run boot would otherwise leave it
+    # root-owned for the next non-root run.
+    fix_ownership(data_dir)
 
 
 if __name__ == "__main__":

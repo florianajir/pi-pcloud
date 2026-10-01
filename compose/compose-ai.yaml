@@ -592,10 +592,16 @@ services:
       - OPENCLAW_CONFIG_READONLY=1
       - OPENCLAW_NO_AUTO_UPDATE=1
       - DO_NOT_TRACK=1
+    env_file:
+      # The gateway token, the bot's Matrix password and its agentgateway key,
+      # written by scripts/openclaw-pre-start.py and resolved by the config's
+      # env secret provider, which an allowlist limits to those three. Frozen
+      # at container creation: a rotated key needs `up -d`, not `restart`.
+      - path: ./config/openclaw/openclaw.env
+        required: false
     volumes:
       - openclaw_state:/home/node/.openclaw
       - ${DATA_LOCATION:-./data}/openclaw/openclaw.json:/home/node/.openclaw/openclaw.json:ro
-      - ${DATA_LOCATION:-./data}/openclaw/secrets/openclaw.json:/run/secrets/openclaw.json:ro
       - ./config/openclaw/skills:/opt/household-skills:ro
     depends_on:
       tuwunel:
