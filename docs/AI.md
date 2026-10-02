@@ -368,14 +368,12 @@ would otherwise download at runtime.
 ### The model behind `assistant`
 
 OpenClaw asks agentgateway for a model called `assistant`, on `/assistant/v1`. That route accepts
-OpenClaw's key and no other, and `overrides` replaces the model name with the real one, so switching
-models or providers is an edit to that one block of `config/agentgateway/config.yaml` and a
-`docker compose up -d agentgateway` — nothing in OpenClaw changes. It is a route rather than an
-`llm:` virtual model for two reasons, both measured on v1.5.0: every `llm:` model shows up on
-`/v1/models`, so Open WebUI would offer it to the whole family; and a `failover` virtual model does not
-fall through to its next target on a 429, 413 or 503, so it would not have bought a fallback anyway.
+OpenClaw's key and no other, and each provider behind it names its own model, so changing the chain
+is an edit to that one block of `config/agentgateway/config.yaml` and a `docker compose up -d
+agentgateway` — nothing in OpenClaw changes. It is a route rather than an `llm:` virtual model because
+every `llm:` model shows up on `/v1/models`, so Open WebUI would offer it to the whole family.
 
-The route serves `gemini-3.5-flash-lite` on Gemini's free tier, with `GEMINI_API_KEY` from `.env`.
+It serves `gemini-3.5-flash-lite` first, on Gemini's free tier, with `GEMINI_API_KEY` from `.env`.
 Inside the EEA, Switzerland and the UK, Google's terms apply the paid-tier data rules to the free tier
 too: prompts are not used to improve its products, only logged for a limited time for abuse detection.
 
@@ -397,9 +395,31 @@ too: prompts are not used to improve its products, only logged for a limited tim
   are per model and per project, on AI Studio's rate-limit page, and Google changes them —
   `gemini-2.5-flash`, still in agentgateway's catalogue, already answers 404 to a new key.
 
-OpenRouter remains the fallback: the same block with `hostOverride: openrouter.ai:443`, `pathPrefix:
-/api/v1`, `backendTLS.hostname: openrouter.ai`, `${OPENROUTER_API_KEY}` and a `custom` provider, plus
-`defaults: {max_tokens: 8192}` for the reason the `/openrouter/v1` route gives.
+**Failover.** The backend is three priority groups — `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`,
+then `openai/gpt-oss-120b` on OpenRouter. A 429 (quota) or 503 (overload) evicts that group for 10
+minutes, and the route's `retry` replays the request on the next one, so the message that runs out a
+quota is still answered. Measured on a sidecar gateway, with a fake upstream answering 429 in place of
+both Gemini groups:
+
+- the request that hits the exhausted groups still answers 200, in about two seconds, and the next one
+  goes straight to OpenRouter;
+- an exhausted provider is tried **twice** in that first request before its eviction takes hold, even
+  with `consecutiveFailures: 1` — hence `attempts: 6`, two per Gemini group plus OpenRouter plus one
+  spare;
+- the two Flash-Lite models have separate quotas, so the free tier carries 1,000 requests a day, about
+  150 messages; a switch between them mid tool loop is safe, since one accepts the other's signature;
+- `gpt-oss-120b` accepts Gemini's tool_call ids, in a running loop and in history.
+
+The one gap is the way back: when a Gemini group returns from eviction in the middle of a tool loop that
+started on OpenRouter, Gemini refuses the OpenRouter call it finds in the current turn — it carries no
+signature — and that one message ends in an error. A quota exhausted for the day cannot cause it: the
+returning group answers 429 again before anything is processed.
+
+OpenRouter is paid from the account's credit, about $0.0025 a message at `gpt-oss-120b`'s prices, and
+only once both free quotas are spent. Zero Data Retention is enforced in that account's privacy
+settings, not here: it limits every OpenRouter request, this route's and the `/openrouter/v1` one's, to
+providers that keep no prompt — which `gpt-oss-120b` has plenty of. The same `max_tokens: 8192`
+default as the `/openrouter/v1` route applies, for the reason given there.
 
 ### Memory and knowledge in Forgejo
 
@@ -445,7 +465,7 @@ memory simply stays in the `openclaw_state` volume, which Backrest snapshots eit
 
 It appends `http://agentgateway:4000/v1` to the stored connection list when missing, with the gateway's API key, leaves any other connection you configured in the UI alone, and restarts open-webui only when it changed something.
 
-The two path routes are separate connections, because they are separate base URLs — which is also why nothing on them shows up under `/v1`. The hook adds them the same way, with a `prefix_id` so the picker says which provider a model came from — and with the gateway key rather than `AGENT_API_KEY`, since Open WebUI runs inside the stack and both routes accept either. Storing the external-client key here would make revoking it 401 the chat as well. **No `model_ids` filter**, deliberately: naming models there would be the hardcoded list these routes exist to avoid, so Groq's catalogue arrives whole, transcription and speech models included. Filter in **Admin Settings → Connections**; the hook leaves what is set there alone. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`), the web search settings (marker `pi-pcloud.web_search`, see below) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
+The two path routes are separate connections, because they are separate base URLs — which is also why nothing on them shows up under `/v1`. The hook adds them the same way, with a `prefix_id` so the picker says which provider a model came from — and with the gateway key rather than `AGENT_API_KEY`, since Open WebUI runs inside the stack and both routes accept either. Storing the external-client key here would make revoking it 401 the chat as well. **No `model_ids` filter**, deliberately: naming models there would be the hardcoded list these routes exist to avoid, so Groq's catalogue arrives whole, transcription and speech models included. Filter in **Admin Settings → Connections**; the hook leaves what is set there alone — including a connection switched off there, which it never switches back on. None of these models has a workspace row, and Open WebUI shows such a model to admins only (`get_filtered_models`): the family sees none of OpenRouter's paid catalogue until an admin grants a model in **Admin Settings → Models**. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`), the web search settings (marker `pi-pcloud.web_search`, see below) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
 
 Everything that writes the model's *workspace row* — attaching the tool server, seeding the suggestions — needs an admin account to own that row, and there is none until the first SSO login. Those steps are therefore skipped, unmarked, on a fresh install, and applied by the next run of the hook. The settings that live in the `config` table alone (connections, low-latency defaults, audio, the global model metadata) apply from the first boot. Run it by hand after the first login, or after a database restore:
 
