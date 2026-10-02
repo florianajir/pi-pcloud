@@ -142,6 +142,13 @@ with PKCE, callback `https://llm.<HOST_NAME>/oauth/callback`. A forward-auth in 
 intercept that callback, which is why there is none. Its console reconfigures the whole gateway, so it
 sits with Dockhand and Headplane rather than with the user-facing services.
 
+A signed-out visit lands on the gateway's own public page, `/ui/login`, instead of going
+straight to Authelia; its button starts the flow at `/api/auth/login`, and a request from the console's
+JavaScript gets a `401` rather than a redirect. The UI wires both endpoints itself — `ui.policies.oidc`
+refuses a `login` or `logout` block. Signing out (`POST /api/auth/logout`, refused from any other
+origin) clears the gateway's session cookie only: the Authelia session survives it, so the next sign-in
+reuses that session rather than asking for a password again.
+
 **That gates the UI, and only the UI** — which is the split worth keeping: an admin configures the
 models, the providers and the credentials through the browser, everyone else consumes with a key. Open
 WebUI and any script holding one are untouched by it, and none of them could complete an interactive
@@ -277,14 +284,17 @@ quota'd per day, and a runaway agent loop is exactly what exhausts one.
 ### …and why Groq and OpenRouter are not
 
 They sit on their own paths, `/groq/v1` and `/openrouter/v1`, as top-level `routes:` in `config.yaml`.
-The reason is `GET /v1/models`. A provider added through the UI is reached by *model name*, so a
-wildcard entry like `groq/*` is all `/v1/models` lists — the wildcard itself, not the models behind it.
-A tool that builds its picker from that endpoint sees nothing usable.
+The reason is `GET /v1/models`. A provider added through the UI is reached by *model name*, so
+`/v1/models` lists only what the gateway already knows: it expands a wildcard entry from its
+built-in model catalog, and measured, `groq/*` lists nothing while `openrouter/*`, which that catalog
+does not cover, lists the wildcard itself. A tool that builds its picker from that endpoint sees
+nothing usable.
 
 A top-level route serves the real catalogue, because `policies.ai.routes` maps a URL suffix to a
 handler: `/chat/completions` stays `completions`, so tokenisation and budgets still apply, while
 `/models` is `passthrough` and answers with the provider's own list. A `models` handler that would
-synthesise the list locally exists in the schema; v1.5.0 answers it `501 Route 'Models' not implemented`.
+synthesise the list locally exists in the schema, but it answers
+`501 Route 'Models' not implemented`.
 
 The cost: these routes are invisible to the UI, which lists only `llm.provider` and `llm.model`
 resources. A third provider this way is a file edit and a `docker compose up -d agentgateway`, not a

@@ -25,14 +25,14 @@
       "type": "stat",
       "id": 101,
       "title": "LLM spend, selected range",
-      "description": "Empty unless agentgateway has a cost catalog: config.modelCatalog is unset here, so every lookup resolves NoCatalog and no cost series is produced. The local model is free; only the Groq and OpenRouter routes would ever bill. See docs/MONITORING.md.",
+      "description": "Empty for every model config.yaml declares: the built-in cost catalog prices by provider name, and their custom provider matches no entry. A native provider added through the UI may be priced. See docs/MONITORING.md.",
       "gridPos": { "h": 7, "w": 6, "x": 0, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "pi-prometheus" },
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
           "decimals": 2,
-          "noValue": "no model catalog configured",
+          "noValue": "no priced model",
           "color": { "mode": "fixed", "fixedColor": "text" }
         },
         "overrides": []

@@ -328,9 +328,9 @@ config:
         user: 'apiKey.user'
 ```
 
-That puts a `user` label — `open-webui`, `trilium` or `agent`, the metadata on the API key that made the call — on every `gen_ai_*` series and on the HTTP ones beside them, so token use and latency are attributable per caller rather than being one undifferentiated total. Cardinality is bounded by the number of keys. Verified against a running v1.5.0, not inferred.
+That puts a `user` label — `open-webui`, `trilium` or `agent`, the metadata on the API key that made the call — on every `gen_ai_*` series and on the HTTP ones beside them, so token use and latency are attributable per caller rather than being one undifferentiated total. Cardinality is bounded by the number of keys. Verified against a running gateway, not inferred.
 
-**The spend panel is empty, and will stay empty until a cost catalog exists.** agentgateway only emits `agentgateway_gen_ai_client_cost_usd_total` when its catalog resolves a price for the model; with `config.modelCatalog` unset every lookup returns `NoCatalog`, which is visible as `agentgateway_cost_catalog_lookups_total{status="NoCatalog"}`. The local model is free, so the only thing a catalog would price is the Groq and OpenRouter path routes — see [What is not scraped](#what-is-not-scraped) below.
+**The spend panel is empty for everything `config.yaml` declares, although a cost catalog exists.** agentgateway only emits `agentgateway_gen_ai_client_cost_usd_total` when its catalog resolves a price for the model. agentgateway ships a built-in catalog, but it looks prices up by provider, and every model in `config.yaml` goes through a `custom` provider, which no entry matches — visible as `agentgateway_cost_catalog_lookups_total{status="Missing", gen_ai_system="custom"}`. With `providerOverride: groq` on the `/groq/v1` route's provider the same lookup resolves (`status="Exact"`, measured); OpenRouter is not in the catalog at all, and the local model is free. Why that override is not set is under [What is not scraped](#what-is-not-scraped) below. Only those `custom` providers were measured: a native one added through the UI (OpenAI, Anthropic, Gemini, …) is looked up under its own provider name, so the panel is not guaranteed to stay empty once one exists.
 
 ### What is not scraped
 
@@ -345,7 +345,7 @@ Four services in the stack expose no metrics of their own and would each need a 
 
 Also deliberately absent, and in scope only for a later, separate change:
 
-- **A cost catalog.** `config.modelCatalog` accepts an inline or file-based price list and would light up the spend panel. It is left out because the prices would be hand-maintained with no source of truth in this repository, and the models it would price are added through the agentgateway UI rather than declared in `config.yaml`.
+- **Prices for the path routes.** `providerOverride: groq` would light up the spend panel from the built-in catalog, and a `config.modelCatalog` overlay could price what that catalog lacks. Both are left out: the first reports list prices a free-tier account never pays, and the second would be hand-maintained with no source of truth in this repository.
 - **Loki, or logs of any kind.** Logs go to journald, and `journalctl -t pi-<service>` is the interface.
 - **OTLP tracing.** agentgateway already emits OpenTelemetry GenAI semconv natively, so a trace backend is a real option — but it is a separate decision with its own storage budget, not a rider on this one.
 
