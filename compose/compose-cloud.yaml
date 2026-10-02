@@ -576,7 +576,7 @@ services:
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
       start_period: 60s
     labels:
-      - "homepage.group=Tools"
+      - "homepage.group=Storage"
       - "homepage.name=Forgejo"
       - "homepage.icon=forgejo.png"
       - "homepage.href=https://git.${HOST_NAME:-pi.lan}"

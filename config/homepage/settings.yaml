@@ -39,38 +39,6 @@ layout:
     style: row
     columns: 1
     icon: mdi-movie-open
-    Storage:
-      style: row
-      columns: 2
-      icon: mdi-database
-    Download:
-      style: row
-      columns: 4
-      icon: mdi-download
-    Books:
-      style: row
-      columns: 2
-      icon: mdi-book-open-page-variant
-    News:
-      style: row
-      columns: 2
-      icon: mdi-rss
-    Notes:
-      style: row
-      columns: 2
-      icon: mdi-notebook-outline
-    Communication:
-      style: row
-      columns: 2
-      icon: mdi-chat
-    Video:
-      style: row
-      columns: 2
-      icon: mdi-video
-    Security:
-      style: row
-      columns: 1
-      icon: mdi-shield-key
     AI & Automation:
       style: row
       columns: 1
@@ -83,6 +51,28 @@ layout:
         header: false
         style: row
         columns: 3
+    Half:
+      header: false
+      style: row
+      columns: 2
+      Storage:
+        icon: mdi-database
+      Books:
+        icon: mdi-book-open-page-variant
+      Notes:
+        icon: mdi-notebook-outline
+      Communication:
+        icon: mdi-chat
+      News:
+        icon: mdi-rss
+      Download:
+        icon: mdi-download
+      Security:
+        icon: mdi-shield-key
+      Video:
+        style: row
+        columns: 2
+        icon: mdi-video
   Administration:
     header: false
     tab: Administration
