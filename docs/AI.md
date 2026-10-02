@@ -375,14 +375,31 @@ models or providers is an edit to that one block of `config/agentgateway/config.
 `/v1/models`, so Open WebUI would offer it to the whole family; and a `failover` virtual model does not
 fall through to its next target on a 429, 413 or 503, so it would not have bought a fallback anyway.
 
-**Groq's free tier cannot carry it.** A turn is not the message: it is OpenClaw's instructions, the
-tool schemas and the injected workspace files, about 9,900 tokens before anyone has said anything —
-and Groq's free tier allows 8,000 tokens per minute for `openai/gpt-oss-120b`, so the very first request
-comes back `413 Request too large … tokens per minute`, which OpenClaw reports as a context overflow.
-The route still points at Groq. Moving it to OpenRouter is the same block with `hostOverride:
-openrouter.ai:443`, `pathPrefix: /api/v1`, `backendTLS.hostname: openrouter.ai` and
-`${OPENROUTER_API_KEY}`, plus `defaults: {max_tokens: 8192}` for the reason the `/openrouter/v1` route
-gives; with that account's privacy settings, Zero Data Retention can be enforced for every request.
+The route serves `gemini-3.5-flash-lite` on Gemini's free tier, with `GEMINI_API_KEY` from `.env`.
+Inside the EEA, Switzerland and the UK, Google's terms apply the paid-tier data rules to the free tier
+too: prompts are not used to improve its products, only logged for a limited time for abuse detection.
+
+- **Not Groq.** A turn is not the message: it is OpenClaw's instructions, the tool schemas and the
+  injected workspace files, about 9,900 tokens before anyone has said anything — and Groq's free tier
+  allows 8,000 tokens per minute for `openai/gpt-oss-120b`, so the very first request came back
+  `413 Request too large … tokens per minute`, which OpenClaw reports as a context overflow.
+- **The `gemini` provider, not `custom` on Google's OpenAI-compatible endpoint.** Gemini 3 refuses the
+  second step of a tool loop with `400 Function call is missing a thought_signature` unless the
+  signature it attached to the call comes back. That endpoint returns it in `extra_content`, which
+  OpenClaw replays only to a base URL it recognises as Google's — and this one is agentgateway. The
+  native provider instead carries the signature inside the `tool_call` id, which OpenClaw echoes
+  verbatim within a turn. It does rewrite ids to `[a-zA-Z0-9]` when it replays *past* turns, which
+  strips the signature there, but Gemini validates the current turn only.
+- **Flash-Lite, not Flash.** One message costs OpenClaw five to seven requests — its tool loop — and the
+  free tier gives every Flash model 5 requests a minute and 20 a day, so the family ran out after
+  three messages. Flash-Lite gets 15 a minute and 500 a day, and answers a tool step in about a second;
+  Flash also came back `503 This model is currently experiencing high demand` at peak times. The limits
+  are per model and per project, on AI Studio's rate-limit page, and Google changes them —
+  `gemini-2.5-flash`, still in agentgateway's catalogue, already answers 404 to a new key.
+
+OpenRouter remains the fallback: the same block with `hostOverride: openrouter.ai:443`, `pathPrefix:
+/api/v1`, `backendTLS.hostname: openrouter.ai`, `${OPENROUTER_API_KEY}` and a `custom` provider, plus
+`defaults: {max_tokens: 8192}` for the reason the `/openrouter/v1` route gives.
 
 ### Memory and knowledge in Forgejo
 

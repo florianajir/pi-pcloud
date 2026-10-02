@@ -195,6 +195,12 @@ routes:
   # The key below is valid here and nowhere else, and `overrides` replaces
   # whatever model the client names, so OpenClaw asks for `assistant` and
   # changing the model or the provider is an edit to this block alone.
+  #
+  # The native `gemini` provider carries Gemini 3's thought signature inside
+  # the tool_call id, which OpenClaw echoes back within a turn. `custom` on
+  # Google's OpenAI-compatible endpoint loses it, and every tool loop then
+  # fails on its second step. Flash-Lite because the free tier allows Flash 20
+  # requests a day, about three messages. Both measured - see docs/AI.md.
   - name: assistant
     gateways: default
     matches:
@@ -210,24 +216,18 @@ routes:
           - key: ${OPENCLAW_LLM_KEY}
             metadata:
               user: openclaw
-      backendTLS:
-        hostname: api.groq.com
       backendAuth:
-        key: ${GROQ_API_KEY}
+        key: ${GEMINI_API_KEY}
       ai:
         overrides:
-          model: openai/gpt-oss-120b
+          model: gemini-3.5-flash-lite
         routes:
           /chat/completions: completions
     backends:
       - ai:
           name: assistant
-          hostOverride: api.groq.com:443
-          pathPrefix: /openai/v1
           provider:
-            custom:
-              formats:
-                - type: completions
+            gemini: {}
 mcp:
   gateways: default
   policies:
