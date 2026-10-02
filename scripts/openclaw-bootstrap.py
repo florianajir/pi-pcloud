@@ -267,12 +267,20 @@ def lldap_people():
     )["data"]["users"]  # fmt: skip
 
     people = []
-    for user in users:
+    agents = set()
+    for user in sorted(users, key=lambda user: user["id"].lower()):
         if {group["displayName"] for group in user["groups"]} & SERVICE_GROUPS:
             continue
         uid = user["id"].lower()
-        people.append({"id": uid, "agent": agent_id(uid), "name": user["displayName"] or uid})
-    return sorted(people, key=lambda person: person["id"])
+        agent = agent_id(uid)
+        # Two uids reduced to one agent id (jean.dupont, jean_dupont) would
+        # share a workspace and its MEMORY.md: the leak per-person agents close.
+        if agent in agents:
+            log(f"WARNING: {uid} reduces to the agent id {agent}, already taken; the assistant will not answer it")
+            continue
+        agents.add(agent)
+        people.append({"id": uid, "agent": agent, "name": user["displayName"] or uid})
+    return people
 
 
 def sync_people():
@@ -337,12 +345,14 @@ def forgejo_owner(users):
 
 def forgejo_api(token, method, path, body=None):
     """One call from inside Forgejo, as (status, parsed body). The token reaches
-    curl by variable name (`docker exec -e NAME`), never through the host's
-    argv, and the status rides on the last line of the output."""
+    the shell by variable name (`docker exec -e NAME`) and curl through a
+    here-document on fd 3 - in curl's own argv it would be on the host's
+    process table too - and the status rides on the last line of the output."""
     script = (
-        'curl -sS -w "\\n%{http_code}" -H "Authorization: token $FJ_TOKEN" '
+        'curl -sS -w "\\n%{http_code}" -H @/dev/fd/3 '
         '-H "Content-Type: application/json" -X "$1" "http://localhost:3000/api/v1$2"'
         + (" --data @-" if body is not None else "")
+        + " 3<<EOF\nAuthorization: token $FJ_TOKEN\nEOF\n"
     )
     proc = docker(
         "exec", "-i", "-e", "FJ_TOKEN", FORGEJO, "sh", "-c", script, "sh", method, path,
@@ -462,9 +472,11 @@ def ensure_forgejo(host_name):
         token = proc.stdout.strip()
         if proc.returncode != 0 or not token:
             die(f"could not mint the sync token: {proc.stderr.strip()}")
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        safe_chmod(0o700, token_file.parent)
         pilib.write_file_atomic(token_file, token)
         safe_chmod(0o600, token_file)
-        fix_ownership(token_file)
+        fix_ownership(token_file.parent)
         try:
             os.chown(token_file, CONTAINER_UID, CONTAINER_UID)
         except OSError:

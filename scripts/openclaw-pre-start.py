@@ -61,12 +61,6 @@ def ensure_env_file():
     the LLM key is copied from agentgateway's on every run, so a rotation there
     reaches the assistant at the next `up -d` (env_file values are frozen at
     container creation)."""
-    if ENV_FILE.is_dir():
-        try:
-            ENV_FILE.rmdir()
-        except OSError:
-            die(f"{ENV_FILE} is a non-empty directory; remove it by hand")
-
     key_file = resolve_data_location_path() / "agentgateway" / "secrets" / "openclaw_llm_key"
     try:
         llm_key = key_file.read_text(encoding="utf-8").strip()

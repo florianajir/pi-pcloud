@@ -29,11 +29,8 @@ ensure_registration_shared_secret() {
 
     mkdir -p "$secret_dir"
     safe_chmod 700 "$secret_dir"
-    # The directory a bind mount leaves when the file was missing at `up`.
-    if [ -d "$secret_file" ]; then
-        rmdir "$secret_file" 2>/dev/null \
-            || die "$secret_file is a non-empty directory; remove it by hand"
-    fi
+    ensure_config_target_is_file "$secret_file" \
+        || die "Could not restore $secret_file as a file"
     if [ ! -s "$secret_file" ]; then
         generate_secret | write_secret_file "$secret_file" \
             || die "Failed to generate Tuwunel's registration shared secret"

@@ -102,26 +102,28 @@ def sync_memory(git, remote, person):
         if not git.ok("init", "-q", "-b", agent, env=env):
             log(f"WARNING: could not initialise the memory repository of {agent}")
             return
-    git.run("remote", "remove", "origin", env=env)
-    git.run("remote", "add", "origin", remote, env=env)
-
     git.run("add", "-A", env=env)
     if not git.ok("diff", "--cached", "--quiet", env=env):
         stamp = f"{datetime.now(UTC):%Y-%m-%d %H:%M} UTC"
         git.run("commit", "-q", "-m", f"memory: {person['name']}, {stamp}", env=env)
 
-    if git.ok("fetch", "-q", "origin", f"+refs/heads/{agent}:refs/remotes/origin/{agent}", env=env):
+    if git.ok("fetch", "-q", remote, f"+refs/heads/{agent}:refs/remotes/origin/{agent}", env=env):
+        # No local commit means an empty workspace: restore it from the branch.
+        # A mixed reset would leave the files out of it, and the next pass
+        # would commit and push their deletion.
         if not git.ok("rev-parse", "-q", "--verify", "HEAD", env=env):
-            git.run("reset", "-q", f"origin/{agent}", env=env)
+            git.run("reset", "-q", "--hard", f"origin/{agent}", env=env)
+        # Unrelated histories whenever the git directory is rebuilt beside an
+        # existing branch: sync/ is excluded from Backrest, so after a restore.
         elif not git.ok("merge-base", "--is-ancestor", f"origin/{agent}", "HEAD", env=env) and not git.ok(
-            "merge", "-q", "--no-edit", "-X", "theirs", f"origin/{agent}", env=env
+            "merge", "-q", "--no-edit", "--allow-unrelated-histories", "-X", "theirs", f"origin/{agent}", env=env
         ):
             git.run("merge", "--abort", env=env)
             log(f"WARNING: {agent}'s memory and its Forgejo branch conflict; resolve it there, nothing was pushed")
             return
     if not git.ok("rev-parse", "-q", "--verify", "HEAD", env=env):
         return
-    push = git.run("push", "-q", "origin", f"HEAD:refs/heads/{agent}", env=env)
+    push = git.run("push", "-q", remote, f"HEAD:refs/heads/{agent}", env=env)
     if push.returncode != 0:
         log(f"WARNING: pushing {agent}'s memory failed: {push.stderr.strip()[-300:]}")
 
@@ -145,7 +147,11 @@ def sync_knowledge(git, remote):
         script = """
             set -e
             rm -rf "$2.new" && mkdir -p "$2.new"
-            git -C "$1" -c safe.directory='*' archive origin/main | tar -x -C "$2.new"
+            # Through a file, not a pipe: sh has no pipefail, and a failed
+            # archive would export an empty knowledge base as this commit.
+            git -C "$1" -c safe.directory='*' archive -o "$1.tar" origin/main
+            tar -x -C "$2.new" -f "$1.tar"
+            rm -f "$1.tar"
             printf '%s\\n' "$3" > "$2.new/.exported"
             rm -rf "$2" && mv "$2.new" "$2"
         """
@@ -169,7 +175,8 @@ def settle_finished_proposal(owner, agent, source):
     if not number.isdigit():
         return
     proc = shell(
-        'curl -fsS -H "Authorization: token $(cat /run/forgejo_token)" "$1"',
+        # The header on stdin: in curl's argv the token is on the host's `ps`.
+        'printf "Authorization: token %s\\n" "$(cat /run/forgejo_token)" | curl -fsS -H @- "$1"',
         f"http://forgejo:3000/api/v1/repos/{owner}/{KNOWLEDGE_REPO}/pulls/{number}",
     )
     try:

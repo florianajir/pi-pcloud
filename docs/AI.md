@@ -330,7 +330,9 @@ treats anyone allowed to DM a gateway as able to steer it, so isolation is per a
 
 The list is read from LLDAP at post-start, cached in `${DATA_LOCATION}/openclaw/people.json`, and the
 gateway is restarted when it changes. A new family member therefore gets an assistant at the next
-`make update` or reboot, not the moment their account exists.
+`make update` or reboot, not the moment their account exists. An agent id keeps only `a-z`, `0-9`,
+`_` and `-`, so two uids that reduce to the same one (`jean.dupont`, `jean_dupont`) would share a
+workspace: the second in alphabetical order is left out, with a warning in the bootstrap's log.
 
 ### Isolated rather than sandboxed
 
