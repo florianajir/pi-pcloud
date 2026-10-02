@@ -76,13 +76,12 @@ llm:
   providers: []
   virtualModels: []
 # Groq and OpenRouter on their own paths, because the llm: section matches on
-# model *name*: a `groq/*` wildcard is all its /v1/models can list, so a client
-# that builds its picker from that endpoint sees nothing usable. A top-level
-# route can serve the real catalogue, because policies.ai.routes maps a URL
-# suffix to a handler - /chat/completions stays `completions` (parsed, so
-# tokenisation and budgets still apply) while /models is `passthrough`. The
-# `models` handler would synthesise the list locally; v1.5.0 answers it
-# `501 Route 'Models' not implemented`.
+# model *name*: its /v1/models never lists a provider's live catalogue, only
+# what the gateway itself knows of a wildcard (docs/AI.md). A top-level route
+# can, because policies.ai.routes maps a URL suffix to a handler -
+# /chat/completions stays `completions` (parsed, so tokenisation and budgets
+# still apply) while /models is `passthrough`. The `models` handler would
+# synthesise the list locally, but answers `501 Route 'Models' not implemented`.
 #
 # The cost: these routes are invisible to the UI, which lists only providers and
 # models. A third one is a file edit, not a form. See docs/AI.md.
