@@ -171,6 +171,18 @@ gate_ruff() {
     ruff check $files && pass "clean" || fail "findings above"
 }
 
+# The secret-exposure hook vets every Bash call an agent makes, and a pattern
+# that stops matching lets the command through without a word - so a
+# regression in it shows up nowhere but here.
+gate_secret_hook() {
+    gate "secret-exposure hook"
+    if ! have jq; then
+        skip "jq not installed"
+        return 0
+    fi
+    sh .claude/hooks/no-secret-reads.test.sh && pass "every case holds" || fail "findings above"
+}
+
 # .hadolint.yaml sets failure-threshold: warning, so info-level findings print
 # and still exit 0. Counted rather than called clean, for the reason above.
 gate_hadolint() {
@@ -239,6 +251,7 @@ gate_shell_syntax
 gate_shellcheck
 gate_yamllint
 gate_ruff
+gate_secret_hook
 gate_hadolint
 gate_actionlint
 gate_gitleaks

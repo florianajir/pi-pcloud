@@ -3,8 +3,18 @@
   "permissions": {
     "deny": [
       "Read(./.env)",
+      "Read(./.env.bak*)",
+      "Read(./.env.tmp*)",
+      "Read(./.rotate-password.*)",
       "Read(./config/**/*.env)",
+      "Read(./config/**/*.env.bak.*)",
       "Read(./config/homepage/secrets/**)",
+      "Read(./config/backrest/config.json)",
+      "Read(./config/backrest/config.json.bak.*)",
+      "Read(./config/headscale/config.yaml)",
+      "Read(./config/headplane/config.yaml)",
+      "Read(./config/headplane/headscale_api_key)",
+      "Read(./config/gluetun/openvpn.ovpn)",
       "Read(./data/**)",
       "Read(//mnt/usbdrive/**)",
       "Edit(./.env)",
