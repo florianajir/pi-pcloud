@@ -459,7 +459,7 @@ services:
   # than an environment change in every client.
   agentgateway:
     <<: *service-defaults
-    image: cr.agentgateway.dev/agentgateway:v1.5.0
+    image: cr.agentgateway.dev/agentgateway:v1.6.0
     container_name: pi-agentgateway
     # open-webui, because the chat has no models without this gateway. Same
     # shape as flaresolverr under prowlarr.
