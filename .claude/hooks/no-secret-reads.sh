@@ -15,7 +15,7 @@
 
 set -eu
 
-DENY_HINT='Read key NAMES only (jq -r "keys[]" FILE, grep -oE "^[A-Za-z_]+=" FILE),
+DENY_HINT='Read key NAMES only (jq -r "keys[]" FILE, grep -oE "^[A-Za-z_][A-Za-z0-9_]*=" FILE),
 add --quiet to `docker compose config`, redact with sed before printing, or ask
 the user to paste the value they want you to see.'
 
@@ -77,11 +77,48 @@ cmd="$(printf '%s\n' "$cmd" | strip_heredoc_bodies)"
 # literal single quote.
 READER_LEAD='(^|[ \t;&|(`$'"'"'"])'
 
+TAB="$(printf '\t')"
+
+# One line per simple command, as "<pipeline number> TAB <command>", split on
+# newlines, ;, &&, ||, a lone & and |. A check that needs two things in the same
+# command - a recursive grep and its exclusions, `config` and its --quiet - has
+# to look at one of these lines, or an `echo` beside the command satisfies it.
+# Quotes are not parsed, so a separator inside a quoted string splits too: that
+# only ever makes a check stricter. The & of a redirection (2>&1, &>) is kept.
+split_commands() {
+    awk '
+        { text = text (NR > 1 ? "\n" : "") $0 }
+        END {
+            gsub(/>&/, ">\035", text)
+            gsub(/&>/, "\035>", text)
+            gsub(/<&/, "<\035", text)
+            gsub(/&&|\|\||[;&\n]/, "\034", text)
+            n = split(text, pipelines, "\034")
+            for (i = 1; i <= n; i++) {
+                m = split(pipelines[i], commands, "|")
+                for (j = 1; j <= m; j++) {
+                    c = commands[j]
+                    gsub(/\035/, "\\&", c)
+                    print i "\t" c
+                }
+            }
+        }
+    '
+}
+
 # `docker compose config` renders every env_file inline, so its output carries
 # ntfy tokens and database passwords. --quiet validates without printing.
-if printf '%s' "$cmd" | grep -qE 'docker(-| )compose([ \t]+[^;&|]*)?[ \t]+config'; then
-    printf '%s' "$cmd" | grep -qE 'config([ \t]+[^;&|]*)?[ \t]+(--quiet|-q)([ \t]|$)' \
-        || deny '`docker compose config` inlines every env_file (passwords, tokens) into its output.'
+# `config` counts only as the subcommand, right after the global options, so a
+# `docker compose exec postgres psql -c '... FROM config'` is not one.
+#
+# [[:blank:]] rather than the [ \t] used elsewhere in this file: GNU grep took
+# the \t of the negated [^ \t] as a backslash and a `t`, so [^ \t]* stopped at
+# the t of /tmp and missed `-f /tmp/override.yaml config`.
+COMPOSE_CONFIG='docker(-| )compose([[:blank:]]+-[^[:blank:]]+([[:blank:]]+[^-[:blank:]][^[:blank:]]*)?)*[[:blank:]]+config([[:blank:]]|$)'
+COMPOSE_QUIET='[[:blank:]]config([[:blank:]]+[^[:blank:]]+)*[[:blank:]]+(--quiet|-q)([[:blank:]]|$)'
+if printf '%s\n' "$cmd" | split_commands | cut -f2- \
+    | grep -E "$COMPOSE_CONFIG" | grep -qvE "$COMPOSE_QUIET"; then
+    deny '`docker compose config` inlines every env_file (passwords, tokens) into its output.'
 fi
 
 # A container's full environment is where entrypoint-exported secrets live.
@@ -132,7 +169,9 @@ strip_doc_paths() {
 # keys with no extension at all. GNU grep's --exclude-dir also applies to a
 # directory given on the command line, so naming a secrets/ dir directly is
 # covered by the same exclusion.
-RECURSIVE_READERS="$READER_LEAD"'((grep|egrep|fgrep)([ \t]+[^;&|]*)?[ \t]+(-[A-Za-z0-9]*[rR][A-Za-z0-9]*|--recursive|--dereference-recursive|--directories=recurse|-d[ \t]*recurse)([ \t]|$)|rg([ \t]|$)|find[ \t][^;&|]*[ \t]-(exec|execdir|ok|okdir)[ \t]+([^;&|]*[ \t'"'"'"])?'"$READER_WORDS"'([ \t]|$)|find[ \t][^;&]*\|[ \t]*xargs([ \t]+[^;&|]*)?[ \t]+'"$READER_WORDS"'([ \t]|$))'
+RECURSIVE_READER="$READER_LEAD"'((grep|egrep|fgrep)([ \t]+[^;&|]*)?[ \t]+(-[A-Za-z0-9]*[rR][A-Za-z0-9]*|--recursive|--dereference-recursive|--directories=recurse|-d[ \t]*recurse)([ \t]|$)|rg([ \t]|$)|find[ \t][^;&|]*[ \t]-(exec|execdir|ok|okdir)[ \t]+([^;&|]*[ \t'"'"'"])?'"$READER_WORDS"'([ \t]|$))'
+XARGS_READER="$READER_LEAD"'xargs([ \t]+[^;&|]*)?[ \t]+'"$READER_WORDS"'([ \t]|$)'
+FIND="$READER_LEAD"'find[ \t]'
 
 QUOTE='['"'"'"]?'
 ENV_EXCLUDED='(--exclude(=|[ \t]+)'"$QUOTE"'|(-g|--glob|--iglob)(=|[ \t]+)'"$QUOTE"'!|(!|\\!|-not)[ \t]+-i?name[ \t]+'"$QUOTE"')\\?\*\.env'"$QUOTE"'([ \t;&|)]|$)'
@@ -156,18 +195,65 @@ strip_exclusions() {
     sed -E "s#$ENV_EXCLUDED# #g; s#$SECRET_DIRS_EXCLUDED# #g"
 }
 
-if printf '%s\n' "$cmd" | without_git_grep | grep -qE "$RECURSIVE_READERS"; then
+excludes_secrets() {
+    printf '%s' "$1" | grep -qE "$ENV_EXCLUDED" \
+        && printf '%s' "$1" | grep -qE "$SECRET_DIRS_EXCLUDED"
+}
+
+# A trailing comment would otherwise carry the exclusions for the command it
+# follows, without excluding anything.
+without_comment() {
+    sed -E 's/(^|[[:space:]])#.*$/\1/'
+}
+
+# Prints `walks` for each command that reads a tree, and `unexcluded` when that
+# command's own words do not exclude both. In `find | xargs grep` the find is
+# what chooses the files, so the exclusions belong to it.
+recursive_reads() {
+    previous=""
+    previous_pipeline=""
+    printf '%s\n' "$cmd" | without_git_grep | split_commands \
+        | while IFS="$TAB" read -r pipeline line; do
+            line="$(printf '%s\n' "$line" | without_comment)"
+            walker=""
+            if printf '%s' "$line" | grep -qE "$RECURSIVE_READER"; then
+                walker="$line"
+            elif [ "$pipeline" = "$previous_pipeline" ] \
+                && printf '%s' "$line" | grep -qE "$XARGS_READER" \
+                && printf '%s' "$previous" | grep -qE "$FIND"; then
+                walker="$previous"
+            fi
+            if [ -n "$walker" ]; then
+                echo walks
+                excludes_secrets "$walker" || echo unexcluded
+            fi
+            previous="$line"
+            previous_pipeline="$pipeline"
+        done
+}
+
+recursive="$(recursive_reads)"
+if [ -n "$recursive" ]; then
     if printf '%s' "$cmd" | grep -qE "$DATA_PATHS"; then
         deny 'A recursive read over the data directory reaches rendered configs that carry secrets inline. Name the files, or use git grep for tracked files.'
     fi
-    if ! { printf '%s' "$cmd" | grep -qE "$ENV_EXCLUDED" \
-        && printf '%s' "$cmd" | grep -qE "$SECRET_DIRS_EXCLUDED"; }; then
-        deny "A recursive reader walks into .env files and secrets/ directories that no path in the command names. Exclude both (grep --exclude='*.env' --exclude-dir=secrets; rg -g '!*.env' -g '!secrets'; find ! -name '*.env' ! -path '*/secrets/*'), or use git grep for tracked files."
-    fi
+    case "$recursive" in
+        *unexcluded*)
+            deny "A recursive reader walks into .env files and secrets/ directories that no path in the command names. Exclude both in that same command (grep --exclude='*.env' --exclude-dir=secrets; rg -g '!*.env' -g '!secrets'; find ! -name '*.env' ! -path '*/secrets/*'), or use git grep for tracked files."
+            ;;
+    esac
 fi
 
-if printf '%s' "$cmd" | grep -qE "$READERS" \
-    && printf '%s\n' "$cmd" | strip_doc_paths | strip_exclusions | grep -qE "$SECRETS"; then
+# Key names are what the deny message recommends reading, so a command that
+# prints nothing else leaves the test below: grep -o with an anchored NAME=
+# pattern, or jq's keys. Its operands must be plain words - a $(cat .env) there
+# runs a reader whose output grep then echoes back in its "No such file" errors.
+KEY_NAME_PATTERN="$QUOTE"'\^\[A-Za-z_\](\+|\[A-Za-z0-9_\]\*)='"$QUOTE"
+KEY_NAMES_ONLY='^[[:blank:]]*(grep[[:blank:]]+(-oE|-Eo|-o[[:blank:]]+-E|-E[[:blank:]]+-o)[[:blank:]]+'"$KEY_NAME_PATTERN"'|jq[[:blank:]]+(-r[[:blank:]]+)?'"$QUOTE"'keys(\[\])?'"$QUOTE"')([[:blank:]]+[^-[:blank:]$`()<][^[:blank:]$`()<]*)+[[:blank:]]*$'
+secret_scope="$(printf '%s\n' "$cmd" | split_commands | cut -f2- | grep -vE "$KEY_NAMES_ONLY" || true)"
+
+if printf '%s' "$secret_scope" | grep -qE "$READERS" \
+    && printf '%s\n' "$secret_scope" | strip_doc_paths | strip_exclusions | grep -qE "$SECRETS"; then
     deny 'This command reads a file that holds real secrets.'
 fi
 
