@@ -472,6 +472,9 @@ services:
       - frontend
       # postgres is on internal segments only; this is Forgejo's own.
       - forge
+      # The family assistant's memory and knowledge-base repositories are
+      # pushed from here by scripts/openclaw-sync.py.
+      - assistant
     extra_hosts:
       # Authelia's discovery document, fetched through Traefik. Forgejo
       # validates the URL when the auth source is *created*, so
@@ -618,7 +621,8 @@ services:
     <<: *service-defaults
     image: ghcr.io/matrix-construct/tuwunel:v1.9.3@sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0
     container_name: pi-tuwunel
-    profiles: ["tuwunel", "all"]
+    # openclaw too: the assistant is a bot account on this homeserver.
+    profiles: ["tuwunel", "openclaw", "all"]
     # Root in the container, but with no capability beyond DAC_READ_SEARCH and
     # a read-only root filesystem - verified at v1.9.3 by running it exactly
     # like this. Not uid 1000: the database lives in named volumes (below), a
@@ -641,8 +645,11 @@ services:
     stop_grace_period: 30m
     networks:
       # Traefik, Authelia's discovery document, and the push gateway a phone
-      # registers for notifications: nothing else.
+      # registers for notifications.
       - frontend
+      # The family assistant's segment (compose.yaml), so OpenClaw reaches the
+      # homeserver without a network that leads out.
+      - assistant
     extra_hosts:
       # Fetched at the first sign-in, not at start. Verified at v1.9.3 that
       # ip_range_denylist, whose default covers 172.16.0.0/12, does not refuse
@@ -702,6 +709,11 @@ services:
       # The localpart is preferred_username, the LLDAP uid. Refuse the sign-in
       # rather than hand out a random @xk3f... when that is not usable.
       - TUWUNEL_IDENTITY_PROVIDER__0__UNIQUE_ID_FALLBACKS=false
+      # Out-of-band account creation (/_synapse/admin/v1/register, HMAC-signed),
+      # for the assistant's bot account - see scripts/tuwunel-pre-start.sh.
+      # Password registration above stays off, and Traefik routes no /_synapse
+      # path, so only a container on Tuwunel's own networks can call it.
+      - TUWUNEL_REGISTRATION_SHARED_SECRET_FILE=/run/secrets/registration_shared_secret
     volumes:
       # Named volumes on the NVMe rather than DATA_LOCATION binds, for the
       # reason the Postgres cluster left DATA_LOCATION: it is a USB disk whose
@@ -711,6 +723,7 @@ services:
       - tuwunel_media:/var/lib/tuwunel-media
       - tuwunel_backups:/var/lib/tuwunel-backups
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_tuwunel_secret.txt:/run/secrets/oidc_tuwunel_secret:ro
+      - ${DATA_LOCATION:-./data}/tuwunel-secrets/registration_shared_secret:/run/secrets/registration_shared_secret:ro
     healthcheck:
       <<: *healthcheck-default
       # The image's own probe: it reads the same environment and requests
@@ -756,7 +769,7 @@ services:
     container_name: pi-element
     # Started by the tuwunel profile too, like flaresolverr under prowlarr: a
     # homeserver with no web client is not the chat anyone enabled.
-    profiles: ["element", "tuwunel", "all"]
+    profiles: ["element", "tuwunel", "openclaw", "all"]
     # Static files behind nginx, which already runs as its own user. The entrypoint
     # renders the nginx conf into conf.d on every start, hence that tmpfs.
     read_only: true

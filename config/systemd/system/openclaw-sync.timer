@@ -1,0 +1,13 @@
+[Unit]
+Description=Sync the family assistant with Forgejo every quarter hour
+
+[Timer]
+# What the knowledge-base skill tells the agents to promise: a proposal becomes
+# a pull request within about fifteen minutes.
+OnCalendar=*:0/15
+# No catch-up at boot: the next quarter hour is soon enough, and the stack is
+# still starting then.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

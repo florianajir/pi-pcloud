@@ -39,10 +39,17 @@ jobs:
       # semver - a digest-only bump reports an empty update-type, which matches
       # neither entry. On a grouped pull request the output is the highest
       # change among its members, so a major cannot ride in beside a patch.
+      #
+      # OpenClaw stays manual whatever the bump: its calendar versions make
+      # every monthly release a "minor", each one carries a batch of security
+      # fixes and policy changes, and what decides whether this agent can do
+      # more than it should - which tools a deny group covers, what a config
+      # key still means - is nothing CI's start-and-healthcheck exercises.
       - name: Enable auto-merge for patch and minor bumps
         if: >-
           contains(fromJSON('["version-update:semver-patch", "version-update:semver-minor"]'),
           steps.metadata.outputs.update-type)
+          && !contains(steps.metadata.outputs.dependency-names, 'openclaw/openclaw')
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
