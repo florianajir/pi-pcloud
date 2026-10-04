@@ -426,8 +426,8 @@ Podman), or on a separate host over SSH. Neither belongs here, so the boundary i
 - **No tool that executes, browses or fetches.** `tools.deny` removes the runtime, browser,
   automation and node groups, and `web_fetch` and `x_search`; `exec` is `deny`; the file tools are
   confined to the agent's own workspace. What is left is reading and writing its notes, memory
-  search, `web_search`, looking again at a photo or a PDF it was sent, reading its own past sessions,
-  and the reply.
+  search, `web_search`, reading its own past sessions, and the reply; photos and PDFs it is sent
+  arrive with the message.
 - **No tool that reaches another agent.** The other agents are the other family members, so
   `sessions_spawn`, `sessions_send` and `agents_list` are denied. So are tools that do nothing in a
   DM but cost prompt tokens: the `conversations_*` tools (their addresses are scoped to the agent's
@@ -485,11 +485,16 @@ model as an unreadable attachment.
   characters of text — a scan — is rendered to an image for the model instead. Measured on the Pi, in
   a throwaway container of the image: 17 to 20 text pages in 0.25–0.3 s, three image-only pages in
   0.18 s, about 120 MiB for the whole process.
-- **`view_image` and `pdf` stay.** OpenClaw drops image data from the history after three turns; these
-  look at an earlier attachment again. The `pdf` tool makes a nested model call of its own.
-- **Kept a week.** Inbound attachments are pruned after `attachments.ttlHours: 168`, the most OpenClaw
-  allows; without it they would pile up in the `openclaw_state` volume, and in every Backrest
-  snapshot of it.
+- **`view_image` and `pdf` are denied, by necessity.** OpenClaw registers them once the model takes
+  images, to look at an earlier attachment again. Both declare `exclusiveMinimum` in their parameters,
+  which agentgateway passes to Gemini as is, and Gemini rejects: every request, to every agent, then
+  failed with `400 Invalid JSON payload … Unknown name "exclusiveMinimum"`. Measured within minutes of
+  enabling images, and fixed by the deny. The cost: OpenClaw drops image data from the history after
+  three turns, and the agent can no longer look again.
+- **Kept a week, both copies.** OpenClaw keeps each attachment twice: in its media directory, pruned
+  by `attachments.ttlHours: 168` (the most it allows), and in the receiving agent's workspace
+  (`media/inbound/openclaw-staged-*`), which that setting does not touch and `openclaw-sync.py` prunes
+  after a week. Neither copy reaches Forgejo: the sync excludes `media/` from the memory branches.
 - **Text in an image is not wrapped.** Search results and extracted PDF text arrive inside the
   untrusted-content envelope; words written in a photo or a screenshot reach the model as part of the
   image. A household rule says such text is information, never instructions, and the boundaries
