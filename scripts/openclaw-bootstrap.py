@@ -832,6 +832,10 @@ def main():
         log(f"Restarting {CONTAINER} to apply the changes")
         if docker("restart", CONTAINER, timeout=240).returncode != 0:
             die(f"could not restart {CONTAINER}")
+        # The CLI steps below exec into it, and failed against a gateway still
+        # starting (measured: the memory index step).
+        if not pilib.wait_for_health(CONTAINER):
+            die(f"{CONTAINER} did not come back healthy after the restart")
     ensure_household_rules()
     ensure_memory_indexes()
     ensure_forgejo(host_name)
