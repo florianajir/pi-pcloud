@@ -18,7 +18,8 @@
    family agent answers whoever mentions it; every person is invited once
    their Matrix account exists.
 5. The household rules (config/openclaw/household/AGENTS.md): a read-only copy
-   in every workspace, which the gateway injects into each agent's prompt.
+   in every workspace, which the gateway injects into each agent's prompt; and
+   every agent's memory index, rebuilt when its scope changed.
 6. Its Forgejo side, when Forgejo runs: a local, restricted bot user, the two
    repositories it pushes to (scripts/openclaw-sync.py), and their branch
    protection.
@@ -574,6 +575,17 @@ def ensure_household_rules():
         log(f"Household rules placed in {len(changed)} workspace(s)")
 
 
+def ensure_memory_indexes():
+    """OpenClaw leaves a memory index whose scope changed - the family room's
+    paths added to every agent, a provider switched - serving stale results,
+    and waits for this command, because a rebuild may call an embeddings API.
+    Search is keyword-only here (openclaw-pre-start.py), so it costs nothing,
+    and it does nothing when every index is current."""
+    proc = docker("exec", CONTAINER, "node", "openclaw.mjs", "memory", "status", "--index", "--json", timeout=600)
+    if proc.returncode != 0:
+        log("WARNING: could not bring the memory indexes up to date; run `openclaw memory status --index` by hand")
+
+
 # --- 6. Forgejo ---
 
 
@@ -773,6 +785,7 @@ def main():
         if docker("restart", CONTAINER, timeout=240).returncode != 0:
             die(f"could not restart {CONTAINER}")
     ensure_household_rules()
+    ensure_memory_indexes()
     ensure_forgejo(host_name)
     if not restart:
         # Needs the device logged in, which a restart just undid; the next

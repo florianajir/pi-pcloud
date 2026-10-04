@@ -406,7 +406,8 @@ memory, separate from every person's. Members can rename the room; the bootstrap
 - **Memory.** OpenClaw never injects `MEMORY.md` into a room session, a privacy filter no hook can
   lift. The room's instructions (`systemPrompt` in its `groups` entry, read-only config) have the
   agent keep lasting family facts in `USER.md`, which is injected, and other notes in `memory/`,
-  which it searches. Its workspace is synced to the `family` branch of `assistant-memory`, and its
+  which it searches. Told only "use `USER.md`", Flash-Lite still wrote a birthday to `MEMORY.md`, as
+  OpenClaw's own template says to; the instructions now give the reason. Its workspace is synced to the `family` branch of `assistant-memory`, and its
   knowledge proposals arrive as pull requests like anyone's.
 - **Read by the private agents, never the reverse.** Each person's agent finds what the family agent
   remembers through memory search: `MEMORY.md`, `USER.md` and `memory/` of the family workspace are
@@ -563,6 +564,12 @@ memory simply stays in the `openclaw_state` volume, which Backrest snapshots eit
 - **Encryption**: the bootstrap creates a server-side room-key backup for the bot's device the first
   time. A crypto store lost to an unclean shutdown (upstream issue #158784) is then restorable with
   `openclaw matrix verify backup restore`, rather than leaving every encrypted DM unreadable.
+- **Memory search is keyword-only** (`memory.search.provider: "none"`). Left unset it means OpenAI
+  embeddings, which the gateway cannot reach: the index then stalls on a provider mismatch. And
+  OpenClaw does not rebuild an index whose scope changed — the family room's paths added to every
+  agent did exactly that — it serves stale results until `openclaw memory status --index` runs, because
+  a rebuild may call an embeddings API. Measured: a birthday told in the family room was not found
+  from a DM until then. Keyword-only, a rebuild costs nothing, so the bootstrap runs it at every start.
 - **The CLI** runs inside the container: `docker exec pi-openclaw node openclaw.mjs channels status`,
   `… agents list`, `… matrix verify status`. Each call is a second Node process in the same cgroup —
   about 400 MiB — which is why `mem_limit` is above what the gateway alone measured.

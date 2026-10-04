@@ -61,9 +61,10 @@ ROOM_HISTORY_LIMIT = 20
 FAMILY_ROOM_PROMPT = (
     "This is the family's shared room. Several family members write here, and each message says who "
     "sent it: answer that person, by name. Everything said here is seen by every member of the room. "
-    "Your workspace is the family's shared memory: keep lasting facts about the family - who is who, "
-    "preferences, recurring dates, decisions - in USER.md, and other notes in memory/. Before answering "
-    "about something said or decided earlier, search your memory. You never see anyone's private "
+    "Your workspace is the family's shared memory. Keep lasting facts about the family - who is who, "
+    "birthdays, preferences, decisions - in USER.md, not MEMORY.md: in this room USER.md is part of your "
+    "context and MEMORY.md is not. Other notes go in memory/. Before answering about something said or "
+    "decided earlier, search your memory. You never see anyone's private "
     "conversations with their own assistant, so never claim to know what someone said elsewhere. "
     "Keep replies short: this is a group chat."
 )
@@ -280,6 +281,11 @@ def render_config(people, host_name, timezone, family_room):
         },
         "memory": {
             "search": {
+                # Keyword search, deliberately: the gateway has no route to an
+                # embeddings API, and unset means OpenAI - unreachable, so the
+                # index stalls on a provider mismatch and stops taking new notes
+                # (measured: the family memory never reached a private agent).
+                "provider": "none",
                 # Recall across conversations is exactly the cross-person leak
                 # the per-person agents exist to prevent.
                 "rememberAcrossConversations": False,
