@@ -14,14 +14,18 @@
    off for everyone else - and a server-side backup of its room keys.
 3. The people it answers: every LLDAP account but the service accounts,
    cached for openclaw-pre-start.py, which renders one agent per person.
-4. The household rules (config/openclaw/household/AGENTS.md): a read-only copy
-   in every workspace, which the gateway injects into each agent's prompt.
-5. Its Forgejo side, when Forgejo runs: a local, restricted bot user, the two
+4. The family room: one encrypted room, created by the bot, where a shared
+   family agent answers whoever mentions it; every person is invited once
+   their Matrix account exists.
+5. The household rules (config/openclaw/household/AGENTS.md): a read-only copy
+   in every workspace, which the gateway injects into each agent's prompt; and
+   every agent's memory index, rebuilt when its scope changed.
+6. Its Forgejo side, when Forgejo runs: a local, restricted bot user, the two
    repositories it pushes to (scripts/openclaw-sync.py), and their branch
    protection.
 
-Restarts the gateway once if the account or the people changed. Idempotent: the
-next start redoes nothing that is already in place.
+Restarts the gateway once if the account, the people or the family room
+changed. Idempotent: the next start redoes nothing that is already in place.
 """
 
 import hashlib
@@ -32,6 +36,7 @@ import re
 import subprocess
 import sys
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 import pilib
 from pilib import CurlError, die, fix_ownership, get_env_value, log, resolve_data_location_path, safe_chmod
@@ -190,21 +195,63 @@ def ensure_plugins():
 # --- 2. The bot's Matrix account ---
 
 
-def matrix_login_works(user_id, password):
-    body = {"type": "m.login.password", "identifier": {"type": "m.id.user", "user": user_id}, "password": password}
+def matrix_api(token, method, path, body=None):
+    """One client-server call as the bot, as (status, parsed body). curl takes
+    its options as a config on stdin, so the access token is in no argv on the
+    host's process table."""
+
+    def quoted(value):
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    config = [
+        f"url = {quoted(TUWUNEL + path)}",
+        f"request = {quoted(method)}",
+        f"header = {quoted('Authorization: Bearer ' + token)}",
+        'header = "Content-Type: application/json"',
+    ]
+    if body is not None:
+        config.append(f"data-binary = {quoted(json.dumps(body))}")
+    proc = docker(
+        "run", "--rm", "-i", "--network", pilib.DOCKER_CURL_NETWORK, pilib.CURL_IMAGE,
+        "-sS", *pilib.CURL_TIMEOUTS, "-w", "\\n%{http_code}", "--config", "-",
+        input_text="\n".join(config) + "\n", timeout=60,
+    )  # fmt: skip
+    payload, _, status = proc.stdout.rpartition("\n")
+    try:
+        parsed = json.loads(payload) if payload.strip() else {}
+    except json.JSONDecodeError:
+        parsed = {}
+    status = status.strip()
+    return (int(status) if status.isdigit() else 0), parsed
+
+
+def matrix_login(user_id, password, device_name):
+    body = {
+        "type": "m.login.password",
+        "identifier": {"type": "m.id.user", "user": user_id},
+        "password": password,
+        "initial_device_display_name": device_name,
+    }
     try:
         login = pilib.docker_curl_json(
             "-H", "Content-Type: application/json", f"{TUWUNEL}/_matrix/client/v3/login", body=json.dumps(body)
         )
     except CurlError:
+        return ""
+    return login.get("access_token", "")
+
+
+def matrix_logout(token):
+    """Every login here creates a device; leave none behind."""
+    if matrix_api(token, "POST", "/_matrix/client/v3/logout", {})[0] != 200:
+        log("WARNING: could not log a bootstrap session out; a stale device is left on the bot")
+
+
+def matrix_login_works(user_id, password):
+    token = matrix_login(user_id, password, "openclaw-bootstrap check")
+    if not token:
         return False
-    # The check itself created a device; leave none behind.
-    try:
-        pilib.docker_curl(
-            "-X", "POST", "-H", f"Authorization: Bearer {login['access_token']}", f"{TUWUNEL}/_matrix/client/v3/logout"
-        )
-    except CurlError:
-        log("WARNING: could not log the account check out; a stale device is left on the bot")
+    matrix_logout(token)
     return True
 
 
@@ -295,7 +342,7 @@ def lldap_people():
     )["data"]["users"]  # fmt: skip
 
     people = []
-    agents = set()
+    agents = {FAMILY_AGENT}
     for user in sorted(users, key=lambda user: user["id"].lower()):
         if {group["displayName"] for group in user["groups"]} & SERVICE_GROUPS:
             continue
@@ -303,6 +350,7 @@ def lldap_people():
         agent = agent_id(uid)
         # Two uids reduced to one agent id (jean.dupont, jean_dupont) would
         # share a workspace and its MEMORY.md: the leak per-person agents close.
+        # The family room's agent holds one id of its own.
         if agent in agents:
             log(f"WARNING: {uid} reduces to the agent id {agent}, already taken; the assistant will not answer it")
             continue
@@ -327,16 +375,156 @@ def sync_people():
 
     pilib.write_file_atomic(people_file, json.dumps(people, indent=2) + "\n")
     fix_ownership(people_file)
+    render_config()
+    log(f"The assistant now answers {len(people)} people")
+    return True
+
+
+def read_people():
+    try:
+        return json.loads((data_dir() / "people.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def render_config():
     proc = subprocess.run(
         [sys.executable, str(pilib.SCRIPT_DIR / "openclaw-pre-start.py")], capture_output=True, text=True, check=False
     )
     if proc.returncode != 0:
         die(f"openclaw-pre-start.py failed re-rendering the config: {proc.stderr.strip()[-400:]}")
-    log(f"The assistant now answers {len(people)} people")
+
+
+# --- 4. The family room ---
+
+# The one room the assistant answers in, as an agent of its own whose workspace
+# is the family's shared memory; openclaw-pre-start.py binds it to the room ID
+# recorded here, and openclaw-sync.py pushes it like a person's.
+FAMILY_AGENT = "family"
+FAMILY_ROOM_FILE = "family-room.json"
+FAMILY_ROOM_NAME = "Family"
+FAMILY_ROOM_TOPIC = (
+    "The family's room. Mention @Assistant to ask it something; what it learns here, it remembers for everyone."
+)
+
+
+def family_room_state():
+    try:
+        return json.loads((data_dir() / FAMILY_ROOM_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_family_room_state(state):
+    path = data_dir() / FAMILY_ROOM_FILE
+    pilib.write_file_atomic(path, json.dumps(state, indent=2) + "\n")
+    fix_ownership(path)
+
+
+def matrix_account_exists(user_id):
+    """A Matrix account is created at its owner's first SSO sign-in, so an
+    LLDAP account may have none yet - and an invite to it would fail."""
+    try:
+        pilib.docker_curl_json(f"{TUWUNEL}/_matrix/client/v3/profile/{quote(user_id, safe='')}")
+    except CurlError:
+        return False
     return True
 
 
-# --- 4. The household rules ---
+def create_family_room(token, invitees):
+    """Room version 11, not Tuwunel's default 12: from 12 on, the creator - the
+    bot - holds unlimited power that nobody can take back. Everyone who joins
+    is an administrator (users_default), and inviting takes no rank."""
+    status, created = matrix_api(token, "POST", "/_matrix/client/v3/createRoom", {
+        "room_version": "11",
+        "preset": "private_chat",
+        "name": FAMILY_ROOM_NAME,
+        "topic": FAMILY_ROOM_TOPIC,
+        "initial_state": [
+            {"type": "m.room.encryption", "state_key": "", "content": {"algorithm": "m.megolm.v1.aes-sha2"}}
+        ],
+        "power_level_content_override": {"users_default": 100, "invite": 0},
+        "invite": invitees,
+    })  # fmt: skip
+    if status != 200 or not created.get("room_id"):
+        log(f"WARNING: creating the family room answered {status} {created.get('errcode', '')}")
+        return ""
+    return created["room_id"]
+
+
+def demote_bot(token, room_id, bot_id):
+    """The bot down to an ordinary member who may still pin. The plugin hands
+    the agent a delete action, which at 100 would redact anyone's message; a
+    room's creator can lower its own rank, and nobody else can lower it."""
+    path = f"/_matrix/client/v3/rooms/{quote(room_id, safe='')}/state/m.room.power_levels"
+    status, levels = matrix_api(token, "GET", path)
+    if status != 200:
+        return False
+    levels.setdefault("users", {})[bot_id] = 0
+    levels.setdefault("events", {})["m.room.pinned_events"] = 0
+    return matrix_api(token, "PUT", path, levels)[0] == 200
+
+
+def invite(token, room_id, user_id):
+    """Invites anyone who never had a membership in the room: someone who left
+    stays out until a member invites them back."""
+    room = f"/_matrix/client/v3/rooms/{quote(room_id, safe='')}"
+    if matrix_api(token, "GET", f"{room}/state/m.room.member/{quote(user_id, safe='')}")[0] == 200:
+        return True
+    return matrix_api(token, "POST", f"{room}/invite", {"user_id": user_id})[0] == 200
+
+
+def ensure_family_room(server_name, password, people):
+    """Creates the room once and invites each person whose Matrix account
+    exists. Signs in only when there is something to do. Returns whether the
+    room was just created, which the gateway needs a restart to bind."""
+    if not people:
+        return False
+    state = family_room_state()
+    invited = set(state.get("invited", []))
+    pending = [
+        user_id
+        for user_id in (f"@{person['id']}:{server_name}" for person in people)
+        if user_id not in invited and matrix_account_exists(user_id)
+    ]
+    if state.get("room_id") and state.get("bot_demoted") and not pending:
+        return False
+
+    bot_id = f"@{BOT_LOCALPART}:{server_name}"
+    token = matrix_login(bot_id, password, "openclaw-bootstrap")
+    if not token:
+        log("WARNING: the bot could not sign in to set up the family room; the next start retries")
+        return False
+    created = False
+    try:
+        if not state.get("room_id"):
+            room_id = create_family_room(token, pending)
+            if not room_id:
+                return False
+            # Saved before anything else can fail: one room, ever.
+            state = {"room_id": room_id, "invited": sorted(pending), "bot_demoted": False}
+            save_family_room_state(state)
+            created = True
+            log(f"Created the family room {room_id}, inviting {len(pending)} people")
+            pending = []
+        if not state.get("bot_demoted"):
+            state["bot_demoted"] = demote_bot(token, state["room_id"], bot_id)
+            if not state["bot_demoted"]:
+                log("WARNING: could not lower the bot's rank in the family room; the next start retries")
+        for user_id in pending:
+            if invite(token, state["room_id"], user_id):
+                invited.add(user_id)
+                log(f"Invited {user_id} to the family room")
+        state["invited"] = sorted(invited | set(state.get("invited", [])))
+        save_family_room_state(state)
+    finally:
+        matrix_logout(token)
+    if created:
+        render_config()
+    return created
+
+
+# --- 5. The household rules ---
 
 # config/openclaw/household/AGENTS.md, copied into every workspace at this path,
 # which openclaw-pre-start.py names to the bootstrap-extra-files hook: the hook
@@ -369,11 +557,9 @@ PLACE_RULES = f"""
 
 
 def ensure_household_rules():
-    try:
-        people = json.loads((data_dir() / "people.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        people = []
-    agents = [person["agent"] for person in people]
+    agents = [person["agent"] for person in read_people()]
+    if family_room_state().get("room_id"):
+        agents.append(FAMILY_AGENT)
     if not agents:
         return
     image, volume = gateway_image_and_volume()
@@ -389,7 +575,18 @@ def ensure_household_rules():
         log(f"Household rules placed in {len(changed)} workspace(s)")
 
 
-# --- 5. Forgejo ---
+def ensure_memory_indexes():
+    """OpenClaw leaves a memory index whose scope changed - the family room's
+    paths added to every agent, a provider switched - serving stale results,
+    and waits for this command, because a rebuild may call an embeddings API.
+    Search is keyword-only here (openclaw-pre-start.py), so it costs nothing,
+    and it does nothing when every index is current."""
+    proc = docker("exec", CONTAINER, "node", "openclaw.mjs", "memory", "status", "--index", "--json", timeout=600)
+    if proc.returncode != 0:
+        log("WARNING: could not bring the memory indexes up to date; run `openclaw memory status --index` by hand")
+
+
+# --- 6. Forgejo ---
 
 
 def forgejo_admin(*args):
@@ -576,15 +773,19 @@ def main():
     # changes after it calls for a restart.
     if ensure_plugins() and docker("start", CONTAINER).returncode != 0:
         die(f"could not start {CONTAINER} after the plugin install")
-    restart = ensure_bot_account(f"chat.{host_name}", matrix_password())
+    server_name = f"chat.{host_name}"
+    password = matrix_password()
+    restart = ensure_bot_account(server_name, password)
     restart = sync_people() or restart
-    # Before anything that can die: the next run finds people.json already
-    # current and would never ask for this restart again.
+    restart = ensure_family_room(server_name, password, read_people()) or restart
+    # Before anything that can die: the next run finds people.json and the
+    # family room already current, and would never ask for this restart again.
     if restart:
         log(f"Restarting {CONTAINER} to apply the changes")
         if docker("restart", CONTAINER, timeout=240).returncode != 0:
             die(f"could not restart {CONTAINER}")
     ensure_household_rules()
+    ensure_memory_indexes()
     ensure_forgejo(host_name)
     if not restart:
         # Needs the device logged in, which a restart just undid; the next
