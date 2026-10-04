@@ -16,6 +16,10 @@ each LLDAP account gets an agent of its own, with its own workspace, bound to
 that person's Matrix ID, and `ownership: explicit` makes anything unbound fail
 closed rather than land on a default agent.
 
+Plus one shared agent for the family room openclaw-bootstrap.py creates: what
+is said there is shared by nature, so its workspace is the family's memory. It
+answers only when mentioned, and only the people in LLDAP.
+
 The people list is not read here: at pre-start LLDAP is not running yet. It is
 cached in DATA_LOCATION/openclaw/people.json by scripts/openclaw-bootstrap.py,
 which re-runs this and restarts the gateway when the list changes. Before the
@@ -42,6 +46,27 @@ from pilib import (
 
 STATE_DIR = "/home/node/.openclaw"
 BOT_LOCALPART = "assistant"
+# The family room's agent and the room openclaw-bootstrap.py created for it.
+FAMILY_AGENT = "family"
+FAMILY_ROOM_FILE = "family-room.json"
+FAMILY_WORKSPACE = f"{STATE_DIR}/workspaces/{FAMILY_AGENT}"
+# A message that starts with the bot's name wakes it, besides Element's
+# mention pill: OpenClaw would otherwise derive a pattern from the agent's
+# name and wake on the word anywhere in a sentence.
+FAMILY_MENTION_PATTERNS = [r"^\s*@?assistant\b"]
+# Unmentioned room messages kept in memory and handed over with the next
+# mention, so "what do you think?" has something to refer to. No request of
+# its own; lost on restart.
+ROOM_HISTORY_LIMIT = 20
+FAMILY_ROOM_PROMPT = (
+    "This is the family's shared room. Several family members write here, and each message says who "
+    "sent it: answer that person, by name. Everything said here is seen by every member of the room. "
+    "Your workspace is the family's shared memory: keep lasting facts about the family - who is who, "
+    "preferences, recurring dates, decisions - in USER.md, and other notes in memory/. Before answering "
+    "about something said or decided earlier, search your memory. You never see anyone's private "
+    "conversations with their own assistant, so never claim to know what someone said elsewhere. "
+    "Keep replies short: this is a group chat."
+)
 
 # An env_file, read by the Docker daemon, rather than a mounted secrets file:
 # OpenClaw's file provider refuses a file another uid owns, and a hook run by
@@ -99,16 +124,30 @@ def read_people(data_dir):
     return sorted(people, key=lambda person: person["id"])
 
 
-def agents_for(people, server_name):
-    """One agent and one binding per person. `id` is the LLDAP uid, which is
-    also the Matrix localpart (tuwunel takes preferred_username); `agent` is
-    the same name reduced to what an OpenClaw agent id accepts."""
+def read_family_room(data_dir):
+    try:
+        return json.loads((data_dir / FAMILY_ROOM_FILE).read_text(encoding="utf-8")).get("room_id", "")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return ""
+
+
+def agents_for(people, server_name, family_room):
+    """One agent and one binding per person, plus the family room's. `id` is
+    the LLDAP uid, which is also the Matrix localpart (tuwunel takes
+    preferred_username); `agent` is the same name reduced to what an OpenClaw
+    agent id accepts."""
     if not people:
         return {}, []
+    # Each person's agent may search what the family agent remembers - read
+    # only: outside its workspace, where the file tools cannot write. Never
+    # the other way round: no DM reaches the family agent.
+    family_paths = [f"{FAMILY_WORKSPACE}/{name}" for name in ("MEMORY.md", "USER.md", "memory")]
+    family_memory = {"memory": {"search": {"extraPaths": family_paths}}} if family_room else {}
     entries = {
         person["agent"]: {
             "name": person.get("name") or person["id"],
             "workspace": f"{STATE_DIR}/workspaces/{person['agent']}",
+            **family_memory,
         }
         for person in people
     }
@@ -120,12 +159,46 @@ def agents_for(people, server_name):
         }
         for person in people
     ]
+    if family_room:
+        entries[FAMILY_AGENT] = {
+            "name": "Family",
+            "workspace": FAMILY_WORKSPACE,
+            "groupChat": {"mentionPatterns": FAMILY_MENTION_PATTERNS},
+        }
+        bindings.append(
+            {
+                "type": "route",
+                "agentId": FAMILY_AGENT,
+                "match": {"channel": "matrix", "peer": {"kind": "channel", "id": family_room}},
+            }
+        )
     return entries, bindings
 
 
-def render_config(people, host_name, timezone):
+def rooms_for(people, server_name, family_room):
+    """The family room is the only room answered. Listing its people is what
+    lets them run commands there (//new): with no list, anyone in the room
+    could talk to the agent and nobody could reset it."""
+    if not (family_room and people):
+        return {"groupPolicy": "disabled"}
+    return {
+        "groupPolicy": "allowlist",
+        "groups": {
+            family_room: {
+                "users": [f"@{person['id']}:{server_name}" for person in people],
+                # Every accepted room message gets a reply, so without a mention
+                # each one would be a model turn and an answer.
+                "requireMention": True,
+                "systemPrompt": FAMILY_ROOM_PROMPT,
+            }
+        },
+        "historyLimit": ROOM_HISTORY_LIMIT,
+    }
+
+
+def render_config(people, host_name, timezone, family_room):
     server_name = f"chat.{host_name}"
-    entries, bindings = agents_for(people, server_name)
+    entries, bindings = agents_for(people, server_name, family_room)
     agents = {
         "defaults": {
             "model": {"primary": "agentgateway/assistant"},
@@ -171,7 +244,13 @@ def render_config(people, host_name, timezone):
                             "name": "assistant",
                             "input": ["text"],
                             "reasoning": False,
-                            "contextWindow": 131072,
+                            # Compaction keeps a session under 3/4 of this
+                            # (OpenClaw caps its reserve at 25%), which bounds
+                            # every request: five at 48k fit Flash-Lite's 250k
+                            # tokens a minute. Smaller, and a session measured
+                            # at 22k after a few searches would compact - a
+                            # request each time - every few turns.
+                            "contextWindow": 65536,
                             "maxTokens": 8192,
                         }
                     ],
@@ -289,10 +368,11 @@ def render_config(people, host_name, timezone):
                 "encryption": True,
                 # Every invite, because a DM cannot be told from a room at
                 # invite time and autoJoinAllowlist takes room IDs only; the
-                # policies below then drop whatever is not an allowed DM.
+                # policies below then drop whatever is not an allowed DM or
+                # the family room.
                 "autoJoin": "always",
                 "joinIntro": False,
-                "groupPolicy": "disabled",
+                **rooms_for(people, server_name, family_room),
                 "dm": {
                     "policy": "allowlist",
                     "allowFrom": [f"@{person['id']}:{server_name}" for person in people],
@@ -317,7 +397,8 @@ def main():
             config_file.rmdir()
         except OSError:
             die(f"{config_file} is a non-empty directory; remove it by hand")
-    rendered = json.dumps(render_config(people, host_name, timezone), indent=2) + "\n"
+    family_room = read_family_room(data_dir)
+    rendered = json.dumps(render_config(people, host_name, timezone, family_room), indent=2) + "\n"
     try:
         unchanged = config_file.read_text(encoding="utf-8") == rendered
     except OSError:
