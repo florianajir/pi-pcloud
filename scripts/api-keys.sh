@@ -39,9 +39,10 @@ main() {
   Gateway API keys — treat these like passwords.
 
   These are what a client presents TO the gateway. They are not the provider
-  keys: GROQ_API_KEY and OPENROUTER_API_KEY stay in .env, are held by the
-  gateway, and are never sent by a client. One token therefore opens every
-  provider, and which models you get depends on the URL, not on the token.
+  keys: GROQ_API_KEY, OPENROUTER_API_KEY and GEMINI_API_KEY stay in .env, are
+  held by the gateway, and are never sent by a client. One token therefore
+  opens every provider, and which models you get depends on the URL, not on
+  the token.
 
   For tools on other machines
     Token     $agent_key

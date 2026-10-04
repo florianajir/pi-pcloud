@@ -730,6 +730,12 @@ services:
       # manifest lists them, so restoring without them fails verification.
       - tuwunel_media:/userdata/tuwunel-media:ro
       - tuwunel_backups:/userdata/tuwunel-backups:ro
+      # The assistant: its workspaces (also pushed to Forgejo when that runs),
+      # its sessions, and the Matrix crypto state that keeps its device the
+      # one family clients already trust. The plugin code, the git
+      # directories and the knowledge-base export are excluded in the plan:
+      # the bootstrap and the sync rebuild all three.
+      - openclaw_state:/userdata/openclaw:ro
       # The two Stremio addons. db.sqlite holds every saved addon configuration,
       # and losing it means every installed addon URL in the household stops
       # resolving. Both are WAL-mode and written while the snapshot runs, so

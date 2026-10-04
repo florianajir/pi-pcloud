@@ -169,6 +169,11 @@ volumes:
   tuwunel_data:
   tuwunel_media:
   tuwunel_backups:
+  # The assistant's state on the NVMe for Tuwunel's reason: SQLite session
+  # stores and the Matrix crypto snapshot, which a lying fsync after a power
+  # cut turns into a device that can no longer encrypt (openclaw issue
+  # #158784). The workspaces in it are pushed to Forgejo by openclaw-sync.
+  openclaw_state:
 
 networks:
   dns_internal:
@@ -288,6 +293,14 @@ networks:
   aiometadata:
     driver: bridge
     name: aiometadata
+    internal: true
+  # The family assistant and the two services it talks to by name: Tuwunel for
+  # its Matrix account and Forgejo for its repositories. Internal, and OpenClaw
+  # sits on nothing else but `ai`, so the agent has no route to the internet -
+  # the exfiltration leg of what a prompt injection could turn it into.
+  assistant:
+    driver: bridge
+    name: assistant
     internal: true
   # Same idea for backrest, whose API returns the restic key and the S3 keys to any
   # authenticated caller: on frontend that port was open to ~24 containers, here to

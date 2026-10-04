@@ -315,6 +315,14 @@ run_pre_start_hook() {
     run_hook_script "$_hook" || die "hook $1 failed; nothing was started"
 }
 
+# A service's own pre-start hook, in whichever language it is written: lib.sh's
+# run_script picks the interpreter from the extension, so a hook that moved to
+# Python keeps running on enable instead of silently dropping out of it.
+run_service_pre_start_hook() {
+    run_pre_start_hook "$1-pre-start.sh"
+    run_pre_start_hook "$1-pre-start.py"
+}
+
 # Hooks that belong to an always-on service but write files a *newly enabled*
 # one needs. Only `$svc-pre-start.sh` used to run on enable, and every OIDC
 # client secret is written by authelia-pre-start.sh rather than by the client's
@@ -951,7 +959,7 @@ cmd_enable() {
 
     run_shared_pre_start_hooks
     for _svc in $newly_on; do
-        run_pre_start_hook "$_svc-pre-start.sh"
+        run_service_pre_start_hook "$_svc"
     done
     run_shared_db_hook
     echo "🚀 Starting$newly_on..."
@@ -1078,7 +1086,7 @@ cmd_config() {
     if [ -n "$newly_on" ]; then
         run_shared_pre_start_hooks
         for svc in $newly_on; do
-            run_pre_start_hook "$svc-pre-start.sh"
+            run_service_pre_start_hook "$svc"
         done
         run_shared_db_hook
         echo "🚀 Starting$newly_on..."

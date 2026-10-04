@@ -186,6 +186,92 @@ routes:
             custom:
               formats:
                 - type: completions
+  # The family assistant's model chain (compose/compose-ai.yaml, openclaw). A
+  # route of its own rather than an llm: virtualModel: every llm: model is
+  # listed on /v1/models, so Open WebUI would offer it to everyone. The key
+  # below is valid here and nowhere else, and each provider names its own model,
+  # so OpenClaw asks for `assistant` and never learns which one answered.
+  #
+  # The native `gemini` provider carries Gemini 3's thought signature inside
+  # the tool_call id, which OpenClaw echoes back within a turn. `custom` on
+  # Google's OpenAI-compatible endpoint loses it, and every tool loop then
+  # fails on its second step. Flash-Lite because the free tier allows Flash 20
+  # requests a day, about three messages. Both measured - see docs/AI.md.
+  #
+  # Failover: a 429 (quota) or 503 (overload) evicts that group for 10 minutes
+  # and the retry lands on the next one, inside the same request. The two
+  # Flash-Lite models have separate free quotas; OpenRouter is paid, and last.
+  - name: assistant
+    gateways: default
+    matches:
+      - path:
+          pathPrefix: /assistant/v1
+    policies:
+      urlRewrite:
+        path:
+          prefix: /
+      apiKey:
+        mode: strict
+        keys:
+          - key: ${OPENCLAW_LLM_KEY}
+            metadata:
+              user: openclaw
+      # An exhausted provider is tried twice before its eviction takes hold, so
+      # two attempts per Gemini group, one for OpenRouter and one spare.
+      retry:
+        attempts: 6
+        codes: [429, 503]
+      ai:
+        routes:
+          /chat/completions: completions
+    backends:
+      - ai:
+          groups:
+            - providers:
+                - name: gemini-3.5-flash-lite
+                  provider:
+                    gemini:
+                      model: gemini-3.5-flash-lite
+                  policies:
+                    backendAuth:
+                      key: ${GEMINI_API_KEY}
+                    health:
+                      unhealthyExpression: response.code == 429 || response.code == 503
+                      eviction:
+                        duration: 10m
+            - providers:
+                - name: gemini-3.1-flash-lite
+                  provider:
+                    gemini:
+                      model: gemini-3.1-flash-lite
+                  policies:
+                    backendAuth:
+                      key: ${GEMINI_API_KEY}
+                    health:
+                      unhealthyExpression: response.code == 429 || response.code == 503
+                      eviction:
+                        duration: 10m
+            # Accepts Gemini's tool_call ids, mid-loop and in history. The
+            # reverse does not hold: Gemini coming back in the middle of a tool
+            # loop that started here answers 400 for that one message.
+            - providers:
+                - name: openrouter-gpt-oss-120b
+                  hostOverride: openrouter.ai:443
+                  pathPrefix: /api/v1
+                  provider:
+                    custom:
+                      model: openai/gpt-oss-120b
+                      formats:
+                        - type: completions
+                  policies:
+                    backendTLS:
+                      hostname: openrouter.ai
+                    backendAuth:
+                      key: ${OPENROUTER_API_KEY}
+                    # Same reason as the /openrouter/v1 route above.
+                    ai:
+                      defaults:
+                        max_tokens: 8192
 mcp:
   gateways: default
   policies:

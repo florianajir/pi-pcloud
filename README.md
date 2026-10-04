@@ -52,7 +52,7 @@ Prefer doing it by hand? See the [Installation guide](docs/INSTALLATION.md).
 | Category | Services |
 |----------|----------|
 | **Cloud & storage** | Nextcloud, Immich, Vaultwarden, Forgejo, n8n, ntfy |
-| **Communication** | Matrix chat: Tuwunel (homeserver) + Element Web |
+| **Communication** | Matrix chat: Tuwunel (homeserver) + Element Web, with a family assistant (OpenClaw) as `@assistant` |
 | **Network & access** | Traefik, Authelia, LLDAP, Headscale + Headplane, Tailscale |
 | **DNS & filtering** | Pi-hole, Unbound |
 | **Download & media** | qBittorrent, Prowlarr, Kapowarr, Shelfmark, Kavita, Audiobookshelf, FreshRSS, Stremio, AIOStreams + AIOMetadata, StremThru, FlareSolverr, Gluetun |

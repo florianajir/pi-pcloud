@@ -49,6 +49,9 @@
 /config/homepage/secrets/*
 !/config/homepage/secrets/.gitkeep
 /config/homepage/homepage.env
+# pilib's write_file_atomic names its temp file .<name>.<random>, beside it.
+/config/openclaw/openclaw.env
+/config/openclaw/.openclaw.env.*
 
 # Bytecode from importing the Python scripts (test harnesses, py_compile);
 # a plain run never writes it, since __main__ is not cached.
