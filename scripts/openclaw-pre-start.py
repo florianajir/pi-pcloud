@@ -243,7 +243,10 @@ def render_config(people, host_name, timezone, family_room):
                         {
                             "id": "assistant",
                             "name": "assistant",
-                            "input": ["text"],
+                            # Photos and scanned pages go to Gemini as images
+                            # (agentgateway translates OpenAI's image_url,
+                            # measured); about 1,100 input tokens each.
+                            "input": ["text", "image"],
                             "reasoning": False,
                             # Compaction keeps a session under 3/4 of this
                             # (OpenClaw caps its reserve at 25%), which bounds
@@ -305,6 +308,10 @@ def render_config(people, host_name, timezone, family_room):
             "allowBundled": ["none"],
             "load": {"extraDirs": ["/opt/household-skills"]},
         },
+        # Inbound photos and documents are kept a week, then pruned: long enough
+        # to look at one again (view_image, pdf), and the family's papers do not
+        # pile up in the state volume - and in every Backrest snapshot of it.
+        "attachments": {"ttlHours": 168},
         "cron": {"enabled": False},
         "browser": {"enabled": False},
         "tools": {
@@ -352,7 +359,10 @@ def render_config(people, host_name, timezone, family_room):
         "plugins": {
             # Fifteen bundled plugins load otherwise. searxng is not in the
             # image: scripts/openclaw-bootstrap.py installs it, as it does matrix.
-            "allow": ["matrix", "memory-core", "searxng"],
+            # document-extract is what reads a PDF, sent in a chat or through
+            # the pdf tool: the extractor lookup is filtered by this list, so
+            # without it a PDF reaches the model as an unreadable attachment.
+            "allow": ["matrix", "memory-core", "searxng", "document-extract"],
             "entries": {
                 "matrix": {"enabled": True},
                 "memory-core": {"config": {"dreaming": {"enabled": False}}},

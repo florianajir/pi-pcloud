@@ -426,7 +426,8 @@ Podman), or on a separate host over SSH. Neither belongs here, so the boundary i
 - **No tool that executes, browses or fetches.** `tools.deny` removes the runtime, browser,
   automation and node groups, and `web_fetch` and `x_search`; `exec` is `deny`; the file tools are
   confined to the agent's own workspace. What is left is reading and writing its notes, memory
-  search, `web_search`, reading its own past sessions, and the reply.
+  search, `web_search`, looking again at a photo or a PDF it was sent, reading its own past sessions,
+  and the reply.
 - **No tool that reaches another agent.** The other agents are the other family members, so
   `sessions_spawn`, `sessions_send` and `agents_list` are denied. So are tools that do nothing in a
   DM but cost prompt tokens: the `conversations_*` tools (their addresses are scoped to the agent's
@@ -470,6 +471,29 @@ preview with its empty allowlists, and the DMs are encrypted — or write a fals
 person's memory. The sync commits every memory change to Forgejo (`assistant-memory`) within a
 quarter of an hour, where it is visible and revertible. That is also why dreaming stays off: it
 would consolidate such a note into `MEMORY.md`.
+
+### Photos and documents
+
+The model entry accepts images, so a photo sent in a DM or the family room goes to Gemini with the
+message: agentgateway translates OpenAI's `image_url` into Gemini's format (measured, about 1,100
+input tokens per image). A PDF is read by OpenClaw's bundled `document-extract` plugin, which has to
+be in `plugins.allow`: the extractor lookup is filtered by that list, so without it a PDF reaches the
+model as an unreadable attachment.
+
+- **No extra request for an attached PDF.** Its text is extracted locally and wrapped as untrusted
+  content, with OpenClaw's defaults: 20 MB, 20 pages, 60,000 characters. A page with under 200
+  characters of text — a scan — is rendered to an image for the model instead. Measured on the Pi, in
+  a throwaway container of the image: 17 to 20 text pages in 0.25–0.3 s, three image-only pages in
+  0.18 s, about 120 MiB for the whole process.
+- **`view_image` and `pdf` stay.** OpenClaw drops image data from the history after three turns; these
+  look at an earlier attachment again. The `pdf` tool makes a nested model call of its own.
+- **Kept a week.** Inbound attachments are pruned after `attachments.ttlHours: 168`, the most OpenClaw
+  allows; without it they would pile up in the `openclaw_state` volume, and in every Backrest
+  snapshot of it.
+- **Text in an image is not wrapped.** Search results and extracted PDF text arrive inside the
+  untrusted-content envelope; words written in a photo or a screenshot reach the model as part of the
+  image. A household rule says such text is information, never instructions, and the boundaries
+  above hold whatever the model makes of it: no route out, replies confined to their conversation.
 
 ### The model behind `assistant`
 
