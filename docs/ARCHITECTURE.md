@@ -94,7 +94,7 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **stremio-lan** | The same Stremio server on a LAN macvlan address instead of the VPN, for DLNA casting — mutually exclusive with `stremio` | users, LAN renderers |
 | **Open WebUI** | Local AI chat frontend — see [Local AI](AI.md) | users |
 | **Agentgateway** | LLM and MCP gateway in front of llama.cpp: one OpenAI-compatible endpoint, one MCP endpoint, virtual keys and token rate limits | Open WebUI, and any API or MCP client |
-| **OpenClaw** | The family assistant, `@assistant` in the Matrix chat: one agent per LLDAP account, each with a workspace of its own, thinking through agentgateway's `/assistant/v1` route. No tool that executes, browses or fetches, and no network that leads out; its memory is pushed to Forgejo by `openclaw-sync.timer` — see [Local AI](AI.md#the-family-assistant-openclaw) | family members, in an encrypted DM |
+| **OpenClaw** | The family assistant, `@assistant` in the Matrix chat: one agent per LLDAP account, each with a workspace of its own, thinking through agentgateway's `/assistant/v1` route. No tool that executes, browses or fetches, and no network that leads out — it searches the web through the stack's SearXNG, which returns snippets, not pages; its memory is pushed to Forgejo by `openclaw-sync.timer` — see [Local AI](AI.md#the-family-assistant-openclaw) | family members, in an encrypted DM |
 | **llama.cpp / Piper / Parakeet / system-tools** | Inference, TTS, STT and the host-status tool | Agentgateway, Open WebUI |
 | **Homepage** | Dashboard with live widgets | users |
 | **Beszel** | Hardware metrics and threshold alerts | admins |

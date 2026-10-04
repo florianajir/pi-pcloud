@@ -70,7 +70,7 @@ backrest-pre-start.sh
 ntfy-pre-start.sh
 vaultwarden:vaultwarden-pre-start.sh
 freshrss:freshrss-pre-start.sh
-searxng,open-webui:searxng-pre-start.sh
+searxng,open-webui,openclaw:searxng-pre-start.sh
 trilium:trilium-pre-start.sh
 tuwunel,openclaw:tuwunel-pre-start.sh
 element,tuwunel,openclaw:element-pre-start.sh

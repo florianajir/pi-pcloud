@@ -231,7 +231,7 @@ COMPOSE_PROFILES=                                             # core services on
 
 **Optional services:** `beszel`, `beszel-agent`, `uptime-kuma`, `dockhand`, `n8n`, `n8n-runners`, `headplane`, `immich-server`, `immich-machine-learning`, `nextcloud`, `gluetun`, `qbittorrent`, `stremio`, `stremio-lan`, `aiostreams`, `aiometadata`, `stremthru`, `prowlarr`, `kapowarr`, `flaresolverr`, `kavita`, `shelfmark`, `audiobookshelf`, `freshrss`, `searxng`, `trilium`, `changedetection`, `forgejo`, `tuwunel`, `element`, `vaultwarden`, `llama-cpp`, `piper`, `parakeet`, `system-tools`, `open-webui`, `agentgateway`, `openclaw`, `prometheus`, `grafana`.
 
-`openclaw` starts `tuwunel`, `element` and `agentgateway` with it: the family assistant is a bot account on that homeserver, thinking through that gateway. Forgejo is optional for it — without it the memory simply stays in the assistant's volume.
+`openclaw` starts `tuwunel`, `element`, `agentgateway` and `searxng` with it: the family assistant is a bot account on that homeserver, thinking through that gateway and searching the web through that SearXNG. Forgejo is optional for it — without it the memory simply stays in the assistant's volume.
 
 `stremio` and `stremio-lan` are the same server in two networking modes and are **mutually exclusive** — they share one data volume and the same Traefik host rules. `stremio` is the default (VPN); pick `stremio-lan` only to cast to a DLNA/UPnP renderer, and read the trade-off in [Networking → Casting](NETWORKING.md#casting-to-a-dlna-renderer) first. `stremio-lan` is not part of `all`.
 

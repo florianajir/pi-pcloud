@@ -6,7 +6,8 @@ compose), so everything the gateway does is decided here and nothing a model
 says can change it. The policy below is the security boundary of this service:
 OpenClaw's sandbox needs a container-engine socket or an SSH target, so instead
 the agent is given no tool that executes, browses or fetches, and the container
-no route out (compose.yaml, the `assistant` network).
+no route out (compose.yaml, the `assistant` network). Its one window on the web
+is web_search through the stack's SearXNG, which returns snippets, not pages.
 
 One agent per person. The upstream trust model treats everyone allowed to DM a
 gateway as able to steer it, and a shared agent injects the same MEMORY.md into
@@ -179,7 +180,25 @@ def render_config(people, host_name, timezone):
         },
         "agents": agents,
         **({"bindings": bindings} if bindings else {}),
+        # No automatic reset: a conversation goes on until its person starts a
+        # new one, and compaction summarises it as it nears the context window.
+        # In Element a typed /new is taken for a client command; `//new` sends it.
         "session": {"dmScope": "per-channel-peer"},
+        "hooks": {
+            "internal": {
+                "entries": {
+                    # Injects the household rules into every agent's prompt. The
+                    # hook only reads inside a workspace, so openclaw-bootstrap.py
+                    # puts a read-only copy of config/openclaw/household/AGENTS.md
+                    # at this path in each one.
+                    "bootstrap-extra-files": {"enabled": True, "paths": ["household/AGENTS.md"]},
+                    # On /new, the last exchanges of the conversation it ends go
+                    # to a dated note in memory/, so starting over loses nothing
+                    # memory_search cannot find again.
+                    "session-memory": {"enabled": True},
+                },
+            }
+        },
         "memory": {
             "search": {
                 # Recall across conversations is exactly the cross-person leak
@@ -195,23 +214,50 @@ def render_config(people, host_name, timezone):
             "workshop": {"autonomous": {"mode": "off"}},
             # Only config/openclaw/skills: the bundled ones mostly drive tools
             # this agent does not have, and each one listed costs prompt tokens.
-            "allowBundled": [],
+            # Not [], which OpenClaw reads as no allowlist at all - every
+            # bundled skill loaded (measured: 13 of them). A name no skill has
+            # is how to allow none.
+            "allowBundled": ["none"],
             "load": {"extraDirs": ["/opt/household-skills"]},
         },
         "cron": {"enabled": False},
         "browser": {"enabled": False},
         "tools": {
             # The groups that execute, browse, fetch, schedule or reconfigure.
-            # What is left is the workspace files, memory and the reply itself.
+            # What is left is the workspace files, memory, web_search and the
+            # reply itself. Not group:web whole: web_fetch reads any URL - a
+            # page of untrusted text, and a request that can carry private data
+            # out in its query string - where web_search returns titles and
+            # snippets from SearXNG, wrapped as untrusted by OpenClaw's core.
             "deny": [
                 "group:runtime",
                 "group:ui",
                 "group:automation",
                 "group:nodes",
-                "group:web",
+                "web_fetch",
+                "x_search",
                 "sessions_spawn",
                 "sessions_send",
+                # Tools that do nothing here but cost prompt tokens: conversation
+                # addresses are scoped to this agent's own DM, spawning is denied
+                # above so there are no subagents to wait on, and presence needs
+                # Gateway operator access. agents_list would name the other
+                # family members' accounts, which this agent has no use for.
+                "conversations_list",
+                "conversations_send",
+                "conversations_turn",
+                "subagents",
+                "agents_wait",
+                "sessions_yield",
+                "presence",
+                "agents_list",
             ],
+            "web": {"search": {"provider": "searxng"}},
+            # Both default to true: an instruction planted in a search result
+            # could otherwise have one person's agent post into another family
+            # member's conversation. Replies stay in the conversation they
+            # answer.
+            "message": {"crossContext": {"allowWithinProvider": False, "allowAcrossProviders": False}},
             "fs": {"workspaceOnly": True},
             "exec": {"mode": "deny"},
             "elevated": {"enabled": False},
@@ -219,11 +265,15 @@ def render_config(people, host_name, timezone):
             "agentToAgent": {"enabled": False},
         },
         "plugins": {
-            # Fifteen bundled plugins load otherwise.
-            "allow": ["matrix", "memory-core"],
+            # Fifteen bundled plugins load otherwise. searxng is not in the
+            # image: scripts/openclaw-bootstrap.py installs it, as it does matrix.
+            "allow": ["matrix", "memory-core", "searxng"],
             "entries": {
                 "matrix": {"enabled": True},
                 "memory-core": {"config": {"dreaming": {"enabled": False}}},
+                # By container name on the internal `ai` network: SearXNG makes
+                # the outbound requests, the gateway still has no route out.
+                "searxng": {"enabled": True, "config": {"webSearch": {"baseUrl": "http://searxng:8080"}}},
             },
         },
         "channels": {
