@@ -342,10 +342,15 @@ into the prompt).
 
 `config/openclaw/household/AGENTS.md` holds the rules every agent follows, whatever a message, a
 file or a search result says. The bootstrap copies it into each workspace as
-`household/AGENTS.md`, owned by root and read-only — the agent, which runs as `node`, can read it but
+`.household/AGENTS.md`, owned by root and read-only — the agent, which runs as `node`, can read it but
 neither change nor remove it — and the `bootstrap-extra-files` hook injects it into every prompt.
 The hook only reads inside a workspace, which is why it is a copy per agent rather than one shared
 file. Edit the repository file and restart the stack; the bootstrap refreshes every copy.
+
+The directory is hidden because the bootstrap takes it over as root: `household/` is a name an agent
+could choose for its own notes. The sync leaves it out of the memory branches — it is a copy of a
+repository file, not memory, and a root-owned file in a branch would make any merge that has to
+rewrite it fail on its permissions, stopping that person's sync.
 
 The rules exist because of what was measured with Gemini Flash-Lite: asked to post into another
 room, the agent had the send refused by OpenClaw and still answered "done". Saying so is now a rule,

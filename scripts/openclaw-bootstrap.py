@@ -340,9 +340,12 @@ def sync_people():
 
 # config/openclaw/household/AGENTS.md, copied into every workspace at this path,
 # which openclaw-pre-start.py names to the bootstrap-extra-files hook: the hook
-# injects only files inside the workspace.
+# injects only files inside the workspace. A dot-directory, because the copy
+# takes its directory over as root, and `household/` is a name an agent could
+# pick for its own notes; openclaw-sync.py keeps it out of the memory branches.
 HOUSEHOLD_RULES = pilib.PROJECT_DIR / "config" / "openclaw" / "household" / "AGENTS.md"
-HOUSEHOLD_RULES_PATH = "household/AGENTS.md"
+HOUSEHOLD_RULES_DIR = ".household"
+HOUSEHOLD_RULES_PATH = f"{HOUSEHOLD_RULES_DIR}/AGENTS.md"
 
 # As root, so the agent - which runs as node - can read the copy but neither
 # edit nor delete it. Missing directories, workspaces/ included, are created as
@@ -354,7 +357,7 @@ PLACE_RULES = f"""
     for agent in "$@"; do
         workspace="{STATE_DIR}/workspaces/$agent"
         [ -d "$workspace" ] || install -d -o {CONTAINER_UID} -g {CONTAINER_UID} -m 0755 "$workspace"
-        install -d -o 0 -g 0 -m 0755 "$workspace/household"
+        install -d -o 0 -g 0 -m 0755 "$workspace/{HOUSEHOLD_RULES_DIR}"
         copy="$workspace/{HOUSEHOLD_RULES_PATH}"
         if [ -f "$copy" ] && [ "$(sha256sum < "$copy")" = "$(sha256sum < /tmp/rules)" ]; then
             continue

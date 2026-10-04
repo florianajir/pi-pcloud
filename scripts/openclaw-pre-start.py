@@ -191,7 +191,7 @@ def render_config(people, host_name, timezone):
                     # hook only reads inside a workspace, so openclaw-bootstrap.py
                     # puts a read-only copy of config/openclaw/household/AGENTS.md
                     # at this path in each one.
-                    "bootstrap-extra-files": {"enabled": True, "paths": ["household/AGENTS.md"]},
+                    "bootstrap-extra-files": {"enabled": True, "paths": [".household/AGENTS.md"]},
                     # On /new, the last exchanges of the conversation it ends go
                     # to a dated note in memory/, so starting over loses nothing
                     # memory_search cannot find again.
