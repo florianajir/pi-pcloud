@@ -20,7 +20,7 @@
    repositories it pushes to (scripts/openclaw-sync.py), and their branch
    protection.
 
-Restarts the gateway once at the end if any of that changed. Idempotent: the
+Restarts the gateway once if the account or the people changed. Idempotent: the
 next start redoes nothing that is already in place.
 """
 
@@ -345,11 +345,12 @@ HOUSEHOLD_RULES = pilib.PROJECT_DIR / "config" / "openclaw" / "household" / "AGE
 HOUSEHOLD_RULES_PATH = "household/AGENTS.md"
 
 # As root, so the agent - which runs as node - can read the copy but neither
-# edit nor delete it. A workspace that does not exist yet (its person has never
-# written) is created first, as node, so OpenClaw still owns and seeds it.
-# Prints the agents whose copy changed. sha256sum: the image has no cmp.
+# edit nor delete it. Missing directories, workspaces/ included, are created as
+# node first: root-owned, OpenClaw could not seed a workspace in them. Prints
+# the agents whose copy changed; sha256sum because the image has no cmp.
 PLACE_RULES = f"""
     set -e
+    [ -d "{STATE_DIR}/workspaces" ] || install -d -o {CONTAINER_UID} -g {CONTAINER_UID} -m 0755 "{STATE_DIR}/workspaces"
     for agent in "$@"; do
         workspace="{STATE_DIR}/workspaces/$agent"
         [ -d "$workspace" ] || install -d -o {CONTAINER_UID} -g {CONTAINER_UID} -m 0755 "$workspace"
@@ -569,22 +570,23 @@ def main():
         die("Tuwunel is not healthy, so the bot account cannot be checked")
 
     # A fresh start after an install already loads the plugin; only what
-    # changes after it calls for the restart at the end.
+    # changes after it calls for a restart.
     if ensure_plugins() and docker("start", CONTAINER).returncode != 0:
         die(f"could not start {CONTAINER} after the plugin install")
     restart = ensure_bot_account(f"chat.{host_name}", matrix_password())
     restart = sync_people() or restart
-    ensure_household_rules()
-    ensure_forgejo(host_name)
-    if not restart:
-        # Against the running, logged-in device - which a restart pending
-        # above would only interrupt; the next start does it instead.
-        ensure_room_key_backup()
-
+    # Before anything that can die: the next run finds people.json already
+    # current and would never ask for this restart again.
     if restart:
         log(f"Restarting {CONTAINER} to apply the changes")
         if docker("restart", CONTAINER, timeout=240).returncode != 0:
             die(f"could not restart {CONTAINER}")
+    ensure_household_rules()
+    ensure_forgejo(host_name)
+    if not restart:
+        # Needs the device logged in, which a restart just undid; the next
+        # start does it instead.
+        ensure_room_key_backup()
 
 
 if __name__ == "__main__":
