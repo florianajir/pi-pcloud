@@ -39,6 +39,10 @@ GIT_DIRS = f"{STATE}/sync"
 KNOWLEDGE_CLONE = f"{GIT_DIRS}/knowledge"
 KNOWLEDGE_VIEW = f"{STATE}/knowledge"
 PROPOSALS_DIR = "knowledge-proposals"
+# The household rules openclaw-bootstrap.py places in every workspace: a
+# root-owned copy of a repository file, not memory. Committed, any merge that
+# had to rewrite it would fail on its permissions and stop that person's sync.
+MEMORY_EXCLUDES = "/.household/\n"
 # Never copied into a proposal: repository machinery, not knowledge.
 PROPOSAL_EXCLUDES = (".git", ".forgejo", ".gitea", ".github")
 
@@ -102,6 +106,10 @@ def sync_memory(git, remote, person):
         if not git.ok("init", "-q", "-b", agent, env=env):
             log(f"WARNING: could not initialise the memory repository of {agent}")
             return
+    exclude = shell('mkdir -p "$1/info" && printf "%s" "$2" > "$1/info/exclude"', env["GIT_DIR"], MEMORY_EXCLUDES)
+    if exclude.returncode != 0:
+        log(f"WARNING: could not write the excludes of {agent}'s memory repository; nothing was committed")
+        return
     git.run("add", "-A", env=env)
     if not git.ok("diff", "--cached", "--quiet", env=env):
         stamp = f"{datetime.now(UTC):%Y-%m-%d %H:%M} UTC"

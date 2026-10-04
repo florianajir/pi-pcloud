@@ -565,8 +565,8 @@ services:
     # Not the image's docker-entrypoint.mjs, which runs `openclaw doctor --fix`
     # before the gateway: that refreshes plugins from npm on every start, and
     # exits 1 outright against the read-only config below (measured at
-    # 2026.9.7). The Matrix plugin is installed at the image's own version by
-    # scripts/openclaw-bootstrap.py instead.
+    # 2026.9.7). The Matrix and SearXNG plugins are installed at the image's own
+    # version by scripts/openclaw-bootstrap.py instead.
     entrypoint: ["tini", "-s", "--"]
     command: ["node", "openclaw.mjs", "gateway"]
     read_only: true

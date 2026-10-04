@@ -197,27 +197,26 @@ services:
     oom_score_adj: *oom-score-deprioritize
 
   # A metasearch engine: it keeps no index and has no accounts, it forwards a
-  # query to ~270 upstream engines and merges what comes back. Three consumers
-  # here - Open WebUI's web search, and Homepage's search box and quick-launch -
-  # and every one of them would otherwise hand the household's queries to a
-  # hosted engine.
+  # query to ~270 upstream engines and merges what comes back. Four consumers
+  # here - Open WebUI's and OpenClaw's web search, and Homepage's search box and
+  # quick-launch - and every one of them would otherwise hand the household's
+  # queries to a hosted engine.
   searxng:
     <<: *service-defaults
     # Upstream tags a build per day as <date>-<sha>; there is no semver release
     # and no floating tag worth pinning to. Newest at the time of writing.
     image: searxng/searxng:2026.9.25-d8ae3abd5
     container_name: pi-searxng
-    # open-webui, because that chat's web search has nothing to call without
-    # this. Same shape as agentgateway under open-webui, or flaresolverr under
-    # prowlarr.
-    profiles: ["searxng", "open-webui", "all"]
+    # open-webui and openclaw, because their web search has nothing to call
+    # without this. Same shape as agentgateway under open-webui, or flaresolverr
+    # under prowlarr.
+    profiles: ["searxng", "open-webui", "openclaw", "all"]
     networks:
       # frontend for Traefik, and for the searches themselves: this container's
       # whole job is outbound HTTP to arbitrary engines, so an internal-only
       # segment would break it. Same reasoning as freshrss.
       - frontend
-      # `ai` is internal and is how open-webui reaches everything that is not
-      # the gateway.
+      # `ai` is internal and is how open-webui and openclaw reach it.
       - ai
     expose:
       - 8080

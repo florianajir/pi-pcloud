@@ -324,10 +324,41 @@ vetting: release line, measurements, and the advisories it was checked against.
 | Piece | Where |
 |-------|-------|
 | The gateway and its agents | `openclaw` in `compose/compose-ai.yaml`, config rendered by `scripts/openclaw-pre-start.py` |
-| Plugin, bot account, people, Forgejo side | `scripts/openclaw-bootstrap.py` (post-start) |
+| Plugins, bot account, people, household rules, Forgejo side | `scripts/openclaw-bootstrap.py` (post-start) |
 | Memory and knowledge base in Forgejo | `scripts/openclaw-sync.py`, every quarter hour by `openclaw-sync.timer` |
 | The model | agentgateway's `/assistant/v1` route |
-| What the agents know about the knowledge base | `config/openclaw/skills/household-knowledge/SKILL.md` |
+| Rules every agent gets in its prompt | `config/openclaw/household/AGENTS.md` |
+| Skills: the knowledge base, web search | `config/openclaw/skills/` |
+
+A conversation is one session that goes on until its person starts a new one — there is no
+automatic reset, and OpenClaw summarises older turns (compaction) as it nears the context window.
+`/new` starts over, and the `session-memory` hook first saves the last exchanges to a dated note in
+the agent's `memory/`, where memory search finds them again. **In Element, type `//new`**: a typed
+`/new` is taken for one of Element's own commands and answered with "Unknown command"; `//` sends the
+rest as text. The same goes for every OpenClaw command (`//context detail` lists what is injected
+into the prompt).
+
+### Household rules
+
+`config/openclaw/household/AGENTS.md` holds the rules every agent follows, whatever a message, a
+file or a search result says. The bootstrap copies it into each workspace as
+`.household/AGENTS.md`, owned by root and read-only — the agent, which runs as `node`, can read it but
+neither change nor remove it — and the `bootstrap-extra-files` hook injects it into every prompt.
+The hook only reads inside a workspace, which is why it is a copy per agent rather than one shared
+file. Edit the repository file and restart the stack; the bootstrap refreshes every copy.
+
+The directory is hidden because the bootstrap takes it over as root: `household/` is a name an agent
+could choose for its own notes. The sync leaves it out of the memory branches — it is a copy of a
+repository file, not memory, and a root-owned file in a branch would make any merge that has to
+rewrite it fail on its permissions, stopping that person's sync.
+
+The rules exist because of what was measured with Gemini Flash-Lite: asked to post into another
+room, the agent had the send refused by OpenClaw and still answered "done". Saying so is now a rule,
+and so is citing the URL after a web search, which the `web-search` skill alone did not get.
+
+Only the skills in `config/openclaw/skills/` load. `skills.allowBundled` is `["none"]`, not `[]`:
+OpenClaw reads an empty list as no allowlist at all, and loaded all thirteen of its bundled skills
+into every prompt.
 
 ### One agent per person
 
@@ -349,11 +380,21 @@ workspace: the second in alphabetical order is left out, with a warning in the b
 OpenClaw's own sandbox runs tools in sibling containers through a container-engine socket (Docker,
 Podman), or on a separate host over SSH. Neither belongs here, so the boundary is drawn the other way:
 
-- **No tool that executes, browses or fetches.** `tools.deny` removes the runtime, browser, web,
-  automation and node groups; `exec` is `deny`; the file tools are confined to the agent's own
-  workspace. What is left is reading and writing its notes, memory search and the reply.
-- **No route out.** The container sits on `ai` (agentgateway) and `assistant` (Tuwunel, Forgejo),
-  both internal. A prompt injection has nowhere to send what it finds.
+- **No tool that executes, browses or fetches.** `tools.deny` removes the runtime, browser,
+  automation and node groups, and `web_fetch` and `x_search`; `exec` is `deny`; the file tools are
+  confined to the agent's own workspace. What is left is reading and writing its notes, memory
+  search, `web_search`, reading its own past sessions, and the reply.
+- **No tool that reaches another agent.** The other agents are the other family members, so
+  `sessions_spawn`, `sessions_send` and `agents_list` are denied. So are tools that do nothing in a
+  DM but cost prompt tokens: the `conversations_*` tools (their addresses are scoped to the agent's
+  own conversation), `subagents`, `agents_wait`, `sessions_yield` and `presence`. What a generalist
+  assistant uses stays: `skill_workshop` (teach it a procedure, kept as a skill), goals, `ask_user`,
+  and its own sessions.
+- **No route out.** The container sits on `ai` (agentgateway, SearXNG) and `assistant` (Tuwunel,
+  Forgejo), both internal. A prompt injection has nowhere to send what it finds.
+- **Replies stay in their conversation.** `tools.message.crossContext` defaults to letting the
+  message tool post into *any* conversation of the same channel; both of its switches are off, so an
+  agent cannot write into another family member's DM, whatever it was told to.
 - **A config the agent cannot change.** The JSON is mounted read-only with `OPENCLAW_CONFIG_READONLY`,
   which closes the "model edits its own config" class of advisory.
 - **No inbound surface.** The gateway binds loopback inside its container, behind a token, with the
@@ -361,9 +402,31 @@ Podman), or on a separate host over SSH. Neither belongs here, so the boundary i
 
 The image's own entrypoint is bypassed: it runs `openclaw doctor --fix` before every start, which
 refreshes plugins from npm, and which exits 1 against a read-only config. The bootstrap installs the
-Matrix plugin instead, pinned to the image's version, from a throwaway container — the only moment
-anything of this service reaches the internet — together with the native crypto binding the plugin
-would otherwise download at runtime.
+Matrix and SearXNG plugins instead, pinned to the image's version, from a throwaway container — the
+only moment anything of this service reaches the internet — together with the native crypto binding
+the Matrix plugin would otherwise download at runtime.
+
+### Web search, and prompt injection
+
+The assistant searches the web through the stack's own SearXNG, with OpenClaw's built-in
+`web_search` and its `searxng` provider — not an MCP server. The difference is what reaches the
+model, and what can leave:
+
+- **Snippets, not pages.** `web_search` returns a title, a URL and a short snippet per result. Each
+  piece is wrapped by OpenClaw's core in an `EXTERNAL_UNTRUSTED_CONTENT` envelope with a random id, so
+  a result cannot close the envelope and pass for instructions. `mcp-searxng` also ships
+  `web_url_read`, which puts whole pages in the context and fetches any URL — a request that can carry
+  private data out in its query string. `web_fetch` stays denied for the same reason.
+- **The gateway still has no route out.** SearXNG makes the outbound requests; OpenClaw only reaches
+  it on `ai`. A query is the one thing that leaves, and it goes to the search engines SearXNG asks,
+  not to whoever wrote a page.
+
+What an instruction planted in a result can still do, since the model will sometimes follow one:
+mislead the reply or suggest a link — nothing leaves unless it is clicked, Tuwunel generates no URL
+preview with its empty allowlists, and the DMs are encrypted — or write a false note into that one
+person's memory. The sync commits every memory change to Forgejo (`assistant-memory`) within a
+quarter of an hour, where it is visible and revertible. That is also why dreaming stays off: it
+would consolidate such a note into `MEMORY.md`.
 
 ### The model behind `assistant`
 

@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """Post-start for OpenClaw: everything that needs the stack answering.
 
-1. The Matrix plugin, at exactly the image's version. It is not in the image,
-   and the image's own entrypoint would fetch and refresh it from npm on every
-   start (compose/compose-ai.yaml explains why that entrypoint is bypassed).
-   Installed here instead, into the state volume, by a throwaway container of
-   the same image - the only moment anything of this service reaches the
-   internet. The native crypto binding the plugin uses for encrypted
-   attachments is fetched in the same pass, since the gateway has no egress to
-   fetch it at runtime.
+1. The Matrix and SearXNG plugins, at exactly the image's version. Neither is
+   in the image, and the image's own entrypoint would fetch and refresh them
+   from npm on every start (compose/compose-ai.yaml explains why that
+   entrypoint is bypassed). Installed here instead, into the state volume, by a
+   throwaway container of the same image - the only moment anything of this
+   service reaches the internet. The native crypto binding the Matrix plugin
+   uses for encrypted attachments is fetched in the same pass, since the
+   gateway has no egress to fetch it at runtime.
 2. The bot's Matrix account, @assistant, created through Tuwunel's
    shared-secret endpoint (scripts/tuwunel-pre-start.sh) - registration stays
    off for everyone else - and a server-side backup of its room keys.
 3. The people it answers: every LLDAP account but the service accounts,
    cached for openclaw-pre-start.py, which renders one agent per person.
-4. Its Forgejo side, when Forgejo runs: a local, restricted bot user, the two
+4. The household rules (config/openclaw/household/AGENTS.md): a read-only copy
+   in every workspace, which the gateway injects into each agent's prompt.
+5. Its Forgejo side, when Forgejo runs: a local, restricted bot user, the two
    repositories it pushes to (scripts/openclaw-sync.py), and their branch
    protection.
 
-Restarts the gateway once at the end if any of that changed. Idempotent: the
+Restarts the gateway once if the account or the people changed. Idempotent: the
 next start redoes nothing that is already in place.
 """
 
@@ -37,7 +39,8 @@ from pilib import CurlError, die, fix_ownership, get_env_value, log, resolve_dat
 CONTAINER = "pi-openclaw"
 FORGEJO = "pi-forgejo"
 STATE_DIR = "/home/node/.openclaw"
-PLUGIN = "@openclaw/matrix"
+MATRIX_PLUGIN = "@openclaw/matrix"
+SEARXNG_PLUGIN = "@openclaw/searxng-plugin"
 BOT_LOCALPART = "assistant"
 TUWUNEL = "http://tuwunel:8008"
 LLDAP = "http://lldap:17170"
@@ -53,28 +56,42 @@ REGISTER_AS_USER = b"notadmin"
 # The image's `node` user, which the state volume's files belong to.
 CONTAINER_UID = 1000
 
-# Every generation of the plugin's install: a reinstall writes a sibling
+# Every generation of a plugin's install: a reinstall writes a sibling
 # `openclaw-matrix-<hash>__openclaw-generation__<id>` before retiring the old
 # one, so a glob can match two directories at once.
-PLUGIN_GLOB = f"{STATE_DIR}/npm/projects/openclaw-matrix-*/node_modules/@openclaw/matrix"
+MATRIX_GLOB = f"{STATE_DIR}/npm/projects/openclaw-matrix-*/node_modules/{MATRIX_PLUGIN}"
+SEARXNG_GLOB = f"{STATE_DIR}/npm/projects/openclaw-searxng-plugin-*/node_modules/{SEARXNG_PLUGIN}"
 
-# Prints the version of each generation that also has its native crypto
-# binding. $1 is the version a pass is after, used by the install below.
-COMPLETE_GENERATIONS = """
-    for dir in """ + PLUGIN_GLOB + """; do
+# Prints "<package> <version>" for each complete generation; a Matrix one is
+# complete only with its native crypto binding.
+COMPLETE_GENERATIONS = f"""
+    for dir in {MATRIX_GLOB}; do
         [ -f "$dir/package.json" ] || continue
         ls "$dir"/node_modules/@matrix-org/matrix-sdk-crypto-nodejs/*.node >/dev/null 2>&1 || continue
-        node -p "require(process.argv[1]).version" "$dir/package.json"
+        echo "{MATRIX_PLUGIN} $(node -p "require(process.argv[1]).version" "$dir/package.json")"
+    done
+    for dir in {SEARXNG_GLOB}; do
+        [ -f "$dir/package.json" ] || continue
+        echo "{SEARXNG_PLUGIN} $(node -p "require(process.argv[1]).version" "$dir/package.json")"
     done
 """
-INSTALL = """
+# $1 is the version, the rest the packages to install at it.
+INSTALL = f"""
     set -e
     mkdir -p /tmp/install
-    node openclaw.mjs plugins install "@openclaw/matrix@$1" --pin --force
-    for dir in """ + PLUGIN_GLOB + """; do
-        [ "$(node -p "require(process.argv[1]).version" "$dir/package.json")" = "$1" ] || continue
-        (cd "$dir/node_modules/@matrix-org/matrix-sdk-crypto-nodejs" && node download-lib.js)
+    version="$1"
+    shift
+    for package in "$@"; do
+        node openclaw.mjs plugins install "$package@$version" --pin --force
     done
+    case " $* " in
+        *" {MATRIX_PLUGIN} "*)
+            for dir in {MATRIX_GLOB}; do
+                [ "$(node -p "require(process.argv[1]).version" "$dir/package.json")" = "$version" ] || continue
+                (cd "$dir/node_modules/@matrix-org/matrix-sdk-crypto-nodejs" && node download-lib.js)
+            done
+            ;;
+    esac
 """
 
 
@@ -106,10 +123,10 @@ def matrix_password():
     return value
 
 
-# --- 1. The Matrix plugin ---
+# --- 1. The plugins ---
 
 
-def one_shot(image, volume, script, version, *network):
+def one_shot(image, volume, script, args, network=()):
     """A throwaway container of the gateway's own image on its state volume,
     so it works whether the gateway is running or stopped."""
     return docker(
@@ -117,27 +134,37 @@ def one_shot(image, volume, script, version, *network):
         "-v", f"{volume}:{STATE_DIR}",
         "--tmpfs", f"/home/node/.cache:uid={CONTAINER_UID},gid={CONTAINER_UID}",
         "-e", f"OPENCLAW_STATE_DIR={STATE_DIR}", "-e", "OPENCLAW_CONFIG_PATH=/tmp/install/openclaw.json",
-        "--entrypoint", "sh", image, "-c", script, "sh", version,
+        "--entrypoint", "sh", image, "-c", script, "sh", *args,
     )  # fmt: skip
 
 
-def plugin_in_place(image, volume, version):
-    proc = one_shot(image, volume, COMPLETE_GENERATIONS, version, "--network", "none")
-    return version in proc.stdout.split()
+def missing_plugins(image, volume, version):
+    proc = one_shot(image, volume, COMPLETE_GENERATIONS, [], ("--network", "none"))
+    complete = set(proc.stdout.splitlines())
+    return [plugin for plugin in (MATRIX_PLUGIN, SEARXNG_PLUGIN) if f"{plugin} {version}" not in complete]
 
 
-def ensure_plugin():
+def gateway_image_and_volume():
     image = inspect(CONTAINER, "{{.Config.Image}}")
+    volume = inspect(CONTAINER, '{{range .Mounts}}{{if eq .Destination "' + STATE_DIR + '"}}{{.Name}}{{end}}{{end}}')
+    if not image or not volume:
+        die(f"cannot read the image or the state volume of {CONTAINER}")
+    return image, volume
+
+
+def ensure_plugins():
+    image, volume = gateway_image_and_volume()
     version_label = '{{index .Config.Labels "org.opencontainers.image.version"}}'
     version = docker("image", "inspect", "--format", version_label, image).stdout.strip()
-    volume = inspect(CONTAINER, '{{range .Mounts}}{{if eq .Destination "' + STATE_DIR + '"}}{{.Name}}{{end}}{{end}}')
-    if not version or not volume:
-        die(f"cannot read the image version or the state volume of {CONTAINER}")
+    if not version:
+        die(f"cannot read the version of {image}")
 
-    if plugin_in_place(image, volume, version):
+    missing = missing_plugins(image, volume, version)
+    if not missing:
         return False
 
-    log(f"Installing {PLUGIN}@{version} into {volume}")
+    wanted = ", ".join(f"{plugin}@{version}" for plugin in missing)
+    log(f"Installing {wanted} into {volume}")
     # Stopped first: two OpenClaw processes on one state database contend for
     # its leases, and the running gateway logged ownership failures until it
     # was restarted (measured). main() starts it again.
@@ -148,14 +175,15 @@ def ensure_plugin():
     # gateway's read-only bind leaves there - and the state dir spelled out,
     # because OpenClaw otherwise derives it from the config path and installs
     # into /tmp (measured).
-    proc = one_shot(image, volume, INSTALL, version)
+    proc = one_shot(image, volume, INSTALL, [version, *missing])
     if proc.returncode != 0:
         docker("start", CONTAINER)
         die(f"plugin install failed: {proc.stderr.strip()[-400:]}")
-    if not plugin_in_place(image, volume, version):
+    still_missing = missing_plugins(image, volume, version)
+    if still_missing:
         docker("start", CONTAINER)
-        die(f"{PLUGIN}@{version} is still not in place after the install")
-    log(f"Installed {PLUGIN}@{version} and its native crypto binding")
+        die(f"{', '.join(still_missing)} still not in place at {version} after the install")
+    log(f"Installed {wanted}")
     return True
 
 
@@ -308,7 +336,60 @@ def sync_people():
     return True
 
 
-# --- 4. Forgejo ---
+# --- 4. The household rules ---
+
+# config/openclaw/household/AGENTS.md, copied into every workspace at this path,
+# which openclaw-pre-start.py names to the bootstrap-extra-files hook: the hook
+# injects only files inside the workspace. A dot-directory, because the copy
+# takes its directory over as root, and `household/` is a name an agent could
+# pick for its own notes; openclaw-sync.py keeps it out of the memory branches.
+HOUSEHOLD_RULES = pilib.PROJECT_DIR / "config" / "openclaw" / "household" / "AGENTS.md"
+HOUSEHOLD_RULES_DIR = ".household"
+HOUSEHOLD_RULES_PATH = f"{HOUSEHOLD_RULES_DIR}/AGENTS.md"
+
+# As root, so the agent - which runs as node - can read the copy but neither
+# edit nor delete it. Missing directories, workspaces/ included, are created as
+# node first: root-owned, OpenClaw could not seed a workspace in them. Prints
+# the agents whose copy changed; sha256sum because the image has no cmp.
+PLACE_RULES = f"""
+    set -e
+    [ -d "{STATE_DIR}/workspaces" ] || install -d -o {CONTAINER_UID} -g {CONTAINER_UID} -m 0755 "{STATE_DIR}/workspaces"
+    for agent in "$@"; do
+        workspace="{STATE_DIR}/workspaces/$agent"
+        [ -d "$workspace" ] || install -d -o {CONTAINER_UID} -g {CONTAINER_UID} -m 0755 "$workspace"
+        install -d -o 0 -g 0 -m 0755 "$workspace/{HOUSEHOLD_RULES_DIR}"
+        copy="$workspace/{HOUSEHOLD_RULES_PATH}"
+        if [ -f "$copy" ] && [ "$(sha256sum < "$copy")" = "$(sha256sum < /tmp/rules)" ]; then
+            continue
+        fi
+        install -o 0 -g 0 -m 0444 /tmp/rules "$copy"
+        echo "$agent"
+    done
+"""
+
+
+def ensure_household_rules():
+    try:
+        people = json.loads((data_dir() / "people.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        people = []
+    agents = [person["agent"] for person in people]
+    if not agents:
+        return
+    image, volume = gateway_image_and_volume()
+    proc = docker(
+        "run", "--rm", "--network", "none", "--user", "0:0",
+        "-v", f"{volume}:{STATE_DIR}", "-v", f"{HOUSEHOLD_RULES}:/tmp/rules:ro",
+        "--entrypoint", "sh", image, "-c", PLACE_RULES, "sh", *agents,
+    )  # fmt: skip
+    if proc.returncode != 0:
+        die(f"could not place the household rules: {proc.stderr.strip()[-400:]}")
+    changed = proc.stdout.split()
+    if changed:
+        log(f"Household rules placed in {len(changed)} workspace(s)")
+
+
+# --- 5. Forgejo ---
 
 
 def forgejo_admin(*args):
@@ -492,21 +573,23 @@ def main():
         die("Tuwunel is not healthy, so the bot account cannot be checked")
 
     # A fresh start after an install already loads the plugin; only what
-    # changes after it calls for the restart at the end.
-    if ensure_plugin() and docker("start", CONTAINER).returncode != 0:
+    # changes after it calls for a restart.
+    if ensure_plugins() and docker("start", CONTAINER).returncode != 0:
         die(f"could not start {CONTAINER} after the plugin install")
     restart = ensure_bot_account(f"chat.{host_name}", matrix_password())
     restart = sync_people() or restart
-    ensure_forgejo(host_name)
-    if not restart:
-        # Against the running, logged-in device - which a restart pending
-        # above would only interrupt; the next start does it instead.
-        ensure_room_key_backup()
-
+    # Before anything that can die: the next run finds people.json already
+    # current and would never ask for this restart again.
     if restart:
         log(f"Restarting {CONTAINER} to apply the changes")
         if docker("restart", CONTAINER, timeout=240).returncode != 0:
             die(f"could not restart {CONTAINER}")
+    ensure_household_rules()
+    ensure_forgejo(host_name)
+    if not restart:
+        # Needs the device logged in, which a restart just undid; the next
+        # start does it instead.
+        ensure_room_key_backup()
 
 
 if __name__ == "__main__":
