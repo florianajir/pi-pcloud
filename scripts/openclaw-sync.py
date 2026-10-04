@@ -274,12 +274,13 @@ def propose(git, owner, person):
 def prune_staged_media(image, volume):
     """OpenClaw copies every attachment a person sends into the receiving
     agent's workspace (media/inbound/openclaw-staged-*), and attachments.ttlHours
-    prunes only its own copy outside the workspaces. A week, like that one."""
+    prunes only its own copy outside the workspaces; the nextcloud plugin puts
+    what it fetches in media/nextcloud/. A week, like that setting."""
     proc = docker(
         "run", "--rm", "--network", "none", "--user", "1000:1000", "-v", f"{volume}:{STATE}",
         "--entrypoint", "sh", image, "-c",
-        f'find {STATE}/workspaces/*/media/inbound -mindepth 1 -maxdepth 1 -type d '
-        f'-name "openclaw-staged-*" -mtime +{STAGED_MEDIA_DAYS} -exec rm -rf {{}} + 2>/dev/null; true',
+        f'find {STATE}/workspaces/*/media/inbound {STATE}/workspaces/*/media/nextcloud -mindepth 1 -maxdepth 1 '
+        f'-type d -mtime +{STAGED_MEDIA_DAYS} -exec rm -rf {{}} + 2>/dev/null; true',
     )  # fmt: skip
     if proc.returncode != 0:
         log(f"WARNING: could not prune old attachments from the workspaces: {proc.stderr.strip()[-300:]}")

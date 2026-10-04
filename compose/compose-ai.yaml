@@ -585,7 +585,8 @@ services:
       # agentgateway. The keyless model servers on this segment stay out of
       # reach of the agent itself, which is given no tool that fetches a URL.
       - ai
-      # Tuwunel; both are internal, so there is no egress at all.
+      # Tuwunel, Forgejo and Nextcloud; both are internal, so there is no
+      # egress at all.
       - assistant
     environment:
       - TZ=${TIMEZONE:-Europe/Paris}
@@ -606,6 +607,11 @@ services:
       - openclaw_state:/home/node/.openclaw
       - ${DATA_LOCATION:-./data}/openclaw/openclaw.json:/home/node/.openclaw/openclaw.json:ro
       - ./config/openclaw/skills:/opt/household-skills:ro
+      # The stack's own Nextcloud plugin, and the per-person app passwords it
+      # acts with (scripts/openclaw-bootstrap.py). Outside every workspace, so
+      # no agent's file tools reach them.
+      - ./config/openclaw/plugins:/opt/household-plugins:ro
+      - ${DATA_LOCATION:-./data}/openclaw/secrets/nextcloud:/run/nextcloud-tokens:ro
     depends_on:
       tuwunel:
         condition: service_healthy

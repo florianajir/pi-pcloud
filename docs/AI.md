@@ -329,6 +329,7 @@ vetting: release line, measurements, and the advisories it was checked against.
 | The model | agentgateway's `/assistant/v1` route |
 | Rules every agent gets in its prompt | `config/openclaw/household/AGENTS.md` |
 | Skills: the knowledge base, web search | `config/openclaw/skills/` |
+| The Nextcloud tools | `config/openclaw/plugins/nextcloud/` |
 
 A conversation is one session that goes on until its person starts a new one — there is no
 automatic reset, and OpenClaw summarises older turns (compaction) as it nears the context window.
@@ -499,6 +500,45 @@ model as an unreadable attachment.
   untrusted-content envelope; words written in a photo or a screenshot reach the model as part of the
   image. A household rule says such text is information, never instructions, and the boundaries
   above hold whatever the model makes of it: no route out, replies confined to their conversation.
+
+### Nextcloud
+
+Each person's agent can find, read and save files in that person's own Nextcloud, through a plugin
+of this stack's own (`config/openclaw/plugins/nextcloud`) with four tools:
+
+| Tool | What it does |
+|------|--------------|
+| `nextcloud_search` | Files and folders whose path holds every word asked for. Nextcloud matches file names only, not the text inside documents (there is no full-text search app), so each word is searched on its own and the folder path counts too |
+| `nextcloud_list` | One folder's content |
+| `nextcloud_fetch` | A file's text (PDF, text files) or the image itself, wrapped as untrusted content like a web result, and a copy in the workspace that the message tool can send to the person |
+| `nextcloud_save` | A file from the workspace — an attachment as it arrived, or a note the agent wrote — into any folder, creating the missing ones. An existing file is never replaced: the new one gets a number. Nothing is ever deleted, moved or shared |
+
+- **As that person, and only that person.** The bootstrap mints an app password per person with
+  `occ user:auth-tokens:add`, named "Family assistant (OpenClaw)": it shows in their Nextcloud
+  security settings, where they can revoke it. The plugin picks it by the calling agent's id, in its
+  code — never from what the model says — so one person's agent cannot reach another's files. The
+  passwords sit in `${DATA_LOCATION}/openclaw/secrets/nextcloud/`, mounted into the gateway outside every
+  workspace. A Nextcloud account only exists after its owner's first sign-in; until then that person's
+  agent simply has no Nextcloud tool, and gets one at the next start. The family room's agent has none.
+- **By name, on `assistant`.** Nextcloud joins that internal network; the gateway still has no route
+  out. `http://nextcloud` passes Nextcloud's trusted-domain check because `OVERWRITEHOST` applies to
+  every request.
+- **Measured** with a throwaway Nextcloud account, in a container of the OpenClaw image, before the
+  family's accounts were touched: saving into a folder and again (`Spec (2).pdf`), a note into new
+  folders, search across words and accents, listing, a PDF's text, a note, an image; `..` and paths
+  outside the workspace refused. That run caught two bugs first: linkedom finds nothing with
+  `getElementsByTagName("*")` in an XML document, which made every existence check miss — and a save
+  silently replace the file it should have numbered.
+- **What it exposes.** The agent now holds a person's whole Nextcloud next to untrusted content — web
+  results, the documents themselves, photos. The one way out left is a web search: the query goes to
+  the search engines SearXNG asks, so an instruction planted somewhere could have the agent search with
+  a document's words. A household rule forbids it; it is a rule, not a guarantee. Writing can at worst
+  leave unwanted files, never lose one.
+- **Fetched copies** go to `media/nextcloud/` in the workspace: kept out of Forgejo with the rest of
+  `media/`, and pruned after a week by `openclaw-sync.py`.
+- **Tied to the image.** The plugin imports three modules by absolute path from the OpenClaw image —
+  linkedom for WebDAV's XML, OpenClaw's untrusted-content envelope and its PDF extractor. An image bump
+  that moves one makes that tool fail with an error, not the gateway; check the plugin after a bump.
 
 ### The model behind `assistant`
 

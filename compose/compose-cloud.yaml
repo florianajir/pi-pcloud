@@ -126,6 +126,10 @@ services:
     networks:
       - frontend
       - nextcloud
+      # The family assistant reaches it here, by name, with one app password
+      # per person (config/openclaw/plugins/nextcloud). Internal: it opens no
+      # route out for either side.
+      - assistant
     labels:
       - "homepage.group=Storage"
       - "homepage.name=Nextcloud"
