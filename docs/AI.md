@@ -354,7 +354,9 @@ rewrite it fail on its permissions, stopping that person's sync.
 
 The rules exist because of what was measured with Gemini Flash-Lite: asked to post into another
 room, the agent had the send refused by OpenClaw and still answered "done". Saying so is now a rule,
-and so is citing the URL after a web search, which the `web-search` skill alone did not get.
+and so is citing the URL after a web search, which the `web-search` skill alone did not get. Asked in
+a DM for a birthday told in the family room, it answered from its injected files that it was noted
+nowhere, without searching: searching memory before saying "I don't know" is a rule too.
 
 Only the skills in `config/openclaw/skills/` load. `skills.allowBundled` is `["none"]`, not `[]`:
 OpenClaw reads an empty list as no allowlist at all, and loaded all thirteen of its bundled skills
