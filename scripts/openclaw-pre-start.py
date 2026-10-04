@@ -308,9 +308,10 @@ def render_config(people, host_name, timezone, family_room):
             "allowBundled": ["none"],
             "load": {"extraDirs": ["/opt/household-skills"]},
         },
-        # Inbound photos and documents are kept a week, then pruned: long enough
-        # to look at one again (view_image, pdf), and the family's papers do not
-        # pile up in the state volume - and in every Backrest snapshot of it.
+        # Inbound photos and documents are pruned after a week, so the family's
+        # papers do not pile up in the state volume - and in every Backrest
+        # snapshot of it. This covers OpenClaw's own copy only; the one it puts
+        # in the agent's workspace is pruned by scripts/openclaw-sync.py.
         "attachments": {"ttlHours": 168},
         "cron": {"enabled": False},
         "browser": {"enabled": False},
@@ -343,6 +344,13 @@ def render_config(people, host_name, timezone, family_room):
                 "sessions_yield",
                 "presence",
                 "agents_list",
+                # Registered once the model takes images, and both declare
+                # `exclusiveMinimum`, which agentgateway hands to Gemini as is:
+                # every request then failed with 400 "Unknown name
+                # exclusiveMinimum" (measured). A photo or PDF sent in the
+                # conversation is still read without them.
+                "view_image",
+                "pdf",
             ],
             "web": {"search": {"provider": "searxng"}},
             # Both default to true: an instruction planted in a search result

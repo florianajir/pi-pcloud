@@ -15,6 +15,9 @@ throwaway container this starts. Three passes:
   workspace becomes one pull request per person, opened and then updated by an
   AGit push (refs/for/main), against a main nobody but the owner can push to.
 
+Each pass also prunes the attachments OpenClaw copied into the workspaces
+more than a week ago, Forgejo or not.
+
 The git directories live outside the workspaces, so nothing an agent writes -
 a hook, a config, a filter - is ever executed by this script's git, which also
 runs with hooks disabled. Idempotent; a pass with nothing new pushes nothing.
@@ -40,14 +43,17 @@ GIT_DIRS = f"{STATE}/sync"
 KNOWLEDGE_CLONE = f"{GIT_DIRS}/knowledge"
 KNOWLEDGE_VIEW = f"{STATE}/knowledge"
 PROPOSALS_DIR = "knowledge-proposals"
-# The household rules openclaw-bootstrap.py places in every workspace: a
-# root-owned copy of a repository file, not memory. Committed, any merge that
-# had to rewrite it would fail on its permissions and stop that person's sync.
-MEMORY_EXCLUDES = "/.household/\n"
+# Not memory, so never in a memory branch. .household/: the root-owned rules
+# copy openclaw-bootstrap.py places - committed, any merge that had to rewrite
+# it would fail on its permissions and stop that person's sync. media/: where
+# OpenClaw copies every photo and document a person sends, which would
+# otherwise be pushed to Forgejo with the notes.
+MEMORY_EXCLUDES = "/.household/\n/media/\n"
 # The family room's agent (scripts/openclaw-bootstrap.py), synced like a person
 # once its room exists: its own branch, its own proposals.
 FAMILY = {"agent": "family", "name": "Family"}
 FAMILY_ROOM_FILE = "family-room.json"
+STAGED_MEDIA_DAYS = 7
 # Never copied into a proposal: repository machinery, not knowledge.
 PROPOSAL_EXCLUDES = (".git", ".forgejo", ".gitea", ".github")
 
@@ -85,6 +91,17 @@ class Git:
 
 def shell(script, *args):
     return docker("exec", HELPER, "sh", "-c", script, "sh", *args)
+
+
+def gateway_image_and_volume():
+    image = docker("inspect", "--format", "{{.Config.Image}}", CONTAINER).stdout.strip()
+    volume = docker(
+        "inspect", "--format",
+        '{{range .Mounts}}{{if eq .Destination "/home/node/.openclaw"}}{{.Name}}{{end}}{{end}}', CONTAINER,
+    ).stdout.strip()  # fmt: skip
+    if not image or not volume:
+        pilib.die(f"cannot read the image or the state volume of {CONTAINER}")
+    return image, volume
 
 
 def start_helper(image, volume, token_file):
@@ -254,12 +271,31 @@ def propose(git, owner, person):
     git.run("-C", KNOWLEDGE_CLONE, "checkout", "-q", "-f", "--detach", "origin/main")
 
 
+def prune_staged_media(image, volume):
+    """OpenClaw copies every attachment a person sends into the receiving
+    agent's workspace (media/inbound/openclaw-staged-*), and attachments.ttlHours
+    prunes only its own copy outside the workspaces. A week, like that one."""
+    proc = docker(
+        "run", "--rm", "--network", "none", "--user", "1000:1000", "-v", f"{volume}:{STATE}",
+        "--entrypoint", "sh", image, "-c",
+        f'find {STATE}/workspaces/*/media/inbound -mindepth 1 -maxdepth 1 -type d '
+        f'-name "openclaw-staged-*" -mtime +{STAGED_MEDIA_DAYS} -exec rm -rf {{}} + 2>/dev/null; true',
+    )  # fmt: skip
+    if proc.returncode != 0:
+        log(f"WARNING: could not prune old attachments from the workspaces: {proc.stderr.strip()[-300:]}")
+
+
 def main():
     data_dir = resolve_data_location_path() / "openclaw"
     token_file = data_dir / "secrets" / "forgejo_token"
     owner_file = data_dir / "forgejo-provisioned"
-    if not (pilib.container_is_running(CONTAINER) and pilib.container_is_running(FORGEJO)):
-        log("OpenClaw or Forgejo is not running; nothing to sync")
+    if not pilib.container_is_running(CONTAINER):
+        log("OpenClaw is not running; nothing to sync")
+        return
+    image, volume = gateway_image_and_volume()
+    prune_staged_media(image, volume)
+    if not pilib.container_is_running(FORGEJO):
+        log("Forgejo is not running; nothing to sync")
         return
     if not (token_file.is_file() and owner_file.is_file()):
         log("Forgejo is not provisioned for the assistant yet (scripts/openclaw-bootstrap.py)")
@@ -271,14 +307,6 @@ def main():
         people = []
     if (data_dir / FAMILY_ROOM_FILE).is_file():
         people.append(FAMILY)
-
-    image = docker("inspect", "--format", "{{.Config.Image}}", CONTAINER).stdout.strip()
-    volume = docker(
-        "inspect", "--format",
-        '{{range .Mounts}}{{if eq .Destination "/home/node/.openclaw"}}{{.Name}}{{end}}{{end}}', CONTAINER,
-    ).stdout.strip()  # fmt: skip
-    if not image or not volume:
-        pilib.die(f"cannot read the image or the state volume of {CONTAINER}")
 
     host_name = pilib.get_env_value("HOST_NAME") or "pi.lan"
     git = Git(host_name)
