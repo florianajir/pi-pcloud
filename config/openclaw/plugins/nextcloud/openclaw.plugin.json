@@ -1,0 +1,26 @@
+{
+  "id": "nextcloud",
+  "name": "Nextcloud",
+  "description": "Find, read and save files in the person's own Nextcloud, as that person.",
+  "categories": ["documents-files"],
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": false,
+  "contracts": {
+    "tools": ["nextcloud_search", "nextcloud_list", "nextcloud_fetch", "nextcloud_save"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["baseUrl", "tokenDir", "accounts"],
+    "properties": {
+      "baseUrl": { "type": "string" },
+      "tokenDir": { "type": "string" },
+      "accounts": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      }
+    }
+  }
+}

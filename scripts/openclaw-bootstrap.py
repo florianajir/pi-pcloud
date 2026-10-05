@@ -23,6 +23,8 @@
 6. Its Forgejo side, when Forgejo runs: a local, restricted bot user, the two
    repositories it pushes to (scripts/openclaw-sync.py), and their branch
    protection.
+7. Its Nextcloud side, when Nextcloud runs: an app password per person, which
+   the nextcloud plugin (config/openclaw/plugins/nextcloud) acts with.
 
 Restarts the gateway once if the account, the people or the family room
 changed. Idempotent: the next start redoes nothing that is already in place.
@@ -211,11 +213,14 @@ def matrix_api(token, method, path, body=None):
     ]
     if body is not None:
         config.append(f"data-binary = {quoted(json.dumps(body))}")
-    proc = docker(
-        "run", "--rm", "-i", "--network", pilib.DOCKER_CURL_NETWORK, pilib.CURL_IMAGE,
-        "-sS", *pilib.CURL_TIMEOUTS, "-w", "\\n%{http_code}", "--config", "-",
-        input_text="\n".join(config) + "\n", timeout=60,
-    )  # fmt: skip
+    try:
+        proc = docker(
+            "run", "--rm", "-i", "--network", pilib.DOCKER_CURL_NETWORK, pilib.CURL_IMAGE,
+            "-sS", *pilib.CURL_TIMEOUTS, "-w", "\\n%{http_code}", "--config", "-",
+            input_text="\n".join(config) + "\n", timeout=60,
+        )  # fmt: skip
+    except subprocess.TimeoutExpired:
+        return 0, {}
     payload, _, status = proc.stdout.rpartition("\n")
     try:
         parsed = json.loads(payload) if payload.strip() else {}
@@ -335,7 +340,7 @@ def lldap_people():
         "-H", "Content-Type: application/json", f"{LLDAP}/auth/simple/login",
         body=json.dumps({"username": admin, "password": password}),
     )["token"]  # fmt: skip
-    query = {"query": "{ users { id displayName groups { displayName } } }"}
+    query = {"query": "{ users { id email displayName groups { displayName } } }"}
     users = pilib.docker_curl_json(
         "-H", "Content-Type: application/json", "-H", f"Authorization: Bearer {token}",
         f"{LLDAP}/api/graphql", body=json.dumps(query),
@@ -355,7 +360,8 @@ def lldap_people():
             log(f"WARNING: {uid} reduces to the agent id {agent}, already taken; the assistant will not answer it")
             continue
         agents.add(agent)
-        people.append({"id": uid, "agent": agent, "name": user["displayName"] or uid})
+        # The email is the Nextcloud account id: user_oidc maps uid to email.
+        people.append({"id": uid, "agent": agent, "name": user["displayName"] or uid, "email": user.get("email") or ""})
     return people
 
 
@@ -515,6 +521,8 @@ def ensure_family_room(server_name, password, people):
             if invite(token, state["room_id"], user_id):
                 invited.add(user_id)
                 log(f"Invited {user_id} to the family room")
+            else:
+                log(f"WARNING: could not invite {user_id} to the family room; the next start retries")
         state["invited"] = sorted(invited | set(state.get("invited", [])))
         save_family_room_state(state)
     finally:
@@ -762,6 +770,62 @@ def ensure_forgejo(host_name):
         log("Minted the Forgejo token openclaw-sync pushes with")
 
 
+# --- 7. Nextcloud ---
+
+NEXTCLOUD = "pi-nextcloud"
+# What the person sees in Nextcloud's security settings, where they can revoke it.
+NEXTCLOUD_TOKEN_NAME = "Family assistant (OpenClaw)"
+APP_PASSWORD = re.compile(r"^[A-Za-z0-9-]{20,}$")
+
+
+def mint_app_password(account):
+    proc = docker("exec", NEXTCLOUD, "php", "occ", "user:auth-tokens:add", "--name", NEXTCLOUD_TOKEN_NAME, account)
+    lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    if proc.returncode != 0 or not lines or not APP_PASSWORD.match(lines[-1]):
+        return ""
+    return lines[-1]
+
+
+def has_app_password(token_file):
+    """The directory belongs to the gateway's uid, mode 0700: a non-root run
+    by another user cannot look inside, and could not write a new one either."""
+    try:
+        return bool(token_file.read_text(encoding="utf-8").strip())
+    except FileNotFoundError:
+        return False
+    except PermissionError:
+        return True
+
+
+def ensure_nextcloud_app_passwords(people):
+    """One app password per person, minted as that person by occ, so the
+    plugin acts with exactly their rights and nobody else's. A person whose
+    Nextcloud account does not exist yet - it is created at their first sign-in
+    - gets one at the first start after that. A lost file means a new password;
+    the old one stays listed in their settings until they revoke it."""
+    if not pilib.container_is_running(NEXTCLOUD):
+        return
+    token_dir = data_dir() / "secrets" / "nextcloud"
+    for person in people:
+        account = person.get("email")
+        token_file = token_dir / person["agent"]
+        if not account or has_app_password(token_file):
+            continue
+        if docker("exec", NEXTCLOUD, "php", "occ", "user:info", account).returncode != 0:
+            continue
+        secret = mint_app_password(account)
+        if not secret:
+            log(f"WARNING: could not mint {person['agent']}'s Nextcloud app password")
+            continue
+        pilib.write_file_atomic(token_file, secret)
+        safe_chmod(0o600, token_file)
+        try:
+            os.chown(token_file, CONTAINER_UID, CONTAINER_UID)
+        except OSError:
+            log(f"WARNING: could not chown {token_file} to {CONTAINER_UID}; the gateway cannot read it")
+        log(f"Minted {person['agent']}'s Nextcloud app password")
+
+
 def main():
     if not pilib.wait_for_container(CONTAINER):
         die(f"{CONTAINER} is not running")
@@ -771,8 +835,13 @@ def main():
 
     # A fresh start after an install already loads the plugin; only what
     # changes after it calls for a restart.
-    if ensure_plugins() and docker("start", CONTAINER).returncode != 0:
-        die(f"could not start {CONTAINER} after the plugin install")
+    if ensure_plugins():
+        if docker("start", CONTAINER).returncode != 0:
+            die(f"could not start {CONTAINER} after the plugin install")
+        # An image bump reinstalls the plugins without asking for a restart,
+        # and the CLI steps below fail against a gateway still starting.
+        if not pilib.wait_for_health(CONTAINER):
+            die(f"{CONTAINER} did not come back healthy after the plugin install")
     server_name = f"chat.{host_name}"
     password = matrix_password()
     restart = ensure_bot_account(server_name, password)
@@ -784,9 +853,14 @@ def main():
         log(f"Restarting {CONTAINER} to apply the changes")
         if docker("restart", CONTAINER, timeout=240).returncode != 0:
             die(f"could not restart {CONTAINER}")
+        # The CLI steps below exec into it, and failed against a gateway still
+        # starting (measured: the memory index step).
+        if not pilib.wait_for_health(CONTAINER):
+            die(f"{CONTAINER} did not come back healthy after the restart")
     ensure_household_rules()
     ensure_memory_indexes()
     ensure_forgejo(host_name)
+    ensure_nextcloud_app_passwords(read_people())
     if not restart:
         # Needs the device logged in, which a restart just undid; the next
         # start does it instead.
