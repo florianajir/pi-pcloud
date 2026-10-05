@@ -353,8 +353,16 @@ function saveTool({ config, account, workspaceDir }) {
       if (intoFolder) target = [...target, originalName(source)];
       await nextcloud.ensureFolders(target.slice(0, -1));
       target = await nextcloud.freeName(target);
-      const response = await nextcloud.request("PUT", nextcloud.fileUrl(target), { body: await readFile(source) });
-      if (response.status !== 201 && response.status !== 204) {
+      // If-None-Match closes the gap between freeName's check and this write:
+      // a file that appeared meanwhile is refused (412), never replaced.
+      const response = await nextcloud.request("PUT", nextcloud.fileUrl(target), {
+        headers: { "If-None-Match": "*" },
+        body: await readFile(source),
+      });
+      if (response.status === 412) {
+        throw new Error(`A file named "${target.join("/")}" appeared while saving; nothing was replaced, try again.`);
+      }
+      if (response.status !== 201) {
         throw new Error(`Nextcloud answered ${response.status} saving it.`);
       }
       return textResult(`Saved in the person's Nextcloud as "${target.join("/")}".`, { path: target.join("/") });

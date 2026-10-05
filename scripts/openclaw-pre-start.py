@@ -466,7 +466,12 @@ def ensure_nextcloud_token_dir(data_dir):
     token_dir.mkdir(parents=True, exist_ok=True)
     safe_chmod(0o700, token_dir.parent)
     safe_chmod(0o700, token_dir)
-    for path in [token_dir, *token_dir.iterdir()]:
+    try:
+        tokens = list(token_dir.iterdir())
+    except PermissionError:
+        # Already handed to the container's uid by an earlier root run.
+        return
+    for path in [token_dir, *tokens]:
         try:
             os.chown(path, CONTAINER_UID, CONTAINER_UID)
         except OSError:

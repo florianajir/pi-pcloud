@@ -213,11 +213,14 @@ def matrix_api(token, method, path, body=None):
     ]
     if body is not None:
         config.append(f"data-binary = {quoted(json.dumps(body))}")
-    proc = docker(
-        "run", "--rm", "-i", "--network", pilib.DOCKER_CURL_NETWORK, pilib.CURL_IMAGE,
-        "-sS", *pilib.CURL_TIMEOUTS, "-w", "\\n%{http_code}", "--config", "-",
-        input_text="\n".join(config) + "\n", timeout=60,
-    )  # fmt: skip
+    try:
+        proc = docker(
+            "run", "--rm", "-i", "--network", pilib.DOCKER_CURL_NETWORK, pilib.CURL_IMAGE,
+            "-sS", *pilib.CURL_TIMEOUTS, "-w", "\\n%{http_code}", "--config", "-",
+            input_text="\n".join(config) + "\n", timeout=60,
+        )  # fmt: skip
+    except subprocess.TimeoutExpired:
+        return 0, {}
     payload, _, status = proc.stdout.rpartition("\n")
     try:
         parsed = json.loads(payload) if payload.strip() else {}
@@ -518,6 +521,8 @@ def ensure_family_room(server_name, password, people):
             if invite(token, state["room_id"], user_id):
                 invited.add(user_id)
                 log(f"Invited {user_id} to the family room")
+            else:
+                log(f"WARNING: could not invite {user_id} to the family room; the next start retries")
         state["invited"] = sorted(invited | set(state.get("invited", [])))
         save_family_room_state(state)
     finally:
@@ -781,6 +786,17 @@ def mint_app_password(account):
     return lines[-1]
 
 
+def has_app_password(token_file):
+    """The directory belongs to the gateway's uid, mode 0700: a non-root run
+    by another user cannot look inside, and could not write a new one either."""
+    try:
+        return bool(token_file.read_text(encoding="utf-8").strip())
+    except FileNotFoundError:
+        return False
+    except PermissionError:
+        return True
+
+
 def ensure_nextcloud_app_passwords(people):
     """One app password per person, minted as that person by occ, so the
     plugin acts with exactly their rights and nobody else's. A person whose
@@ -793,7 +809,7 @@ def ensure_nextcloud_app_passwords(people):
     for person in people:
         account = person.get("email")
         token_file = token_dir / person["agent"]
-        if not account or (token_file.is_file() and token_file.read_text(encoding="utf-8").strip()):
+        if not account or has_app_password(token_file):
             continue
         if docker("exec", NEXTCLOUD, "php", "occ", "user:info", account).returncode != 0:
             continue
@@ -819,8 +835,13 @@ def main():
 
     # A fresh start after an install already loads the plugin; only what
     # changes after it calls for a restart.
-    if ensure_plugins() and docker("start", CONTAINER).returncode != 0:
-        die(f"could not start {CONTAINER} after the plugin install")
+    if ensure_plugins():
+        if docker("start", CONTAINER).returncode != 0:
+            die(f"could not start {CONTAINER} after the plugin install")
+        # An image bump reinstalls the plugins without asking for a restart,
+        # and the CLI steps below fail against a gateway still starting.
+        if not pilib.wait_for_health(CONTAINER):
+            die(f"{CONTAINER} did not come back healthy after the plugin install")
     server_name = f"chat.{host_name}"
     password = matrix_password()
     restart = ensure_bot_account(server_name, password)
