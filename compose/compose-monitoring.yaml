@@ -398,7 +398,7 @@ services:
 
   dockhand:
     <<: *service-defaults
-    image: fnsys/dockhand:v1.0.49
+    image: fnsys/dockhand:v1.0.50
     container_name: pi-dockhand
     profiles: ["dockhand", "all"]
     # Not frontend: this container reads the Docker socket. See the `dockhand`
