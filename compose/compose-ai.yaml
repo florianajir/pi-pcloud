@@ -559,7 +559,7 @@ services:
   # socket, no host path but its own config, and no capability.
   openclaw:
     <<: *service-defaults
-    image: ghcr.io/openclaw/openclaw:2026.9.7@sha256:0da12cd49983fcb5e4915fd3135ce7a33d82f93649b1df6964946d2c1d1dbcfc
+    image: ghcr.io/openclaw/openclaw:2026.9.9@sha256:7f10d5cc975a90b65192eaa099454fe33ce8ce2390806c61c65cd868e9ef730d
     container_name: pi-openclaw
     profiles: ["openclaw", "all"]
     # Not the image's docker-entrypoint.mjs, which runs `openclaw doctor --fix`
