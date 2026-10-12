@@ -912,7 +912,7 @@ services:
 
   ntfy:
     <<: *service-defaults
-    image: binwiederhier/ntfy:v2.28.0
+    image: binwiederhier/ntfy:v2.29.0
     container_name: pi-ntfy
     command: serve
     networks:
