@@ -1,9 +1,10 @@
 #!/bin/sh
 # Tests for scripts/uptime-kuma-watchdog.sh: one push per outage, one per
-# recovery, silence while the stack is simply down, and a retry when ntfy could
-# not be reached. A stub `docker` reports whatever container state a case sets
-# and a stub `curl` records what would have been published, so nothing touches
-# the real stack. Run with `make test`.
+# recovery, silence while the stack is simply down, a crash loop caught while
+# it still reads as starting, and a retry when ntfy could not be reached. A
+# stub `docker` reports whatever container state a case sets and a stub `curl`
+# records what would have been published, so nothing touches the real stack.
+# Run with `make test`.
 set -eu
 
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -96,6 +97,11 @@ ok "an unreachable ntfy fails the unit" \
     "$(run_watchdog "running unhealthy" 7)" "Uptime Kuma is down|1"
 ok "and leaves no marker, so the next run retries" \
     "$(run_watchdog "running unhealthy")" "Uptime Kuma is down|0"
+
+run_watchdog "running healthy" >/dev/null
+run_watchdog "running starting" >/dev/null
+ok "still starting one run later is a crash loop" \
+    "$(run_watchdog "running starting")" "Uptime Kuma is down|0"
 
 ok "the password reaches curl on stdin" \
     "$(grep -c 'stub-password' "$WORK/curl-stdin")" "1"
