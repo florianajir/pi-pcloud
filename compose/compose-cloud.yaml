@@ -328,7 +328,7 @@ services:
     labels:
       - "homepage.description=Face and object recognition for Immich"
       - "pi-pcloud.companion-of=immich-server"
-    image: ghcr.io/immich-app/immich-machine-learning:v3.3.0
+    image: ghcr.io/immich-app/immich-machine-learning:v3.3.1
     networks:
       - egress_immich
       - immich
@@ -619,7 +619,7 @@ services:
   # the shared Redis. See the PR body for why not Synapse or continuwuity.
   tuwunel:
     <<: *service-defaults
-    image: ghcr.io/matrix-construct/tuwunel:v1.9.3@sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0
+    image: ghcr.io/matrix-construct/tuwunel:v1.9.4@sha256:0e86c6164d6c9f5b60291938eb61ad8395021c37fe58d47a963ea7edddbedaec
     container_name: pi-tuwunel
     # openclaw too: the assistant is a bot account on this homeserver.
     profiles: ["tuwunel", "openclaw", "all"]
@@ -817,7 +817,7 @@ services:
 
   n8n:
     <<: *service-defaults
-    image: n8nio/n8n:2.42.3
+    image: n8nio/n8n:2.42.6
     container_name: pi-n8n
     profiles: ["n8n", "n8n-runners", "all"]
     expose:
@@ -885,7 +885,7 @@ services:
 
   n8n-runners:
     <<: *service-defaults
-    image: n8nio/runners:2.42.3
+    image: n8nio/runners:2.42.6
     container_name: pi-n8n-runners
     profiles: ["n8n-runners", "all"]
     labels:
@@ -912,7 +912,7 @@ services:
 
   ntfy:
     <<: *service-defaults
-    image: binwiederhier/ntfy:v2.28.0
+    image: binwiederhier/ntfy:v2.29.0
     container_name: pi-ntfy
     command: serve
     networks:
