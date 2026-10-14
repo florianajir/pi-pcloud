@@ -1,0 +1,13 @@
+[Unit]
+Description=Alert through ntfy when Uptime Kuma itself is unhealthy
+After=docker.service pi-pcloud.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Skipped, not failed, when the uptime-kuma profile is off (see nextcloud-cron.service).
+ExecCondition=/bin/sh __PROJECT_PATH__/scripts/run-if-enabled.sh uptime-kuma
+WorkingDirectory=__PROJECT_PATH__
+# Holds the marker that keeps one outage to one push.
+StateDirectory=pi-pcloud-kuma-watchdog
+ExecStart=/bin/sh __PROJECT_PATH__/scripts/uptime-kuma-watchdog.sh

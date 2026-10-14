@@ -950,6 +950,54 @@ api_send_json_stdin() {
     fi
 }
 
+# The ntfy container's address on any of its networks. Container IPs change on
+# recreate, so this is resolved per publish rather than cached.
+resolve_ntfy_address() {
+    docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' \
+        "${NTFY_CONTAINER:-pi-ntfy}" 2>/dev/null | awk '{print $1}'
+}
+
+# Publish to ntfy from the host; NTFY_URL overrides the container lookup.
+# Credentials reach curl on stdin as a config file, so they never appear in the
+# process table the way -u or a header on the command line would. Returns
+# non-zero when the notification did not go out.
+# Usage: ntfy_publish <user> <password> <topic> <title> <priority> <tags> <message>
+ntfy_publish() {
+    local user="$1"
+    local password="$2"
+    local topic="$3"
+    local title="$4"
+    local priority="$5"
+    local tags="$6"
+    local message="$7"
+    local base_url=""
+    local address=""
+
+    if [ -n "${NTFY_URL:-}" ]; then
+        base_url="${NTFY_URL%/}"
+    else
+        address="$(resolve_ntfy_address)"
+        if [ -z "$address" ]; then
+            log "WARNING: could not resolve ${NTFY_CONTAINER:-pi-ntfy} address; skipping notification"
+            return 1
+        fi
+        base_url="http://$address"
+    fi
+
+    if printf 'user = "%s:%s"\n' "$user" "$password" | curl -fsS -K - \
+        --retry 3 --max-time 15 \
+        -H "Title: $title" \
+        -H "Priority: $priority" \
+        -H "Tags: $tags" \
+        --data-binary "$message" \
+        "$base_url/$topic" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    log "WARNING: failed to publish notification to ntfy topic '$topic'"
+    return 1
+}
+
 # Usage: wait_for_http_endpoint <url> <name> [max_retries] [interval_seconds]
 wait_for_http_endpoint() {
     local url="$1"

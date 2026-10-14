@@ -89,6 +89,7 @@ PER_INVOCATION='db-backup.sh sqlite-backup.sh'
 # on the host as pi-pcloud-authelia-ntfy.service, which `make update` restarts
 # itself two lines before calling this. Without the entry, the prefix rule reads
 # it as Authelia's and recreates the identity provider for a host watcher.
+# uptime-kuma-watchdog.sh is the same case, run fresh by its timer each time.
 #
 # changed-services.sh is this file. By the time it answers, the pull that
 # rewrote it has already happened and the new version is the one running.
@@ -101,7 +102,7 @@ HOST_ONLY='api-keys.sh authelia-ntfy-watch.sh changed-services.sh
 configure-kernel-params.sh configure-swap.sh lint.sh pg-major-upgrade.sh
 pi-pcloud ram-usage.sh recovery-kit.sh rotate-password.sh rotate-secret.sh
 sarif-merge.py services.sh services-picker.py wan-allowlist-sync.sh
-openclaw-sync.py'
+openclaw-sync.py uptime-kuma-watchdog.sh'
 
 # config/ files a container reads only while it initialises for the first time,
 # spelled as the path under config/. config/postgres/init-databases.sh is
