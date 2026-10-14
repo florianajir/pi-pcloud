@@ -123,6 +123,7 @@ test:
 	@sh tests/ram-usage-test.sh
 	@sh tests/stack-up-test.sh
 	@sh tests/changed-services-test.sh
+	@sh tests/uptime-kuma-watchdog-test.sh
 	@sh tests/compose-test.sh
 	@sh tests/trilium-api-contract.sh
 	@sh tests/routing-test.sh
@@ -211,7 +212,7 @@ install-system:
 	$(LIB_SH); \
 	LAN_PARENT_VAL=$$(unquote_env_value "$$(read_env_value_from_file .env HOST_LAN_PARENT)"); \
 	LAN_PARENT_VAL=$${LAN_PARENT_VAL:-eth0}; \
-	for unit in $(UNIT) $(WATCH_UNIT) $(WAN_UNIT) nextcloud-cron.service tuwunel-backup.service openclaw-sync.service; do \
+	for unit in $(UNIT) $(WATCH_UNIT) $(WAN_UNIT) nextcloud-cron.service tuwunel-backup.service openclaw-sync.service pi-pcloud-kuma-watchdog.service; do \
 		sed -e 's|__PROJECT_PATH__|$(PROJECT_PATH)|g' \
 		    -e "s|__HOST_LAN_PARENT__|$$(sed_escape "$$LAN_PARENT_VAL")|g" \
 		    "config/systemd/system/$$unit" > "$$rendered"; \
@@ -221,11 +222,12 @@ install-system:
 	$(SUDO) cp config/systemd/system/pi-pcloud-wan-allowlist.timer /etc/systemd/system/
 	$(SUDO) cp config/systemd/system/tuwunel-backup.timer /etc/systemd/system/
 	$(SUDO) cp config/systemd/system/openclaw-sync.timer /etc/systemd/system/
+	$(SUDO) cp config/systemd/system/pi-pcloud-kuma-watchdog.timer /etc/systemd/system/
 	$(SUDO) systemctl daemon-reload
 	$(SUDO) systemctl enable $(UNIT) $(WATCH_UNIT)
 # --now on the timers: `enable` alone arms them for the next boot only, so a
 # fresh install waits until then for the first run.
-	$(SUDO) systemctl enable --now nextcloud-cron.timer pi-pcloud-wan-allowlist.timer tuwunel-backup.timer openclaw-sync.timer
+	$(SUDO) systemctl enable --now nextcloud-cron.timer pi-pcloud-wan-allowlist.timer tuwunel-backup.timer openclaw-sync.timer pi-pcloud-kuma-watchdog.timer
 	@echo "✅ Systemd units installed"
 	@echo "🔗 Installing the pi-pcloud command..."
 # A symlink, not a copy: the command follows this checkout, so a git pull
@@ -254,7 +256,7 @@ uninstall:
 	@printf "Are you sure? Type 'yes' to confirm: "; read -r confirm && [ "$$confirm" = "yes" ] || (echo "Aborted"; exit 1)
 	@echo ""
 	@echo "🛑 Stopping services..."
-	-$(SUDO) systemctl stop pi-pcloud-wan-allowlist.timer 2>/dev/null || true
+	-$(SUDO) systemctl stop pi-pcloud-wan-allowlist.timer pi-pcloud-kuma-watchdog.timer 2>/dev/null || true
 	-$(SUDO) systemctl stop $(WATCH_UNIT) 2>/dev/null || true
 	-$(SUDO) systemctl stop $(UNIT) 2>/dev/null || true
 	@echo "🐳 Removing containers and volumes..."
@@ -302,7 +304,7 @@ uninstall:
 	@echo "🧹 Removing the pi-pcloud command..."
 	-$(SUDO) rm -f $(BIN_LINK) $(BASH_COMPLETION) $(ZSH_COMPLETION)
 	@echo "🧹 Removing systemd units..."
-	-$(SUDO) systemctl disable $(UNIT) $(WATCH_UNIT) nextcloud-cron.timer pi-pcloud-wan-allowlist.timer tuwunel-backup.timer openclaw-sync.timer 2>/dev/null || true
+	-$(SUDO) systemctl disable $(UNIT) $(WATCH_UNIT) nextcloud-cron.timer pi-pcloud-wan-allowlist.timer tuwunel-backup.timer openclaw-sync.timer pi-pcloud-kuma-watchdog.timer 2>/dev/null || true
 	-$(SUDO) rm -f /etc/systemd/system/$(UNIT)
 	-$(SUDO) rm -f /etc/systemd/system/$(WATCH_UNIT)
 	-$(SUDO) rm -f /etc/systemd/system/$(WAN_UNIT)
@@ -313,6 +315,8 @@ uninstall:
 	-$(SUDO) rm -f /etc/systemd/system/tuwunel-backup.timer
 	-$(SUDO) rm -f /etc/systemd/system/openclaw-sync.service
 	-$(SUDO) rm -f /etc/systemd/system/openclaw-sync.timer
+	-$(SUDO) rm -f /etc/systemd/system/pi-pcloud-kuma-watchdog.service
+	-$(SUDO) rm -f /etc/systemd/system/pi-pcloud-kuma-watchdog.timer
 	-$(SUDO) systemctl daemon-reload
 	@echo "✅ Uninstall complete"
 	@echo ""

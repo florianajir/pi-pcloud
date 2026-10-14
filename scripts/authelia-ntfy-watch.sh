@@ -38,21 +38,10 @@ RECONNECT_DELAY="${AUTHELIA_NTFY_RECONNECT_DELAY:-10}"
 
 # --- ntfy publishing ---
 
-# Resolve the ntfy container address on any of its docker networks. Container IPs
-# change on recreate, so this is resolved per publish rather than cached.
-resolve_ntfy_address() {
-    docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' \
-        "$NTFY_CONTAINER" 2>/dev/null | awk '{print $1}'
-}
-
 # Usage: publish <title> <priority> <tags> <message>
 # Returns non-zero when the notification did not go out, so the caller can leave
 # its dedupe slot unstamped and let the next occurrence try again.
 publish() {
-    _title="$1"
-    _priority="$2"
-    _tags="$3"
-    _message="$4"
     _password="$(read_env_value_from_file "$NTFY_ENV_FILE" NTFY_AUTHELIA_PASSWORD)"
     _topic="$(read_env_value_from_file "$NTFY_ENV_FILE" NTFY_AUTHELIA_TOPIC)"
     [ -n "$_topic" ] || _topic="security"
@@ -62,31 +51,7 @@ publish() {
         return 1
     fi
 
-    if [ -n "${NTFY_URL:-}" ]; then
-        _base_url="${NTFY_URL%/}"
-    else
-        _address="$(resolve_ntfy_address)"
-        if [ -z "$_address" ]; then
-            log "WARNING: could not resolve $NTFY_CONTAINER address; skipping notification"
-            return 1
-        fi
-        _base_url="http://$_address"
-    fi
-
-    # Credentials go in on stdin as a curl config file so they never appear in the
-    # process table (unlike -u / -H on the command line).
-    if printf 'user = "%s:%s"\n' "$NTFY_USER" "$_password" | curl -fsS -K - \
-        --retry 3 --max-time 15 \
-        -H "Title: $_title" \
-        -H "Priority: $_priority" \
-        -H "Tags: $_tags" \
-        --data-binary "$_message" \
-        "$_base_url/$_topic" >/dev/null 2>&1; then
-        return 0
-    fi
-
-    log "WARNING: failed to publish notification to ntfy topic '$_topic'"
-    return 1
+    ntfy_publish "$NTFY_USER" "$_password" "$_topic" "$1" "$2" "$3" "$4"
 }
 
 # --- Log parsing ---

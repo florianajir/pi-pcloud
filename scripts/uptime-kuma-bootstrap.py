@@ -2,7 +2,7 @@
 """Bootstrap Uptime Kuma 2.x: setup admin, disable built-in auth (Authelia handles it),
 configure the ntfy notification tiers, docker host, and the monitor topology.
 
-Monitors are organised in seven groups under the "pi-pcloud" root, split by blast
+Monitors are organised in eight groups under the "pi-pcloud" root, split by blast
 radius rather than by theme, because in Kuma the alerting granularity is per
 monitor: the group a monitor lives in decides its check interval, its retry
 budget and which ntfy priority it wakes you up with.
@@ -19,11 +19,11 @@ Each group also declares where the notification is attached:
 
 Beside the per-container docker monitors (which only prove the container runs),
 the topology adds end-to-end checks that exercise the actual request path:
-HTTP monitors sent to Traefik with a Host header, a DNS resolution check through
-Pi-hole, the gluetun public IP, and the age of the last backup. Those catch the
-failure modes a docker check is blind to - a dropped Traefik route answers 404
-while the container is happily running, and a backup that never started reports
-nothing at all.
+HTTP monitors sent to Traefik with a Host header, a probe of the uplink itself,
+a DNS resolution check through Pi-hole, the gluetun public IP, and the age of
+the last backup. Those catch the failure modes a docker check is blind to - a
+dropped Traefik route answers 404 while the container is happily running, and a
+backup that never started reports nothing at all.
 
 Optional services are profile-gated (COMPOSE_PROFILES in .env). Every monitor
 is still created, but a monitor owned by a disabled service is paused rather
@@ -92,7 +92,6 @@ GROUPS = [
             "pi-redis",
             "pi-unbound",
             "pi-pihole",
-            "pi-ddns-updater",
             "pi-ntfy",
         ],
     },
@@ -104,7 +103,23 @@ GROUPS = [
         "retry": 60,
         "maxretries": 3,
         "resend": 30,  # 30 min
-        "containers": ["pi-headscale", "pi-headplane", "pi-tailscale", "pi-gluetun"],
+        "containers": ["pi-headscale", "pi-headplane", "pi-tailscale"],
+    },
+    {
+        # Everything whose health is a function of the uplink rather than of the
+        # Pi. A WAN cut takes all of it down within minutes, and alerting per
+        # child turned a 13-minute outage into eleven pushes (2026-10-14); as a
+        # group it is one, led by the `internet` probe. A member that breaks on
+        # its own still alerts - the group message names it. No resend: an
+        # outage nobody can fix at 3 a.m. should not repeat until morning.
+        "name": "Internet",
+        "tier": "high",
+        "notify": "group",
+        "interval": 60,
+        "retry": 30,
+        "maxretries": 3,
+        "resend": 0,
+        "containers": ["pi-ddns-updater", "pi-gluetun"],
     },
     {
         "name": "Personal Data",
@@ -943,6 +958,39 @@ class UptimeKumaBootstrap:
             "conditions": [],
         })
 
+    def ensure_internet_monitor(self, parent_id, notification_id):
+        """Ensure the uplink itself is checked, so a WAN cut is reported as one.
+
+        A DNS query sent straight to three public resolvers by address, not
+        through Pi-hole: the local chain is what this has to tell apart from
+        the uplink. Kuma hands the list to one c-ares resolver, which falls
+        through to the next server on a timeout, so the check fails only when
+        none of the three operators answers - a single provider's outage does
+        not read as no internet. a.root-servers.net is in every resolver's
+        cache from root priming, so the answer needs no authoritative server.
+
+        No retries: a failed check is already ~70 s of silence from all three,
+        and a retry budget would let the containers it has to lead go down
+        first, putting them rather than "internet" in the group's message.
+        """
+        desired = {
+            "type": "dns",
+            "parent": parent_id,
+            "hostname": "a.root-servers.net",
+            "dns_resolve_server": "1.1.1.1,9.9.9.9,8.8.8.8",
+            "dns_resolve_type": "A",
+            "port": 53,
+            "interval": 60,
+            "retryInterval": 60,
+            "maxretries": 0,
+            "resendInterval": 0,
+            "notificationIDList": {str(notification_id): True} if notification_id else {},
+        }
+        return self.ensure_monitor("internet", desired, defaults={
+            "accepted_statuscodes": ["200-299"],
+            "conditions": [],
+        })
+
     def ensure_dns_monitor(self, resolver_ip, parent_id, group, notification_id):
         """Ensure name resolution itself is checked, not just the DNS containers.
 
@@ -1046,7 +1094,7 @@ class UptimeKumaBootstrap:
 
         Used by the Homepage 'uptimekuma' widget, which has no full API and instead
         reads a public status page by slug (no auth needed). The widget only counts
-        up/down monitors on the page, so listing the seven group monitors - rather
+        up/down monitors on the page, so listing every group monitor - rather
         than a single root - is what turns it from a binary indicator into
         "6 up / 1 down" telling you which side of the stack is broken.
         Server signature: addStatusPage(title, slug, callback), then
@@ -1273,11 +1321,20 @@ def main():
         else:
             log("WARNING: HOST_NAME is not set; skipping route and TLS certificate monitors")
 
+        group = groups_by_name["Internet"]
+        try:
+            api.ensure_internet_monitor(group_ids["Internet"], tier_for(group))
+        except Exception as e:
+            log(f"WARNING: Failed to ensure internet monitor: {e}")
+
+        # In Internet, not Core: past Pi-hole's one-hour stale-serving window
+        # (dns.cache.optimizer) a WAN cut fails this check too, while Pi-hole
+        # or unbound going down is still caught by their container monitors
+        # in Core.
         resolver_ip = resolve_container_ip("pi-pihole")
         if resolver_ip:
-            group = groups_by_name["Core"]
             try:
-                monitor_id = api.ensure_dns_monitor(resolver_ip, group_ids["Core"], group, tier_for(group))
+                monitor_id = api.ensure_dns_monitor(resolver_ip, group_ids["Internet"], group, tier_for(group))
                 api.reconcile_monitor_active(
                     "dns resolution", monitor_id,
                     monitor_should_be_active(
@@ -1289,9 +1346,8 @@ def main():
         else:
             log("WARNING: pi-pihole did not resolve; skipping the DNS resolution monitor")
 
-        group = groups_by_name["Remote Access"]
         try:
-            monitor_id = api.ensure_vpn_monitor(group_ids["Remote Access"], group, tier_for(group))
+            monitor_id = api.ensure_vpn_monitor(group_ids["Internet"], group, tier_for(group))
             api.reconcile_monitor_active(
                 "vpn public ip", monitor_id,
                 monitor_should_be_active(

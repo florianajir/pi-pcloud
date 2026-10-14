@@ -165,8 +165,9 @@ The group decides the check interval, the retry budget and the ntfy priority:
 
 | Group | Contents | Interval | Priority | Alerts from |
 |-------|----------|----------|----------|-------------|
-| **Core** | traefik, authelia, lldap, postgres, redis, unbound, pihole, ddns-updater, ntfy, DNS resolution | 60 s | 5 (critical) | each monitor |
-| **Remote Access** | headscale, headplane, tailscale, gluetun, VPN public IP | 60 s | 4 (high) | each monitor |
+| **Core** | traefik, authelia, lldap, postgres, redis, unbound, pihole, ntfy | 60 s | 5 (critical) | each monitor |
+| **Remote Access** | headscale, headplane, tailscale | 60 s | 4 (high) | each monitor |
+| **Internet** | internet, ddns-updater, gluetun, DNS resolution, VPN public IP | 60 s | 4 (high) | the group only |
 | **External Chain** | route checks, TLS certificate | 120 s | 4 (high) | each monitor |
 | **Personal Data** | immich, immich-ml, nextcloud, vaultwarden, kavita, audiobookshelf, freshrss, trilium, forgejo, tuwunel, element, changedetection, backrest, backup freshness | 120 s | 3 | each monitor |
 | **Media & Downloads** | qbittorrent, stremio, stremio-lan, aiostreams, aiometadata, stremthru, prowlarr, kapowarr, flaresolverr, shelfmark, route qbittorrent | 300 s | 2 (low) | the group only |
@@ -179,7 +180,13 @@ The group decides the check interval, the retry budget and the ntfy priority:
 
 **Where the notification is attached matters as much as the priority.** A Kuma group is a worst-of-children aggregate whose down message lists the failing children. Groups marked *the group only* have silent children, so a gluetun outage sends one `Child monitors down: qbittorrent, prowlarr, …` push instead of six. Groups marked *each monitor* alert individually, for the tiers where the exact failing component matters.
 
-All four ntfy notifications publish to the same `monitoring` topic and differ only by priority, which is what drives do-not-disturb on the phone. Ongoing outages repeat after ~30 minutes (`resendInterval`) for the three alerting tiers; the low tier never repeats.
+**Internet holds everything whose health is a function of the uplink rather than of the Pi**, so a WAN cut is one push instead of one per casualty. On 2026-10-14 a 13-minute cut sent eleven: unbound and ddns-updater from Core, gluetun and the VPN IP from Remote Access, each down and each back up, plus Dockhand's copies. Now the `internet` probe trips first — it has no retry budget, where the containers behind it have 3 × 30 s — so the group goes down as `Child monitors down: internet`; the rest fall in behind it without a new push, and the single recovery push comes once all of them are back. The probe is a DNS query for `a.root-servers.net` sent straight to `1.1.1.1`, `9.9.9.9` and `8.8.8.8`. Kuma hands the three to one resolver that falls through to the next on a timeout, so the check fails only when no operator answers — about 70 s of silence from all three — and one provider's outage does not read as no internet. The name sits in every resolver's cache from root priming, so the answer needs no authoritative server either.
+
+Unbound stays in Core because its healthcheck no longer needs the uplink: it asks for `localhost`, one of unbound's built-in local zones, which proves the daemon serves without recursing. The old check (`cloudflare.com`) failed on every WAN cut, and Pi-hole waits on unbound being healthy (`depends_on: service_healthy`), so a `docker compose up` run while the uplink was down — the stack's own start, or `make update` — could not get past it. Recursion is checked by `dns resolution`, which moved to Internet because Pi-hole serves stale answers for an hour (`dns.cache.optimizer`) and so fails on any cut longer than that.
+
+Two components page lower than they used to, at 4 instead of 5, when they break on their own: `dns resolution` (Pi-hole up, unbound up, but recursion failing — a DNSSEC anchor problem, say) and `ddns-updater`. The first leaves the household with the same internet it has during a WAN cut, which is exactly what this group decides not to wake anyone for. The second breaks nothing until the public address changes, and the address did not change through the 2026-10-14 cut.
+
+All four ntfy notifications publish to the same `monitoring` topic and differ only by priority, which is what drives do-not-disturb on the phone. Ongoing outages repeat after ~30 minutes (`resendInterval`) for the groups that alert per monitor; Internet and the low tier never repeat — an uplink nobody can fix at 3 a.m. has no reason to page again before morning.
 
 ### What is actually checked
 
@@ -188,6 +195,7 @@ Docker monitors only prove a container is running. These cover what they cannot 
 | Monitor | Type | What it catches |
 |---------|------|-----------------|
 | `route <sub>` (auth, immich, nextcloud, vault, kavita, ntfy, homepage, qbittorrent) | HTTP | Traefik router dropped (404), middleware or backend broken (5xx) — with a perfectly healthy container |
+| `internet` | DNS | The uplink itself: at least one of `1.1.1.1`, `9.9.9.9`, `8.8.8.8` answering |
 | `dns resolution` | DNS | Pi-hole up, forwarding to Unbound, and Unbound still reaching the internet |
 | `vpn public ip` | JSON query | gluetun running *and* egress actually going through the tunnel |
 | `TLS certificate` | HTTP | Wildcard certificate expiry (checked daily) |
@@ -203,13 +211,21 @@ Two consequences: a fresh install is legitimately **down** here until its first 
 
 ### Homepage widget and retention
 
-The `uptimekuma` widget reads the public **`homepage` status page**, which lists the seven group monitors — so it reads `7 up` or `6 up 1 down` and tells you which side of the stack broke, instead of a single aggregate.
+The `uptimekuma` widget reads the public **`homepage` status page**, which lists the eight group monitors — so it reads `8 up` or `7 up 1 down` and tells you which side of the stack broke, instead of a single aggregate.
 
 `keepDataPeriodDays` is **90**. Pruning runs daily at 03:14 and also drops non-important heartbeats older than 24 h; long-term history lives in the `stat_minutely` / `stat_hourly` / `stat_daily` tables, not in `heartbeat`. SQLite does not return freed pages to the filesystem (`auto_vacuum` is off), so the file plateaus rather than shrinking — reclaim once with **Settings → Monitor History → Shrink Database**. If it keeps growing instead, the prune is failing silently: see [Troubleshooting](TROUBLESHOOTING.md#uptime-kuma-database-keeps-growing).
 
+### Who watches Uptime Kuma
+
+Kuma cannot report its own failure: a wedged Kuma does not alert, it goes quiet, and quiet reads as all green. `pi-pcloud-kuma-watchdog.timer` covers that from the host. Every five minutes it runs `scripts/uptime-kuma-watchdog.sh`, which pushes once when Docker reports `pi-uptime-kuma` unhealthy or stuck restarting, and once when it is healthy again — priority 4, as Kuma's own ntfy user, to the `monitoring` topic its alerts use. An absent or stopped container stays silent, because that is the stack being down or updated rather than Kuma failing, and the unit is skipped outright while the `uptime-kuma` profile is off.
+
+Expect about ten minutes from failure to push: the image's healthcheck needs five failures a minute apart before Docker calls it unhealthy, and the timer adds up to five more. A marker in `/var/lib/pi-pcloud-kuma-watchdog` keeps one outage to one push; a publish that fails leaves no marker and fails the unit, so the next run tries again. The units are installed by `make install` and re-applied by `make update`.
+
+This used to be Dockhand's job, through its `container_unhealthy` event — see [Dockhand container events](#dockhand-container-events) for why that went.
+
 ### Known blind spot
 
-Uptime Kuma cannot alert on its own host being down. A whole-Pi outage — power, kernel, disk — is invisible to it. Covering that needs an external heartbeat service.
+Uptime Kuma cannot alert on its own host being down, and neither can the watchdog beside it. A whole-Pi outage — power, kernel, disk — is invisible to both, and so is ntfy being down, since every alert goes through it. Covering that needs an external heartbeat service.
 
 ## Prometheus — the numbers
 
@@ -403,7 +419,7 @@ sudo systemctl edit pi-pcloud-authelia-ntfy.service
 
 `scripts/dockhand-oidc-bootstrap.sh` creates an Apprise channel named **Dockhand ntfy**, bound to the local Docker environment, with credentials from `config/ntfy/ntfy.env` (`ntfy://dockhand:<password>@ntfy/<topic>`).
 
-Two event types are configured, deliberately: `container_oom` (a container hit an out-of-memory condition) and `container_unhealthy` (a healthcheck switched to unhealthy). Everything else would duplicate Uptime Kuma.
+One event type is configured, deliberately: `container_oom` (a container hit an out-of-memory condition), which Uptime Kuma cannot see. Everything else would duplicate it — `container_unhealthy` included, which was dropped after it sent its own push per container on the first failed probe, outside Kuma's retry budget and grouping. The one container it covered that Kuma does not is Kuma itself, which [the watchdog](#who-watches-uptime-kuma) now watches.
 
 ## Backup strategy
 

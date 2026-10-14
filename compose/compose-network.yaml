@@ -70,7 +70,13 @@ services:
       - ./config/unbound/dnssec.conf:/etc/unbound/dnssec.d/dnssec.conf:ro
     healthcheck:
       <<: *healthcheck-default
-      test: ["CMD", "drill", "@127.0.0.1", "-p", "5335", "cloudflare.com"]
+      # localhost is one of unbound's built-in local zones, answered without
+      # recursing: this proves the daemon serves, not that the uplink works.
+      # A public name here turned every WAN cut into an unbound outage, and
+      # pihole waits on this being healthy, so a `compose up` run while the
+      # uplink was down could not get past it. Recursion is checked by the
+      # `dns resolution` monitor in Uptime Kuma.
+      test: ["CMD", "drill", "@127.0.0.1", "-p", "5335", "localhost"]
       start_period: 10s
       start_interval: 5s
     cpu_shares: *cpu-prio-critical

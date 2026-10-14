@@ -1,0 +1,12 @@
+[Unit]
+Description=Check that Uptime Kuma itself is healthy
+
+[Timer]
+# The image's healthcheck needs five failures a minute apart before Docker
+# says unhealthy, so five minutes on top bounds a silent Kuma to roughly ten.
+# The boot delay lets the start sequence bring it up first.
+OnBootSec=10min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

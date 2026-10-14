@@ -18,7 +18,10 @@ DOCKHAND_URL_DOCKER="${DOCKHAND_URL_DOCKER:-http://pi-dockhand:3000}"
 NTFY_ENV_FILE="${PROJECT_DIR}/config/ntfy/ntfy.env"
 DOCKHAND_NOTIFICATION_NAME="Dockhand ntfy"
 DOCKHAND_NTFY_DEFAULT_TOPIC="monitoring"
-DOCKHAND_NTFY_EVENT_TYPES_JSON='["container_oom","container_unhealthy"]'
+# No container_unhealthy: Uptime Kuma's docker monitors already alert on it,
+# after a retry budget and grouped by tier, while Dockhand pushes per container
+# on the first failed probe - a second, unfiltered copy of every outage.
+DOCKHAND_NTFY_EVENT_TYPES_JSON='["container_oom"]'
 
 ensure_authelia_dockhand_materials() {
     ensure_authelia_oidc_materials "dockhand" "Dockhand" "$MAX_RETRIES" "$RETRY_INTERVAL"
