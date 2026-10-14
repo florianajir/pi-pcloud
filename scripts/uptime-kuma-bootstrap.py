@@ -958,7 +958,7 @@ class UptimeKumaBootstrap:
             "conditions": [],
         })
 
-    def ensure_internet_monitor(self, parent_id, notification_id):
+    def ensure_internet_monitor(self, parent_id, group, notification_id):
         """Ensure the uplink itself is checked, so a WAN cut is reported as one.
 
         A DNS query sent straight to three public resolvers by address, not
@@ -980,10 +980,10 @@ class UptimeKumaBootstrap:
             "dns_resolve_server": "1.1.1.1,9.9.9.9,8.8.8.8",
             "dns_resolve_type": "A",
             "port": 53,
-            "interval": 60,
-            "retryInterval": 60,
+            "interval": group["interval"],
+            "retryInterval": group["retry"],
             "maxretries": 0,
-            "resendInterval": 0,
+            "resendInterval": group["resend"],
             "notificationIDList": {str(notification_id): True} if notification_id else {},
         }
         return self.ensure_monitor("internet", desired, defaults={
@@ -1323,7 +1323,7 @@ def main():
 
         group = groups_by_name["Internet"]
         try:
-            api.ensure_internet_monitor(group_ids["Internet"], tier_for(group))
+            api.ensure_internet_monitor(group_ids["Internet"], group, tier_for(group))
         except Exception as e:
             log(f"WARNING: Failed to ensure internet monitor: {e}")
 
