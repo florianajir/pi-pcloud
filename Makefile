@@ -349,6 +349,20 @@ else \
 fi
 endef
 
+# Compose pulls every image at once, and GHCR (lscr.io included) answers that
+# burst with `toomanyrequests ... allowed: 44000/minute` for a dozen images at a
+# time. Its retry-after is under a millisecond, and every image the failed
+# attempt did fetch is local by the next one, so a retry asks for far less.
+# Same three attempts as CI's pull step.
+define pull_images
+for attempt in 1 2 3; do \
+	$(COMPOSE) pull --ignore-buildable && break; \
+	[ "$$attempt" -lt 3 ] || { echo "❌ Image pull failed after 3 attempts"; exit 1; }; \
+	echo "  ⚠ pull attempt $$attempt/3 failed; retrying in $$((attempt * 20))s..."; \
+	sleep $$((attempt * 20)); \
+done
+endef
+
 # A wrapper around update-apply so a failure can say how to get back. Every step
 # after `git pull` runs against a repository that has already moved, and nothing
 # reverts it - the images are pulled, the host files applied, the containers
@@ -380,7 +394,7 @@ update-apply:
 	@git pull --ff-only
 	$(MAKE) check-env
 	@echo "📦 Images (the stack keeps running)..."
-	@$(COMPOSE) pull --ignore-buildable
+	@$(pull_images)
 	@echo "🔨 Locally built images..."
 	@$(COMPOSE) build --pull
 	$(MAKE) install-system
@@ -444,7 +458,7 @@ update-apply:
 update-images:
 	@echo "📦 Updating images (the stack keeps running)..."
 	$(MAKE) check-env
-	@$(COMPOSE) pull --ignore-buildable
+	@$(pull_images)
 	@echo "🔨 Locally built images..."
 	@$(COMPOSE) build --pull
 	@echo "🚀 Recreating the containers whose image moved..."
