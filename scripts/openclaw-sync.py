@@ -5,9 +5,10 @@ Run by openclaw-sync.timer, never by the agent: the agent has no git, no
 shell and no network, and the Forgejo token is mounted into nothing but the
 throwaway container this starts. Three passes:
 
-- Memory: each person's workspace is committed and pushed to its own branch
-  of assistant-memory, directly - edits the owner makes on that branch in
-  Forgejo are merged back, and win where both sides touched the same lines.
+- Memory: each person's workspace, and the family room agent's, is committed
+  and pushed to its own branch of assistant-memory, directly - edits the owner
+  makes on that branch in Forgejo are merged back, and win where both sides
+  touched the same lines.
 - Knowledge: the knowledge repository's main is checked out read-only beside
   the workspaces, where the agents' memory search indexes it.
 - Proposals: whatever an agent wrote under knowledge-proposals/ in its
@@ -43,6 +44,10 @@ PROPOSALS_DIR = "knowledge-proposals"
 # root-owned copy of a repository file, not memory. Committed, any merge that
 # had to rewrite it would fail on its permissions and stop that person's sync.
 MEMORY_EXCLUDES = "/.household/\n"
+# The family room's agent (scripts/openclaw-bootstrap.py), synced like a person
+# once its room exists: its own branch, its own proposals.
+FAMILY = {"agent": "family", "name": "Family"}
+FAMILY_ROOM_FILE = "family-room.json"
 # Never copied into a proposal: repository machinery, not knowledge.
 PROPOSAL_EXCLUDES = (".git", ".forgejo", ".gitea", ".github")
 
@@ -264,6 +269,8 @@ def main():
         people = json.loads((data_dir / "people.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         people = []
+    if (data_dir / FAMILY_ROOM_FILE).is_file():
+        people.append(FAMILY)
 
     image = docker("inspect", "--format", "{{.Config.Image}}", CONTAINER).stdout.strip()
     volume = docker(

@@ -315,8 +315,8 @@ discover them.
 ## The family assistant (OpenClaw)
 
 `@assistant:chat.<HOST_NAME>` is a bot account on the family's Matrix server. Anyone in LLDAP can
-open a direct chat with it from Element Web or Element X; encrypted DMs work, because the bot runs
-end-to-end encryption itself. Behind it is [OpenClaw](https://github.com/openclaw/openclaw), chosen
+open a direct chat with it from Element Web or Element X, and mention it in the family room the
+bootstrap creates; encrypted rooms work, because the bot runs end-to-end encryption itself. Behind it is [OpenClaw](https://github.com/openclaw/openclaw), chosen
 over Hermes and Goose for its background capabilities (heartbeat, scheduled jobs, memory
 consolidation), all of which are switched **off** for now. The PR that added it carries the full
 vetting: release line, measurements, and the advisories it was checked against.
@@ -324,7 +324,7 @@ vetting: release line, measurements, and the advisories it was checked against.
 | Piece | Where |
 |-------|-------|
 | The gateway and its agents | `openclaw` in `compose/compose-ai.yaml`, config rendered by `scripts/openclaw-pre-start.py` |
-| Plugins, bot account, people, household rules, Forgejo side | `scripts/openclaw-bootstrap.py` (post-start) |
+| Plugins, bot account, people, family room, household rules, Forgejo side | `scripts/openclaw-bootstrap.py` (post-start) |
 | Memory and knowledge base in Forgejo | `scripts/openclaw-sync.py`, every quarter hour by `openclaw-sync.timer` |
 | The model | agentgateway's `/assistant/v1` route |
 | Rules every agent gets in its prompt | `config/openclaw/household/AGENTS.md` |
@@ -354,7 +354,9 @@ rewrite it fail on its permissions, stopping that person's sync.
 
 The rules exist because of what was measured with Gemini Flash-Lite: asked to post into another
 room, the agent had the send refused by OpenClaw and still answered "done". Saying so is now a rule,
-and so is citing the URL after a web search, which the `web-search` skill alone did not get.
+and so is citing the URL after a web search, which the `web-search` skill alone did not get. Asked in
+a DM for a birthday told in the family room, it answered from its injected files that it was noted
+nowhere, without searching: searching memory before saying "I don't know" is a rule too.
 
 Only the skills in `config/openclaw/skills/` load. `skills.allowBundled` is `["none"]`, not `[]`:
 OpenClaw reads an empty list as no allowlist at all, and loaded all thirteen of its bundled skills
@@ -364,7 +366,7 @@ into every prompt.
 
 Every LLDAP account except the service accounts (`lldap_strict_readonly`, `lldap_password_manager`)
 gets an agent of its own, with its own workspace (`MEMORY.md`, `memory/`), bound to that person's
-Matrix ID. That account list is also the DM allowlist, and every room is ignored. A shared agent was
+Matrix ID. That account list is also the DM allowlist, and every room but the family room is ignored. A shared agent was
 measured and rejected: OpenClaw injects the workspace's `MEMORY.md` into every DM session, so with one
 agent, Bob's context carried what Alice had asked it to remember — and the upstream trust model
 treats anyone allowed to DM a gateway as able to steer it, so isolation is per agent or not at all.
@@ -374,6 +376,47 @@ gateway is restarted when it changes. A new family member therefore gets an assi
 `make update` or reboot, not the moment their account exists. An agent id keeps only `a-z`, `0-9`,
 `_` and `-`, so two uids that reduce to the same one (`jean.dupont`, `jean_dupont`) would share a
 workspace: the second in alphabetical order is left out, with a warning in the bootstrap's log.
+
+### The family room
+
+Next to the DMs, the bootstrap creates one encrypted room, **Family**, bound to an agent of its own
+(`family`). What is said in a room is shared by nature, so that agent's workspace is the family's
+memory, separate from every person's. Members can rename the room; the bootstrap only reads its ID.
+
+- **Created by the bot**, at the first start with a people list, and recorded in
+  `${DATA_LOCATION}/openclaw/family-room.json`: the binding needs the literal room ID, an alias does
+  not match. Room version 11, not Tuwunel's default 12, where the creator — the bot — would hold
+  unlimited power nobody can take back. Everyone who joins is an administrator (`users_default:
+  100`), and the bot lowers itself to an ordinary member that may still pin: the Matrix plugin gives
+  the agent a delete action, which as an administrator would redact anyone's message. Measured on a
+  throwaway Tuwunel 1.9.3: the bot pins, but cannot redact another member's message or rename the
+  room.
+- **Invites.** A Matrix account only exists after its owner's first SSO sign-in, so each person is
+  invited at the first start after that; a member can invite them straight away from Element. Someone
+  who leaves is not invited back.
+- **Only when mentioned.** OpenClaw answers every room message it accepts, and its Matrix plugin has
+  no listening-only mode, so without a mention each message would be a model turn and a reply. A turn
+  starts on Element's mention pill (type `@Ass` and pick it), on a message that *starts* with
+  "Assistant", and on `@room` — an announcement to everyone wakes it too. A reply to one of its
+  messages is not a mention. The last 20 unmentioned messages go along with the next mention
+  (`historyLimit`), so "what do you think?" has something to refer to; they cost no request, and are
+  kept in memory only, so a restart drops them.
+- **Who.** The room's `users` list is the LLDAP accounts, and it is also what lets them run commands
+  there (`//new`, `//context detail`): with no list, anyone in the room could talk to the agent and
+  nobody could reset it. The room has one session, shared by everyone in it, and anyone listed can
+  reset it.
+- **Memory.** OpenClaw never injects `MEMORY.md` into a room session, a privacy filter no hook can
+  lift. The room's instructions (`systemPrompt` in its `groups` entry, read-only config) have the
+  agent keep lasting family facts in `USER.md`, which is injected, and other notes in `memory/`,
+  which it searches. Told only "use `USER.md`", Flash-Lite still wrote a birthday to `MEMORY.md`, as
+  OpenClaw's own template says to; the instructions now give the reason. Its workspace is synced to the `family` branch of `assistant-memory`, and its
+  knowledge proposals arrive as pull requests like anyone's.
+- **Read by the private agents, never the reverse.** Each person's agent finds what the family agent
+  remembers through memory search: `MEMORY.md`, `USER.md` and `memory/` of the family workspace are
+  extra paths, outside its own workspace, so it cannot write them. That is a path for planted text: a
+  note the family agent wrote from a search result can reach a private agent's context when that
+  agent searches. The family agent sees no DM.
+- **Tools** are the private agents'. `crossContext` keeps its replies in the room.
 
 ### Isolated rather than sandboxed
 
@@ -457,6 +500,13 @@ too: prompts are not used to improve its products, only logged for a limited tim
   Flash also came back `503 This model is currently experiencing high demand` at peak times. The limits
   are per model and per project, on AI Studio's rate-limit page, and Google changes them —
   `gemini-2.5-flash`, still in agentgateway's catalogue, already answers 404 to a new key.
+- **A 64k context window, declared on purpose.** OpenClaw's model entry says `contextWindow: 65536`,
+  far below what Flash-Lite takes, because compaction keeps a session under three quarters of it
+  (its reserve is capped at 25%), and so it bounds every request. A tool loop of five requests at 48k
+  stays under the free tier's tokens-per-minute limit (250,000 on AI Studio's page when this was
+  written); at 128k a long session would not, and the family room's session is shared and never
+  resets by itself. Smaller is no better: a session measured at 22k tokens after a few searches would
+  compact every few turns, and each compaction is a request.
 
 **Failover.** The backend is three priority groups — `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`,
 then `openai/gpt-oss-120b` on OpenRouter. A 429 (quota) or 503 (overload) evicts that group for 10
@@ -490,7 +540,8 @@ When Forgejo runs, the bootstrap creates a local, *restricted* user `assistant` 
 repositories owned by the stack owner — `ADMIN_USER` if that account exists in Forgejo, otherwise the
 one Forgejo administrator — with the bot as a write collaborator on both and on nothing else:
 
-- **`assistant-memory`**: each person's workspace on its own branch, committed and pushed directly.
+- **`assistant-memory`**: each person's workspace on its own branch, and the family room agent's on
+  `family`, committed and pushed directly.
   Every branch is protected against force-push, so an agent's history cannot be rewritten away.
   Edits the owner makes on a person's branch are merged back at the next sync, and win where both
   sides changed the same lines.
@@ -515,6 +566,12 @@ memory simply stays in the `openclaw_state` volume, which Backrest snapshots eit
 - **Encryption**: the bootstrap creates a server-side room-key backup for the bot's device the first
   time. A crypto store lost to an unclean shutdown (upstream issue #158784) is then restorable with
   `openclaw matrix verify backup restore`, rather than leaving every encrypted DM unreadable.
+- **Memory search is keyword-only** (`memory.search.provider: "none"`). Left unset it means OpenAI
+  embeddings, which the gateway cannot reach: the index then stalls on a provider mismatch. And
+  OpenClaw does not rebuild an index whose scope changed — the family room's paths added to every
+  agent did exactly that — it serves stale results until `openclaw memory status --index` runs, because
+  a rebuild may call an embeddings API. Measured: a birthday told in the family room was not found
+  from a DM until then. Keyword-only, a rebuild costs nothing, so the bootstrap runs it at every start.
 - **The CLI** runs inside the container: `docker exec pi-openclaw node openclaw.mjs channels status`,
   `… agents list`, `… matrix verify status`. Each call is a second Node process in the same cgroup —
   about 400 MiB — which is why `mem_limit` is above what the gateway alone measured.
