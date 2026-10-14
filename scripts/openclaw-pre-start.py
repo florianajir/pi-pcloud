@@ -30,6 +30,7 @@ generates the key this hands over. Idempotent.
 """
 
 import json
+import os
 import secrets
 
 from pilib import (
@@ -46,6 +47,12 @@ from pilib import (
 
 STATE_DIR = "/home/node/.openclaw"
 BOT_LOCALPART = "assistant"
+# The image's `node` user.
+CONTAINER_UID = 1000
+# config/openclaw/plugins, and the app passwords openclaw-bootstrap.py mints
+# for it, as compose/compose-ai.yaml mounts them.
+HOUSEHOLD_PLUGINS = "/opt/household-plugins"
+NEXTCLOUD_TOKENS = "/run/nextcloud-tokens"
 # The family room's agent and the room openclaw-bootstrap.py created for it.
 FAMILY_AGENT = "family"
 FAMILY_ROOM_FILE = "family-room.json"
@@ -243,7 +250,10 @@ def render_config(people, host_name, timezone, family_room):
                         {
                             "id": "assistant",
                             "name": "assistant",
-                            "input": ["text"],
+                            # Photos and scanned pages go to Gemini as images
+                            # (agentgateway translates OpenAI's image_url,
+                            # measured); about 1,100 input tokens each.
+                            "input": ["text", "image"],
                             "reasoning": False,
                             # Compaction keeps a session under 3/4 of this
                             # (OpenClaw caps its reserve at 25%), which bounds
@@ -305,6 +315,11 @@ def render_config(people, host_name, timezone, family_room):
             "allowBundled": ["none"],
             "load": {"extraDirs": ["/opt/household-skills"]},
         },
+        # Inbound photos and documents are pruned after a week, so the family's
+        # papers do not pile up in the state volume - and in every Backrest
+        # snapshot of it. This covers OpenClaw's own copy only; the one it puts
+        # in the agent's workspace is pruned by scripts/openclaw-sync.py.
+        "attachments": {"ttlHours": 168},
         "cron": {"enabled": False},
         "browser": {"enabled": False},
         "tools": {
@@ -336,6 +351,13 @@ def render_config(people, host_name, timezone, family_room):
                 "sessions_yield",
                 "presence",
                 "agents_list",
+                # Registered once the model takes images, and both declare
+                # `exclusiveMinimum`, which agentgateway hands to Gemini as is:
+                # every request then failed with 400 "Unknown name
+                # exclusiveMinimum" (measured). A photo or PDF sent in the
+                # conversation is still read without them.
+                "view_image",
+                "pdf",
             ],
             "web": {"search": {"provider": "searxng"}},
             # Both default to true: an instruction planted in a search result
@@ -352,8 +374,24 @@ def render_config(people, host_name, timezone, family_room):
         "plugins": {
             # Fifteen bundled plugins load otherwise. searxng is not in the
             # image: scripts/openclaw-bootstrap.py installs it, as it does matrix.
-            "allow": ["matrix", "memory-core", "searxng"],
+            # document-extract is what reads a PDF, sent in a chat or through
+            # the pdf tool: the extractor lookup is filtered by this list, so
+            # without it a PDF reaches the model as an unreadable attachment.
+            # nextcloud is this stack's own (config/openclaw/plugins/nextcloud):
+            # each person's agent finds, reads and saves files in that person's
+            # Nextcloud, with an app password picked by agent id in its code.
+            "allow": ["matrix", "memory-core", "searxng", "document-extract", "nextcloud"],
+            "load": {"paths": [f"{HOUSEHOLD_PLUGINS}/nextcloud"]},
             "entries": {
+                # By container name, on the internal `assistant` network.
+                "nextcloud": {
+                    "enabled": True,
+                    "config": {
+                        "baseUrl": "http://nextcloud",
+                        "tokenDir": NEXTCLOUD_TOKENS,
+                        "accounts": {person["agent"]: person["email"] for person in people if person.get("email")},
+                    },
+                },
                 "matrix": {"enabled": True},
                 "memory-core": {"config": {"dreaming": {"enabled": False}}},
                 # By container name on the internal `ai` network: SearXNG makes
@@ -417,6 +455,28 @@ def main():
     # and the people list here, and a root-run boot would otherwise leave it
     # root-owned for the next non-root run.
     fix_ownership(data_dir)
+    ensure_nextcloud_token_dir(data_dir)
+
+
+def ensure_nextcloud_token_dir(data_dir):
+    """Created before compose mounts it - Docker would create a missing source
+    as root - and handed to the container's uid after fix_ownership, which
+    gives everything here to the project's owner."""
+    token_dir = data_dir / "secrets" / "nextcloud"
+    token_dir.mkdir(parents=True, exist_ok=True)
+    safe_chmod(0o700, token_dir.parent)
+    safe_chmod(0o700, token_dir)
+    try:
+        tokens = list(token_dir.iterdir())
+    except PermissionError:
+        # Already handed to the container's uid by an earlier root run.
+        return
+    for path in [token_dir, *tokens]:
+        try:
+            os.chown(path, CONTAINER_UID, CONTAINER_UID)
+        except OSError:
+            log(f"WARNING: could not chown {path} to {CONTAINER_UID}; the gateway cannot read it")
+            return
 
 
 if __name__ == "__main__":

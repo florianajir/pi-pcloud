@@ -329,6 +329,7 @@ vetting: release line, measurements, and the advisories it was checked against.
 | The model | agentgateway's `/assistant/v1` route |
 | Rules every agent gets in its prompt | `config/openclaw/household/AGENTS.md` |
 | Skills: the knowledge base, web search | `config/openclaw/skills/` |
+| The Nextcloud tools | `config/openclaw/plugins/nextcloud/` |
 
 A conversation is one session that goes on until its person starts a new one — there is no
 automatic reset, and OpenClaw summarises older turns (compaction) as it nears the context window.
@@ -426,7 +427,8 @@ Podman), or on a separate host over SSH. Neither belongs here, so the boundary i
 - **No tool that executes, browses or fetches.** `tools.deny` removes the runtime, browser,
   automation and node groups, and `web_fetch` and `x_search`; `exec` is `deny`; the file tools are
   confined to the agent's own workspace. What is left is reading and writing its notes, memory
-  search, `web_search`, reading its own past sessions, and the reply.
+  search, `web_search`, reading its own past sessions, and the reply; photos and PDFs it is sent
+  arrive with the message.
 - **No tool that reaches another agent.** The other agents are the other family members, so
   `sessions_spawn`, `sessions_send` and `agents_list` are denied. So are tools that do nothing in a
   DM but cost prompt tokens: the `conversations_*` tools (their addresses are scoped to the agent's
@@ -470,6 +472,73 @@ preview with its empty allowlists, and the DMs are encrypted — or write a fals
 person's memory. The sync commits every memory change to Forgejo (`assistant-memory`) within a
 quarter of an hour, where it is visible and revertible. That is also why dreaming stays off: it
 would consolidate such a note into `MEMORY.md`.
+
+### Photos and documents
+
+The model entry accepts images, so a photo sent in a DM or the family room goes to Gemini with the
+message: agentgateway translates OpenAI's `image_url` into Gemini's format (measured, about 1,100
+input tokens per image). A PDF is read by OpenClaw's bundled `document-extract` plugin, which has to
+be in `plugins.allow`: the extractor lookup is filtered by that list, so without it a PDF reaches the
+model as an unreadable attachment.
+
+- **No extra request for an attached PDF.** Its text is extracted locally and wrapped as untrusted
+  content, with OpenClaw's defaults: 20 MB, 20 pages, 60,000 characters. A page with under 200
+  characters of text — a scan — is rendered to an image for the model instead. Measured on the Pi, in
+  a throwaway container of the image: 17 to 20 text pages in 0.25–0.3 s, three image-only pages in
+  0.18 s, about 120 MiB for the whole process.
+- **`view_image` and `pdf` are denied, by necessity.** OpenClaw registers them once the model takes
+  images, to look at an earlier attachment again. Both declare `exclusiveMinimum` in their parameters,
+  which agentgateway passes to Gemini as is, and Gemini rejects: every request, to every agent, then
+  failed with `400 Invalid JSON payload … Unknown name "exclusiveMinimum"`. Measured within minutes of
+  enabling images, and fixed by the deny. The cost: OpenClaw drops image data from the history after
+  three turns, and the agent can no longer look again.
+- **Kept a week, both copies.** OpenClaw keeps each attachment twice: in its media directory, pruned
+  by `attachments.ttlHours: 168` (the most it allows), and in the receiving agent's workspace
+  (`media/inbound/openclaw-staged-*`), which that setting does not touch and `openclaw-sync.py` prunes
+  after a week. Neither copy reaches Forgejo: the sync excludes `media/` from the memory branches.
+- **Text in an image is not wrapped.** Search results and extracted PDF text arrive inside the
+  untrusted-content envelope; words written in a photo or a screenshot reach the model as part of the
+  image. A household rule says such text is information, never instructions, and the boundaries
+  above hold whatever the model makes of it: no route out, replies confined to their conversation.
+
+### Nextcloud
+
+Each person's agent can find, read and save files in that person's own Nextcloud, through a plugin
+of this stack's own (`config/openclaw/plugins/nextcloud`) with four tools:
+
+| Tool | What it does |
+|------|--------------|
+| `nextcloud_search` | Files and folders whose path holds every word asked for. Nextcloud matches file names only, not the text inside documents (there is no full-text search app), so each word is searched on its own and the folder path counts too |
+| `nextcloud_list` | One folder's content |
+| `nextcloud_fetch` | A file's text (PDF, text files) or the image itself, wrapped as untrusted content like a web result, and a copy in the workspace that the message tool can send to the person |
+| `nextcloud_save` | A file from the workspace — an attachment as it arrived, or a note the agent wrote — into any folder, creating the missing ones. An existing file is never replaced: the new one gets a number. Nothing is ever deleted, moved or shared |
+
+- **As that person, and only that person.** The bootstrap mints an app password per person with
+  `occ user:auth-tokens:add`, named "Family assistant (OpenClaw)": it shows in their Nextcloud
+  security settings, where they can revoke it. The plugin picks it by the calling agent's id, in its
+  code — never from what the model says — so one person's agent cannot reach another's files. The
+  passwords sit in `${DATA_LOCATION}/openclaw/secrets/nextcloud/`, mounted into the gateway outside every
+  workspace. A Nextcloud account only exists after its owner's first sign-in; until then that person's
+  agent simply has no Nextcloud tool, and gets one at the next start. The family room's agent has none.
+- **By name, on `assistant`.** Nextcloud joins that internal network; the gateway still has no route
+  out. `http://nextcloud` passes Nextcloud's trusted-domain check because `OVERWRITEHOST` applies to
+  every request.
+- **Measured** with a throwaway Nextcloud account, in a container of the OpenClaw image, before the
+  family's accounts were touched: saving into a folder and again (`Spec (2).pdf`), a note into new
+  folders, search across words and accents, listing, a PDF's text, a note, an image; `..` and paths
+  outside the workspace refused. That run caught two bugs first: linkedom finds nothing with
+  `getElementsByTagName("*")` in an XML document, which made every existence check miss — and a save
+  silently replace the file it should have numbered.
+- **What it exposes.** The agent now holds a person's whole Nextcloud next to untrusted content — web
+  results, the documents themselves, photos. The one way out left is a web search: the query goes to
+  the search engines SearXNG asks, so an instruction planted somewhere could have the agent search with
+  a document's words. A household rule forbids it; it is a rule, not a guarantee. Writing can at worst
+  leave unwanted files, never lose one.
+- **Fetched copies** go to `media/nextcloud/` in the workspace: kept out of Forgejo with the rest of
+  `media/`, and pruned after a week by `openclaw-sync.py`.
+- **Tied to the image.** The plugin imports three modules by absolute path from the OpenClaw image —
+  linkedom for WebDAV's XML, OpenClaw's untrusted-content envelope and its PDF extractor. An image bump
+  that moves one makes that tool fail with an error, not the gateway; check the plugin after a bump.
 
 ### The model behind `assistant`
 
