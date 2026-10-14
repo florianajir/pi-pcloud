@@ -9,7 +9,9 @@ set -eu
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$TESTS_DIR")"
 SCRIPT="$REPO_DIR/scripts/uptime-kuma-watchdog.sh"
+# Exported because the stubs below read their fixtures from it.
 WORK="$(mktemp -d)"
+export WORK
 trap 'rm -rf "$WORK"' EXIT
 
 pass=0
@@ -65,7 +67,7 @@ run_watchdog() {
     printf '%s' "${2:-0}" > "$WORK/curl-exit"
     : > "$WORK/published"
     status=0
-    WORK="$WORK" PATH="$WORK/bin:$PATH" STATE_DIRECTORY="$WORK/state" \
+    PATH="$WORK/bin:$PATH" STATE_DIRECTORY="$WORK/state" \
         NTFY_ENV_FILE="$WORK/ntfy.env" sh "$SCRIPT" 2>/dev/null || status=$?
     printf '%s|%s' "$(cat "$WORK/published")" "$status"
 }
