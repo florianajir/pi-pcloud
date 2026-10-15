@@ -1,46 +1,18 @@
-# The project root. It declares no service of its own: the 46 are grouped by
-# domain under compose/, and `include:` below merges them into one model. Every
-# command still runs against this file - `docker compose up -d`, `make update`,
-# stack-up.sh - and compose.override.yaml and compose.test.yaml still override
-# services wherever they are defined.
+# The project root. It declares no service: they live by domain in compose/ and
+# `include:` merges them. Kept here rather than pushed down:
+#   - the x- anchors: YAML anchors are file-scoped, so every compose/*.yaml
+#     carries a copy of these; tests/compose-invariants.py fails on drift.
+#   - volumes and networks: one namespace for every domain.
 #
-# Three things are deliberately kept here rather than pushed down:
+# `project_directory: .` on every include is load-bearing: without it the
+# included file's ./config and ./data binds resolve against compose/.
+# `env_file: /dev/null` stops an include from re-reading .env on its own, behind
+# --env-file's back (compose-go defaults it); interpolation still sees .env
+# through the CLI.
 #
-#   the x- anchors   YAML anchors are file-scoped and `include:` parses each
-#                    file on its own, so every compose/*.yaml carries its own
-#                    copy. This is the canonical one - the copies hold the same
-#                    values with the prose stripped, and
-#                    tests/compose-invariants.py fails the build if one drifts.
-#                    Nothing in *this* file uses them; they are here to be read.
-#   volumes:         One namespace shared by every domain. Declaring a volume
-#                    in two included files is a conflict compose only warns
-#                    about, and warnings scroll past.
-#   networks:        Same reason, and the segmentation is a single argument
-#                    about who can reach whom - it reads as one list or not at
-#                    all.
-#
-# `project_directory: .` on every include is load-bearing: without it compose
-# resolves an included file's relative paths against compose/, so every
-# ./config and ./data bind mount would point at a path that does not exist.
-#
-# A compose/*.yaml is not startable on its own, for the same reason.
-#
-# `env_file: /dev/null` beside it is not a way of saying "no .env". Interpolation
-# still sees it: the CLI merges .env into the environment it hands every included
-# file. What it turns off is the include reading .env a *second* time on its own -
-# which compose does whenever the key is absent (compose-go loader/include.go
-# defaults it to <project_directory>/.env), behind the back of --env-file. That
-# is how `docker compose --env-file /dev/null config` in tests/compose-test.sh
-# got .env's values back: the flag stops the CLI, not the include.
-#
-# The compose- prefix on every filename stutters against the directory it sits
-# in, and is kept anyway. Dependabot owns every upstream image pin under
-# compose/; its fetcher matches basenames against
-# /(docker-)?compose(-[\w]+)?(?>\.[\w-]+)?\.ya?ml/i and follows neither
-# `include:` nor subdirectories, so a file named core.yaml is one it never
-# opens - and the way that fails is silence, not an error.
-# .github/dependabot.yml naming /compose beside / is the other half, and
-# tests/compose-invariants.py fails the build if either half is undone.
+# The compose- filename prefix is for Dependabot, which only opens basenames
+# matching (docker-)compose(-*).yaml and follows neither `include:` nor
+# subdirectories - a core.yaml would silently get no image bumps.
 
 x-service-defaults: &service-defaults
   logging:
@@ -49,14 +21,8 @@ x-service-defaults: &service-defaults
       tag: "{{.Name}}"
   restart: unless-stopped
 
-# CPU priority, not capacity. cpu_shares lands on cgroup v2 cpu.weight and is
-# only arbitrated when the cores are actually contended, so a tier costs
-# nothing on an idle box - 1024 is the kernel default, mapping to weight 100.
-# It replaces `deploy: resources: reservations: cpus:`, which compose silently
-# drops outside swarm: every container ran at the default weight regardless of
-# the tier it named. The order is by *who waits on whom*, not by appetite - the
-# model services want the most CPU and get the least, because a DNS answer or a
-# healthcheck blocked behind an inference is what actually breaks the stack.
+# cpu_shares tiers, ordered by who waits on whom rather than by appetite:
+# docs/ARCHITECTURE.md#cpu.
 x-cpu-prio-critical: &cpu-prio-critical 4096
 x-cpu-prio-normal: &cpu-prio-normal 1024
 x-cpu-prio-batch: &cpu-prio-batch 256
@@ -67,19 +33,8 @@ x-oom-score-critical: &oom-score-critical -1000
 x-oom-score-important: &oom-score-important -500
 x-oom-score-deprioritize: &oom-score-deprioritize 500
 
-# Three memory keys, none of which does the other's job, and only the first is
-# a plain ceiling. See docs/ARCHITECTURE.md#rationing-cpu-and-memory.
-#
-#   mem_limit       cgroup v2 memory.max. Counts page cache and shmem as well
-#                   as anonymous pages, so squeezing an I/O-heavy service buys
-#                   re-reads, not RAM.
-#   mem_reservation memory.low. The only key that means "do not page this
-#                   out". On the latency-critical set only: the protection is
-#                   proportional, so reserving everywhere protects nothing.
-#   memswap_limit   memory *plus* swap, so the swap ceiling is the difference.
-#                   Only on the services that measurably swap - unset, Docker
-#                   grants every container a swap allowance equal to its
-#                   mem_limit, and one idle model server took the whole file.
+# mem_limit, mem_reservation and memswap_limit each do a different job:
+# docs/ARCHITECTURE.md#memory.
 
 x-healthcheck-default: &healthcheck-default
   interval: 60s
@@ -132,8 +87,8 @@ include:
     env_file: /dev/null
 
 volumes:
-  # Seeded by scripts/llama-cpp-pre-start.sh. A volume rather than a
-  # DATA_LOCATION bind mount so the mmap'd weights sit on the NVMe, not the USB.
+  # A volume rather than a DATA_LOCATION bind, so the mmap'd weights are not on
+  # a USB media disk. Seeded by scripts/llama-cpp-pre-start.sh.
   llama_models:
   open_webui_data:
   ddns_data:
@@ -155,26 +110,25 @@ volumes:
   headplane_data:
   tailscale_state:
   redis_data:
-  # Both are the image's own `VOLUME` declarations, named rather than left
-  # anonymous so a recreate does not strand one - see the searxng service.
+  # The image's own `VOLUME`s, named so a recreate does not strand an anonymous
+  # one.
   searxng_config:
   searxng_cache:
-  # Both unbacked by design: regenerable churn, and a database holding nothing
-  # that config/grafana/ does not already provision.
+  # Not backed up: regenerable, and Grafana's content is provisioned from
+  # config/.
   prometheus_data:
   grafana_data:
-  # Volumes rather than DATA_LOCATION binds so the RocksDB sits on the NVMe -
-  # see the tuwunel service. backrest takes media and backups, never the live
-  # database.
+  # Volumes rather than DATA_LOCATION binds: a USB bridge that acknowledges
+  # fsync early turns a power cut into a corrupt RocksDB. Backrest takes media
+  # and backups, never the live database.
   tuwunel_data:
   tuwunel_media:
   tuwunel_backups:
-  # The assistant's state on the NVMe for Tuwunel's reason: SQLite session
-  # stores and the Matrix crypto snapshot, which a lying fsync after a power
-  # cut turns into a device that can no longer encrypt (openclaw issue
-  # #158784). The workspaces in it are pushed to Forgejo by openclaw-sync.
+  # Same reason: SQLite sessions and the Matrix crypto snapshot, which an
+  # unclean shutdown corrupts (openclaw issue #158784).
   openclaw_state:
 
+# Members and purpose of every network: docs/NETWORKING.md#network-isolation.
 networks:
   dns_internal:
     driver: bridge
@@ -185,15 +139,10 @@ networks:
       config:
         - subnet: 172.30.53.0/24
           gateway: 172.30.53.1
-  # Three single-member segments rather than one shared "dns_egress", which only
-  # bought its members reachability to each other: immich's model downloader
-  # could open unbound:5335, for no functional reason. A bridge is the only way
-  # to give a container egress, so one member is the right size, not waste.
-  #
-  # Pinned outside 172.30.0.0/16 on purpose: these have unrestricted egress and
-  # no peer, and an address inside ALLOW_IP_RANGES is a hairpin route to every
-  # LAN-only service. Pinning also keeps them off the daemon pool, so this file
-  # works on a host whose daemon.json was never updated.
+  # One member each: a bridge is the only way to give a container egress, and a
+  # shared one let its members reach each other. Pinned outside 172.30.0.0/16 on
+  # purpose: with unrestricted egress, an address inside ALLOW_IP_RANGES would
+  # be a hairpin route to every LAN-only service.
   egress_unbound:
     driver: bridge
     name: egress_unbound
@@ -206,12 +155,7 @@ networks:
     ipam:
       config:
         - subnet: 172.31.241.0/24
-  # ddns-updater had no `networks:` key at all, which put it on the implicit
-  # <project>_default: invisible here, holding a zone-scoped Cloudflare token.
-  #
-  # The one egress network with IPv6: ddns-updater discovers the address it
-  # publishes by asking an echo service, and the ULA is masqueraded to the
-  # host's global address - the one inbound traffic arrives on.
+  # IPv6 so ddns-updater can observe the public address it publishes as AAAA.
   egress_ddns:
     driver: bridge
     name: egress_ddns
@@ -254,8 +198,8 @@ networks:
     driver: bridge
     name: auth
     internal: true
-  # Not internal: Code nodes run here, and helpers.httpRequest inside one is a
-  # documented way to reach the internet.
+  # Not internal: a Code node can reach the internet through
+  # helpers.httpRequest.
   n8n_runners:
     driver: bridge
     name: n8n_runners
@@ -263,63 +207,45 @@ networks:
     driver: bridge
     name: ai
     internal: true
-  # A dedicated segment rather than reusing "auth" so the vault has no path to
-  # lldap, matching the split already used for immich, nextcloud and ai.
+  # Not `auth`, so the vault has no path to lldap.
   vault:
     driver: bridge
     name: vault
     internal: true
-  # Forgejo and postgres only. Forgejo reaches the internet over `frontend`
-  # (OIDC discovery, repository mirrors, outbound mail), so this segment carries
-  # nothing but its database traffic - the same split as vault, rss and immich.
+  # forge, rss and aiometadata: one service and its datastore. Each service
+  # reaches the internet over frontend.
   forge:
     driver: bridge
     name: forge
     internal: true
-  # FreshRSS and postgres only. FreshRSS reaches the internet over `frontend`
-  # (it fetches feeds), so this segment carries nothing but its database
-  # traffic - the same split as vault, immich, nextcloud and ai.
   rss:
     driver: bridge
     name: rss
     internal: true
-  # aiometadata and redis only. Same split again, and for the same reason it was
-  # not put on `auth`: that segment is Authelia's and lldap's, and a media addon
-  # has no business being able to open the directory. What it needs from there is
-  # one thing - the shared cache - so the segment is exactly that wide.
-  #
-  # It reaches TMDB/TVDB/MDBList/Jikan over `frontend`, so nothing but Redis
-  # traffic crosses this one.
+  # Redis only - on `auth`, a media addon would have a route to the directory.
   aiometadata:
     driver: bridge
     name: aiometadata
     internal: true
-  # The family assistant and the two services it talks to by name: Tuwunel for
-  # its Matrix account and Forgejo for its repositories. Internal, and OpenClaw
-  # sits on nothing else but `ai`, so the agent has no route to the internet -
-  # the exfiltration leg of what a prompt injection could turn it into.
+  # Internal, and OpenClaw is on nothing else but `ai`: the agent has no route
+  # to the internet, which is what a prompt injection would exfiltrate through.
   assistant:
     driver: bridge
     name: assistant
     internal: true
-  # Same idea for backrest, whose API returns the restic key and the S3 keys to any
-  # authenticated caller: on frontend that port was open to ~24 containers, here to
-  # two. Not `internal` - unlike the segments above, restic has to reach S3 through it.
+  # Off frontend because backrest's API returns the restic and S3 keys to any
+  # authenticated caller. Not internal: restic reaches S3 through it.
   backup:
     driver: bridge
     name: backup
-    # Traefik publishes :80/:443 from whichever of its networks Docker picks, so
-    # this subnet must sit inside ALLOW_IP_RANGES. Left to Docker it lands on
-    # 172.31.0.0/16 and every host-originated request gets a bare 403 from lan@docker.
+    # Pinned inside ALLOW_IP_RANGES: Traefik may serve its publishes from any of
+    # its networks, and a gateway outside the allowlist gets a bare 403 from
+    # lan@docker. Same for the pinned subnets below.
     ipam:
       config:
         - subnet: 172.30.12.0/24
-  # Same split as `backup`, for the two services worth taking out of a
-  # ~20-container broadcast domain first: dockhand mounts the Docker socket,
-  # vaultwarden is the vault. Neither has an east-west consumer - Uptime Kuma
-  # watches both over docker.sock, not HTTP - so Traefik is the only other member.
-  # Subnets pinned inside 172.30.0.0/16, the only range in ALLOW_IP_RANGES, for
-  # the hairpinned requests these carry back to Traefik.
+  # Traefik plus one service each: dockhand mounts the Docker socket, and
+  # vaultwarden is the vault. Neither has an east-west consumer.
   dockhand:
     driver: bridge
     name: dockhand
@@ -332,15 +258,9 @@ networks:
     ipam:
       config:
         - subnet: 172.30.14.0/24
-  # Traefik alone, so it holds the stack's only IPv6 address and nothing else is
-  # reachable over IPv6 however wide the router's firewall is opened. A v6 subnet
-  # on `frontend` instead would hand one to gluetun - whose namespace
-  # qbittorrent, stremio and kapowarr share - and their traffic would leave
-  # outside the tunnel, on the residential address.
-  #
-  # The /24 is pinned inside 172.30.0.0/16 because Docker may pick this network
-  # for the IPv4 publishes too - measured - and a host-originated request would
-  # then reach Traefik from a gateway outside the allowlist: `backup`'s trap.
+  # Traefik alone, so it holds the stack's only IPv6 address. A v6 subnet on
+  # frontend would give one to gluetun, and the containers in its namespace
+  # would leave outside the tunnel.
   ingress6:
     driver: bridge
     name: ingress6

@@ -153,6 +153,29 @@ one variable.
 
 **A node shows offline while the device is connected.** "Last seen" lags by design — check `tailscale status` on the device itself before trusting the list.
 
+## Streaming
+
+**StremThru restarts in a loop after a fresh install.** Expected on its first run, and not a
+fault. On an empty `stremthru_data` volume the catch-up workers have the whole
+DebridMediaManager hashlist to map to IMDb titles — about 1.6 million torrents, roughly three
+hours on a Pi — and `map-imdb-torrent` works through them in hardcoded batches without ever
+returning the heap. The `mem_limit` and `GOMEMLIMIT` in `compose/compose-media.yaml` are sized
+for the steady state, so the container is OOM-killed and restarts. Each chunk commits before the
+kill, so the loop is the drain making progress: do not lower the ceiling to "fix" it.
+
+To get through it in one go, raise `mem_limit` to `8g` and `GOMEMLIMIT` to `6400MiB`, run
+`docker compose up -d stremthru`, wait until `select count(*) from imdb_torrent` in
+`stremthru.db` stops climbing, then put both values back. Two traps while watching it:
+
+- `docker inspect` reports `oom=false, exit=0`, because the kernel kills `tini` rather than the
+  Go process. `dmesg | grep CONSTRAINT_MEMCG` is the truthful signal.
+- `parse-torrent` runs every 5 minutes with no run at startup, so restarting the container more
+  often than that starves it while looking like help.
+
+Budget about 5 GB of disk for the volume: `dmm_hashlist` is a git clone of the hashlists
+repository (3.4 GB and growing) and the IMDb title dataset is 1.1 GB, which torz needs to
+resolve a title per stream request. None of it is in Backrest — every byte is re-downloadable.
+
 ## Books and audiobooks
 
 **Shelfmark finds nothing on Direct Download.** Check the mirror list first

@@ -1,17 +1,9 @@
 # Recursive DNS, the LAN-wide filter in front of it, and the private
 # tailnet's control plane, admin UI and client.
 #
-# Included by compose.yaml, which declares the networks and volumes named
-# below and supplies the .env this file interpolates. Not startable on its
-# own: `docker compose -f compose/compose-network.yaml` resolves every relative
-# path against compose/ instead of the project root.
-
-# --- shared preamble: identical in every compose/*.yaml ---
-#
-# YAML anchors are file-scoped and `include:` parses each file on its own, so
-# this block cannot be shared - it is copied. compose.yaml holds the canonical
-# copy, with the reasoning behind every tier; tests/compose-invariants.py fails
-# the build when a copy drifts from it. Change compose.yaml first, then here.
+# Included by compose.yaml, which declares the networks and volumes and holds
+# the canonical x- anchors these are copies of (tests/compose-invariants.py
+# fails if one drifts: change compose.yaml first).
 
 x-service-defaults: &service-defaults
   logging:
@@ -50,8 +42,6 @@ x-healthcheck-fast: &healthcheck-fast
   retries: 3
   start_period: 10s
 
-# --- end shared preamble ---
-
 services:
   unbound:
     <<: *service-defaults
@@ -70,12 +60,10 @@ services:
       - ./config/unbound/dnssec.conf:/etc/unbound/dnssec.d/dnssec.conf:ro
     healthcheck:
       <<: *healthcheck-default
-      # localhost is one of unbound's built-in local zones, answered without
-      # recursing: this proves the daemon serves, not that the uplink works.
-      # A public name here turned every WAN cut into an unbound outage, and
-      # pihole waits on this being healthy, so a `compose up` run while the
-      # uplink was down could not get past it. Recursion is checked by the
-      # `dns resolution` monitor in Uptime Kuma.
+      # localhost is a built-in local zone: this proves the daemon serves, not
+      # that the uplink works. A public name turned every WAN cut into an
+      # unbound outage, blocking pihole's depends_on. Recursion is Uptime Kuma's
+      # `dns resolution` monitor.
       test: ["CMD", "drill", "@127.0.0.1", "-p", "5335", "localhost"]
       start_period: 10s
       start_interval: 5s
@@ -95,44 +83,32 @@ services:
       - 53
       - 8082
     ports:
-      # v4-only where traefik is dual-stack. listeningMode is "all", so FTL
-      # answers any source it can see, and IPv6 has no NAT in front of it: an
-      # open resolver as soon as the router's firewall is opened past :443. And
-      # no client could use it anyway - the router advertises itself as the IPv6
-      # resolver (RDNSS) and cannot be told otherwise. docs/NETWORKING.md#ipv6.
+      # IPv4 only: FTL answers any source it sees, and an IPv6 publish has no
+      # NAT in front - an open resolver once the router's firewall opens.
+      # docs/NETWORKING.md#ipv6.
       - "0.0.0.0:53:53/tcp"
       - "0.0.0.0:53:53/udp"
     environment:
       TZ: ${TIMEZONE:-Europe/Paris}
       FTLCONF_webserver_api_password: ${PASSWORD}
       FTLCONF_dns_listeningMode: "all"
-      # dnsmasq spreads queries across all three and re-probes the ones it thinks
-      # are slower, so these are not failover: a share of household queries goes
-      # to Cloudflare and Quad9 in normal operation. Accepted deliberately -
-      # `strict-order` would make Unbound truly primary, but then a DNSSEC-bogus
-      # domain gets no answer at all instead of a prompt SERVFAIL, because dnsmasq
-      # walks all three upstreams and never replies. Both of those validate
-      # DNSSEC themselves, so the protection holds; what is lost is privacy.
+      # Not failover: dnsmasq spreads queries across all three. strict-order
+      # would leave a DNSSEC-bogus domain with no answer at all.
+      # docs/NETWORKING.md.
       FTLCONF_dns_upstreams: ${PIHOLE_DNS_UPSTREAMS:-172.30.53.53#5335;1.1.1.1;9.9.9.9}
       FTLCONF_misc_dnsmasq_lines: "address=/${HOST_NAME:-pi.lan}/${HOST_LAN_IP:-192.168.1.30}"
-      # Never 0.0.0.0: pihole also sits on the `lan` macvlan, where publishing
-      # rules do not apply, so a wildcard bind serves the admin UI directly at
-      # PIHOLE_IP to the whole LAN and tailnet, bypassing lan@docker + Authelia.
-      # Loopback is for pihole-bootstrap.sh, which curls the API from inside the
-      # container; the frontend address is what Traefik dials and must match the
-      # ipv4_address below.
+      # Never 0.0.0.0: on the `lan` macvlan a wildcard bind serves the admin UI
+      # at PIHOLE_IP, past lan@docker and Authelia. Loopback is for
+      # pihole-bootstrap.sh; the frontend address is what Traefik dials
+      # (ipv4_address below).
       FTLCONF_webserver_port: "127.0.0.1:8082,172.30.11.241:8082"
       FTLCONF_dns_domain_name: ${HOST_NAME:-pi.lan}
-      # Default true NXDOMAINs mask.icloud.com so Private Relay cannot bypass
-      # the filter. An iPhone reports that as "Private Relay is unavailable on
-      # this network", and chasing the warning is what put IPv6 back on at the
-      # router - which took the whole LAN off Pi-hole, split-horizon included.
-      # Trade-off in docs/SECURITY.md; the two sibling anti-bypass flags stay on.
+      # Off: NXDOMAINing mask.icloud.com makes iPhones warn that Private Relay
+      # is unavailable, and chasing that warning took the LAN off Pi-hole.
+      # Trade-off in docs/SECURITY.md.
       FTLCONF_dns_specialDomains_iCloudPrivateRelay: "false"
-      # FTL compares the *host-wide* 15min loadavg (/proc/loadavg is not
-      # namespaced) against the core count it can see, which `cpuset: "0-1"`
-      # below caps at 2. On this 4-core Pi that warns at ~50% utilisation, so
-      # the check is structurally wrong here. Host load is monitored by Beszel.
+      # FTL compares the host-wide loadavg with the 2 cores cpuset leaves it, so
+      # it warns at ~50% load. Beszel watches host load.
       FTLCONF_misc_check_load: "false"
     volumes:
       - pihole_data:/etc/pihole
@@ -170,7 +146,6 @@ services:
     mem_reservation: 64m
     oom_score_adj: *oom-score-critical
 
-  # Network Stack
   headscale:
     <<: *service-defaults
     image: headscale/headscale:v0.29.4
@@ -183,20 +158,18 @@ services:
     networks:
       - frontend
     extra_hosts:
-      # Authelia's OIDC discovery endpoint, reached through Traefik internally.
-      # Headscale resolves the provider exactly once, at startup, and
-      # only_start_if_oidc_is_available now makes that call fatal - so it must
-      # not depend on public DNS answering and the router hairpinning its own
-      # WAN address back in.
+      # Headscale resolves the OIDC provider once, at startup, and
+      # only_start_if_oidc_is_available makes a failure fatal: keep it off
+      # public DNS and the router's hairpin.
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
     expose:
       - 8080
       - 9090
       - 50443
     ports:
-      # v4-only: headscale has no IPv6 address, so a [::] publish would fall
-      # back to docker-proxy and STUN would report a Docker gateway address to
-      # its own clients - worse than advertising none. docs/NETWORKING.md#ipv6.
+      # IPv4 only: headscale has no IPv6 address, so a [::] publish would fall
+      # back to docker-proxy and STUN would report a Docker gateway address.
+      # docs/NETWORKING.md#ipv6.
       - "0.0.0.0:3478:3478/udp"
     volumes:
       - ./config/headscale:/etc/headscale:ro

@@ -1,17 +1,9 @@
-# The local inference stack - one model server per modality - and the single
-# OpenAI-compatible gateway in front of it.
+# The local inference stack - one model server per modality - the gateway in
+# front of it, and the family assistant.
 #
-# Included by compose.yaml, which declares the networks and volumes named
-# below and supplies the .env this file interpolates. Not startable on its
-# own: `docker compose -f compose/compose-ai.yaml` resolves every relative
-# path against compose/ instead of the project root.
-
-# --- shared preamble: identical in every compose/*.yaml ---
-#
-# YAML anchors are file-scoped and `include:` parses each file on its own, so
-# this block cannot be shared - it is copied. compose.yaml holds the canonical
-# copy, with the reasoning behind every tier; tests/compose-invariants.py fails
-# the build when a copy drifts from it. Change compose.yaml first, then here.
+# Included by compose.yaml, which declares the networks and volumes and holds
+# the canonical x- anchors these are copies of (tests/compose-invariants.py
+# fails if one drifts: change compose.yaml first).
 
 x-service-defaults: &service-defaults
   logging:
@@ -50,16 +42,10 @@ x-healthcheck-fast: &healthcheck-fast
   retries: 3
   start_period: 10s
 
-# --- end shared preamble ---
-
 services:
-  # AI
-  # Inference backend for open-webui, serving Gemma 4 E2B on the Pi's CPU.
-  #
-  # llama.cpp's own server rather than Ollama, which wraps this exact engine and
-  # adds a model registry and per-request runners - dead weight on a box with
-  # room for one resident model. Going direct runs one process instead of two and
-  # already speaks the OpenAI API open-webui calls.
+  # Inference backend for open-webui: Gemma 4 E2B on the CPU. llama.cpp's own
+  # server rather than Ollama, which wraps the same engine in a model registry
+  # and per-request runners. docs/AI.md#the-model.
   llama-cpp:
     <<: *service-defaults
     image: ghcr.io/ggml-org/llama.cpp:server-b10481
@@ -70,19 +56,15 @@ services:
     expose:
       - 8080
     environment:
-      # The ai network is internal: scripts/llama-cpp-pre-start.sh seeds the
-      # volume beforehand and OFFLINE stops the server from trying to fetch.
+      # Seeded by scripts/llama-cpp-pre-start.sh: the ai network is internal,
+      # and OFFLINE stops the server from trying to fetch.
       - LLAMA_ARG_MODEL=/models/gemma-4-E2B-it-qat-Q4_0.gguf
-      # No LLAMA_ARG_MMPROJ. The vision/audio projector is loaded eagerly and
-      # is not mapped but copied: 2786M of anonymous memory with it against
-      # 1779M without, same build and same context, so a gigabyte for an input
-      # nothing offers - Open WebUI carries this model with "vision": false.
-      # fetch-models.sh still seeds the file, so image input is this one line
-      # and a restart away (and costs --cache-reuse, which mtmd disables).
+      # No LLAMA_ARG_MMPROJ: the projector costs ~1 GB of anonymous memory for
+      # an image input nothing offers. docs/AI.md.
       - LLAMA_ARG_OFFLINE=1
-      # Speculative decoding off Gemma 4's multi-token-prediction head. CPU
-      # generation is bandwidth bound, so verifying several drafted tokens in one
-      # pass is nearly free: 5.3 -> 10.6 tok/s here, with identical output.
+      # Speculative decoding off Gemma 4's multi-token-prediction head: CPU
+      # generation is bandwidth bound, so verifying drafted tokens is nearly
+      # free - about twice the speed, identical output.
       - LLAMA_ARG_SPEC_DRAFT_MODEL=/models/mtp-gemma-4-E2B-it-Q4_0.gguf
       - LLAMA_ARG_SPEC_TYPE=draft-mtp
       - LLAMA_ARG_ALIAS=gemma-4-e2b-it
@@ -91,22 +73,18 @@ services:
       # alone keeps traefik, pihole and unbound responsive during a chat.
       - LLAMA_ARG_THREADS=3
       - LLAMA_ARG_FLASH_ATTN=on
-      # The model goes to 128k, which no Pi has the RAM or the patience for. Left
-      # at f16: sliding-window attention keeps the cache small anyway, and
-      # quantising it cost ~10% generation speed for no memory worth having.
+      # The model goes to 128k, which no Pi has the RAM for. The KV cache stays
+      # f16: quantising it cost ~10% speed for no memory worth having.
       - LLAMA_ARG_CTX_SIZE=16384
-      # Thinking off: at 10 tok/s, reasoning meant ~500 tokens - a minute of empty
-      # chat window - before the first word of an answer. Drop this line to
-      # restore it. --reasoning-budget 0 is NOT equivalent: it closes the channel
-      # without telling the model, which then reasons in the visible answer.
+      # Thinking off: at this speed it is a minute of empty window before an
+      # answer. --reasoning-budget 0 is NOT equivalent: the model then reasons
+      # in the visible answer.
       - 'LLAMA_ARG_CHAT_TEMPLATE_KWARGS={"enable_thinking":false}'
-      # Concurrent requests queue instead of splitting the three threads: the
-      # default runs several slots at once, and two parallel requests each
-      # generated at ~5 tok/s here rather than one at ~10.
+      # Requests queue rather than split the three threads: two parallel slots
+      # each ran at half speed.
       - LLAMA_ARG_N_PARALLEL=1
       # open-webui is the routed frontend; keep the surface down to the API.
       - LLAMA_ARG_UI=false
-      # /metrics on the same 8080 as the API.
       - LLAMA_ARG_ENDPOINT_METRICS=1
     volumes:
       - llama_models:/models
@@ -117,29 +95,23 @@ services:
       start_period: 120s
       start_interval: 5s
     labels:
-      # No homepage.href: an API behind open-webui, not a page to open. mdi- icons
-      # throughout the group because dashboard-icons has nothing for these.
+      # No homepage.href: an API, not a page. mdi- icons: dashboard-icons has
+      # none for these.
       - "homepage.group=AI"
       - "homepage.name=llama.cpp"
       - "homepage.description=Local language model engine"
       - "homepage.icon=mdi-brain"
     cpu_shares: *cpu-prio-idle
     cpuset: "1-3"
-    # mmap is only half of what the cgroup counts: 1.8G is anonymous - the Q4_0
-    # weights repacked into the ARM kernels, the 16k KV cache, the compute
-    # buffers - on top of what stays mapped of the 3.1G the model measures on
-    # disk. With the projector loaded that did not fit: an idle server sat at
-    # memory.peak == this ceiling and reclaimed 161 times in 2h, evicting its
-    # own weight pages and paying them back as latency on the next token.
+    # mmap is only half of it: ~1.8G is anonymous (repacked weights, KV cache,
+    # compute buffers) on top of the mapped model file.
     mem_limit: 6g
     memswap_limit: 8g
     oom_score_adj: *oom-score-deprioritize
 
-  # Text-to-speech for open-webui's read-aloud button, with real French voices.
-  #
-  # Built here because upstream (OHF-Voice/piper1-gpl) publishes no image, and its
-  # own server speaks its own protocol rather than the OpenAI shape open-webui
-  # calls - see config/piper/openai_api.py for that translation.
+  # Text-to-speech for open-webui's read-aloud button. Built here: upstream
+  # publishes no image, and config/piper/openai_api.py translates its protocol
+  # to the OpenAI shape open-webui calls.
   piper:
     <<: *service-defaults
     build:
@@ -153,15 +125,13 @@ services:
     expose:
       - 8000
     environment:
-      # open-webui defaults to OpenAI voice names (alloy, echo), none of which
-      # exist here, so in practice this picks the voice. A language rather than a
-      # voice id, so moving the stack to another language needs no Piper
-      # knowledge; set PIPER_DEFAULT_VOICE to name one outright. The voice has to
-      # be in the image - see the VOICES build arg in config/piper/Dockerfile.
+      # open-webui asks for OpenAI voice names, none of which exist here, so
+      # this picks the voice. It has to be in the image (VOICES build arg);
+      # PIPER_DEFAULT_VOICE names one outright.
       - PIPER_DEFAULT_LANGUAGE=${DEFAULT_LANGUAGE:-en-US}
     healthcheck:
       <<: *healthcheck-relaxed
-      # python:3.12-slim ships no curl or wget, but python is the point of it.
+      # No curl or wget in the image.
       test: ["CMD", "python3", "-c", "import urllib.request as r; r.urlopen('http://localhost:8000/health').read()"]
       start_period: 30s
     labels:
@@ -170,24 +140,14 @@ services:
       - "homepage.description=Text-to-speech engine"
       - "homepage.icon=mdi-text-to-speech"
     cpu_shares: *cpu-prio-idle
-    # Same three cores as llama-cpp, leaving core 0 to traefik and DNS.
     cpuset: "1-3"
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
 
-  # Speech-to-text for open-webui's microphone button.
-  #
-  # Open WebUI's own faster-whisper runs inside the open-webui container, capped
-  # at 1g and already sitting at ~730MB, so the model has to stay small enough to
-  # be bad. On 113s of read French (FLEURS fr_fr) over this Pi's three cores the
-  # default `base` scored 20.2% WER at 0.95x realtime; `small` 12.5% at 1.25x and
-  # `medium` 4.9% at 3.99x, the last two needing 1-2.7GB the web UI has no room
-  # for. Parakeet lands whisper-medium's accuracy at 8.7% WER and 0.17x realtime,
-  # a dictated sentence coming back in well under a second, and has no language
-  # setting at all: it covers 25 European languages and picks one acoustically.
-  #
-  # Built here for the same reason as piper: upstream publishes no image, and
-  # onnx-asr has no HTTP server at all - see config/parakeet/openai_api.py.
+  # Speech-to-text for open-webui's microphone, instead of the whisper bundled
+  # in open-webui: docs/AI.md#speech-to-text-parakeet. Built here: upstream
+  # publishes no image and onnx-asr has no server
+  # (config/parakeet/openai_api.py).
   parakeet:
     <<: *service-defaults
     build:
@@ -201,12 +161,11 @@ services:
     expose:
       - 8000
     environment:
-      # Must match the Dockerfile build arg of the same name, or the weights
-      # loaded are not the weights present. fp32 is the better model - 4.5% WER
-      # against 8.7% - but 2.3GB resident instead of 1.2GB, and a ~2.5GB download.
+      # Must match the Dockerfile build arg. fp32 is more accurate but doubles
+      # the resident memory and the download.
       - PARAKEET_QUANTIZATION=int8
-      # Matches the cpuset below; onnxruntime would otherwise size its thread
-      # pool from the host's four cores and oversubscribe the cgroup.
+      # Matches the cpuset: onnxruntime would size its pool from the host's four
+      # cores.
       - PARAKEET_THREADS=3
     healthcheck:
       <<: *healthcheck-relaxed
@@ -219,12 +178,9 @@ services:
       - "homepage.description=Speech-to-text engine"
       - "homepage.icon=mdi-microphone-message"
     cpu_shares: *cpu-prio-idle
-    # Same three cores as llama-cpp and piper, leaving core 0 to traefik and DNS.
     cpuset: "1-3"
-    # ~1.2GB resident for the int8 weights and the onnxruntime arena, plus the
-    # encoder's working set on a full window (~1.4GB measured). The headroom is
-    # what stops a long upload being an OOM: before openai_api.py windowed them,
-    # a 120s pass went past 2GB.
+    # ~1.2 GB resident for the int8 weights and the onnxruntime arena, plus the
+    # encoder's working set on a full window.
     mem_limit: 2560m
     memswap_limit: 3584m
     oom_score_adj: *oom-score-deprioritize
@@ -242,22 +198,19 @@ services:
     profiles: ["system-tools", "all"]
     networks:
       - ai
-      # `devices` reads headscale's node API, which only listens on frontend.
-      # Egress only: nothing here accepts a URL, so the reachable surface widens
-      # but the steerable one does not. Putting headscale on `ai` instead would
-      # hand it a leg into the network where open-webui runs admin-supplied Python.
+      # headscale's node API listens on frontend only. Egress only: nothing here
+      # takes a URL, while headscale on `ai` would reach the segment where
+      # open-webui runs admin-supplied Python.
       - frontend
     expose:
       - 8000
     environment:
-      # Without this the container is UTC and `uptime` is four hours off.
       - TZ=${TIMEZONE:-Europe/Paris}
       # Derived from the directory name, so it cannot be guessed in-container.
       - COMPOSE_PROJECT=${COMPOSE_PROJECT_NAME:-pi-web}
-      # Backrest's own log, because the repos are remote and restic would want
-      # their password. Read off the bind mount below rather than through
-      # /hostfs: DATA_LOCATION is relative to the project directory by default,
-      # and a relative path means nothing against the host root.
+      # Backrest's own log: the repos are remote, and restic would want their
+      # password. Read off the bind mount below, not /hostfs, as DATA_LOCATION
+      # may be relative.
       - BACKREST_OPLOG=/run/backrest/oplog.sqlite
       - HEADSCALE_URL=http://pi-headscale:8080
     read_only: true
@@ -272,14 +225,11 @@ services:
         bind:
           propagation: rslave
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Backrest's data directory, holding the oplog `backups` reads. A directory
-      # rather than the file itself: the oplog does not exist before backrest's
-      # first run, and Docker would materialise a directory in its place.
+      # The directory, not the oplog file: it does not exist before backrest's
+      # first run, and Docker would create a directory in its place.
       - ${DATA_LOCATION:-./data}/backrest/data:/run/backrest:ro
-      # The key homepage's headscale widget already uses, rather than a second one
-      # to rotate: Headscale API keys expire, so both break together.
-      # scripts/headscale-pre-start.sh keeps the path a file, or Docker would
-      # create a directory here and the bootstrap could never write the key in.
+      # The key Homepage's widget uses, so both break together when it expires.
+      # scripts/headscale-pre-start.sh keeps the path a file.
       - ./config/homepage/secrets/headscale_api_key:/run/secrets/headscale_api_key:ro
     healthcheck:
       <<: *healthcheck-relaxed
@@ -307,118 +257,78 @@ services:
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.1"
     expose:
       - 8080
-    # Plain assignments under `-e`, not `export X=$(cat ...)`: export is a
-    # command, so its own success masks a failed substitution, and the container
-    # came up with the API key "sk-". Measured both ways.
-    # The `sk-` prefix is not cosmetic: the secret file holds the bare 64 hex
-    # characters, and what the gateway's `strict` apiKey policy compares against
-    # is `sk-` + that, because agentgateway-pre-start.sh prefixes it when it
-    # writes LLM_API_KEY. Without it every /v1 call 401s and the model picker
-    # stays empty on a fresh install - OPENAI_API_KEY is PersistentConfig, so
-    # the wrong value is copied into the database on first start and stays.
+    # Plain assignments, not `export X=$(...)`: export's own status masks a
+    # failed substitution. `sk-` matches what agentgateway-pre-start.sh writes
+    # into LLM_API_KEY; OPENAI_API_KEY is PersistentConfig, so a wrong first
+    # value sticks in the database.
     entrypoint: ["bash", "-euc", "OAUTH_CLIENT_SECRET=$(cat /run/secrets/oidc_open-webui_secret); OPENAI_API_KEY=sk-$(cat /run/secrets/agentgateway_llm_key); export OAUTH_CLIENT_SECRET OPENAI_API_KEY; exec bash start.sh"]
     environment:
-      # start.sh generates this into /app/backend/.webui_secret_key, which is
-      # image, not volume: every `compose up` that replaces the container minted
-      # a new one, and a new one invalidates every session cookie and makes the
-      # stored OAuth tokens undecryptable ("Error decrypting tokens:
-      # InvalidToken"). So everybody was logged out by an unrelated update.
-      # Pointing it inside the data volume keeps the same key across recreates;
-      # start.sh still generates it on first boot.
+      # In the data volume: at the default path, inside the image, every
+      # recreate minted a new key and logged everyone out.
       - WEBUI_SECRET_KEY_FILE=/app/backend/data/.webui_secret_key
       - WEBUI_AUTH=true
       - ENABLE_LOGIN_FORM=false
       - CORS_ALLOW_ORIGIN=https://ai.${HOST_NAME:-pi.lan}
       - ENABLE_OAUTH_SIGNUP=true
-      # Authelia already gates ai.${HOST_NAME:-pi.lan}, so Open WebUI's own
-      # "pending" default would just park every SSO login until an admin looks.
+      # Authelia already gates who gets in; `pending` would park every SSO
+      # login.
       - DEFAULT_USER_ROLE=user
       - OAUTH_CLIENT_ID=open-webui
       - OPENID_PROVIDER_URL=https://auth.${HOST_NAME:-pi.lan}/.well-known/openid-configuration
       - OAUTH_PROVIDER_NAME=Authelia
       - OAUTH_SCOPES=openid profile email
       - OAUTH_USERNAME_CLAIM=preferred_username
-      # Authelia's portal logout route, not an end_session_endpoint - see
-      # docs/SECURITY.md. Open WebUI redirects to this verbatim once discovery
-      # turns up no endpoint of its own.
+      # Authelia's portal logout, as it has no end_session_endpoint.
+      # docs/SECURITY.md.
       - WEBUI_AUTH_SIGNOUT_REDIRECT_URL=https://auth.${HOST_NAME:-pi.lan}/logout?rd=https%3A%2F%2Fai.${HOST_NAME:-pi.lan}%2Fauth
       - DATABASE_URL=postgresql://open-webui:${PASSWORD}@postgres/open-webui
-      # Through agentgateway, so a model or provider added there appears here
-      # without touching this file. The key is the one in the gateway's own
-      # apiKey policy, read by both from the file the pre-start hook writes, so
-      # a rotation cannot leave the two disagreeing.
+      # Through agentgateway, so a model added there appears here. The key is
+      # read from the same file the gateway's apiKey policy uses.
       - ENABLE_OPENAI_API=true
       - OPENAI_API_BASE_URL=http://agentgateway:4000/v1
-      # No Ollama in the stack; left on, this probes localhost:11434 on every
-      # start and on the model list of every page load.
+      # No Ollama: left on, it probes localhost:11434 on every model list.
       - ENABLE_OLLAMA_API=false
       - DEFAULT_LOCALE=${DEFAULT_LANGUAGE:-en-US}
-      # Speech-to-text on the parakeet sidecar rather than the faster-whisper that
-      # ships inside this container - see that service for the numbers. These are
-      # PersistentConfig, so they only take on an instance that has never started;
-      # scripts/open-webui-bootstrap.sh carries the same values to one whose
-      # database already exists.
-      #
-      # The base URL is not optional: Open WebUI defaults it to
-      # OPENAI_API_BASE_URL, which here is agentgateway, so leaving it out would
-      # point the microphone at the chat model.
+      # PersistentConfig: applied on a fresh instance only, and
+      # scripts/open-webui-bootstrap.sh carries these to an existing one. The
+      # base URL is required: it defaults to OPENAI_API_BASE_URL, the gateway.
       - AUDIO_STT_ENGINE=openai
       - AUDIO_STT_OPENAI_API_BASE_URL=http://parakeet:8000/v1
       - AUDIO_STT_MODEL=parakeet-tdt-0.6b-v3
       - AUDIO_STT_OPENAI_API_KEY=parakeet
-      # Not optional either, and for a sharper reason than the base URL above:
-      # AUDIO_TTS_OPENAI_API_KEY also falls back to OPENAI_API_KEY, which is the
-      # gateway credential - so leaving it unset ships it to piper on every
-      # read-aloud. The four other settings that inherit that key (RAG, images,
-      # image edit, STT) inherit the base URL with it, so they stay pointed at
-      # agentgateway; TTS is the one that does not.
+      # Required: it falls back to OPENAI_API_KEY, which would ship the gateway
+      # credential to piper on every read-aloud.
       - AUDIO_TTS_OPENAI_API_KEY=piper
-      # Web search against the stack's own SearXNG, which the open-webui profile
-      # starts alongside this. PersistentConfig again, so these only take on an
-      # instance that has never started; scripts/open-webui-bootstrap.sh carries
-      # the same values to one whose database already exists.
+      # PersistentConfig too, like the STT settings above.
       - ENABLE_WEB_SEARCH=true
       - WEB_SEARCH_ENGINE=searxng
-      # No `?q=<query>`: the client strips a query string off this URL before
-      # building its own parameters, so the documented placeholder form is only
-      # tolerated, not used. It sends format=json itself, which is why
-      # config/searxng/settings.yml has to list that format.
+      # No `?q=<query>`: the client strips the query string anyway. It sends
+      # format=json, which config/searxng/settings.yml has to allow.
       - SEARXNG_QUERY_URL=http://searxng:8080/search
-      # `all` sends no language filter, letting each engine localise on the
-      # Pi's address. DEFAULT_LANGUAGE is a BCP-47 tag and SearXNG wants its own
-      # locale names, so mapping one to the other would be a table to maintain
-      # for no gain here.
+      # `all`: SearXNG wants its own locale names, not DEFAULT_LANGUAGE's BCP-47
+      # tag.
       - SEARXNG_LANGUAGE=all
-      # 3 upstream, and each result is a page this Pi then fetches and embeds.
-      # Five is the most that still returns inside a chat's patience here.
+      # Each result is a page this Pi fetches and embeds; five is the most a
+      # chat waits for.
       - WEB_SEARCH_RESULT_COUNT=5
-      # 0 means unlimited, which fetches all five pages at once on four cores
-      # that are also running the model.
+      # 0 means unlimited: every page at once, on cores shared with the model.
       - WEB_SEARCH_CONCURRENT_REQUESTS=2
     volumes:
       - open_webui_data:/app/backend/data
       - ${DATA_LOCATION:-./data}/authelia-config/secrets/oidc_open-webui_secret.txt:/run/secrets/oidc_open-webui_secret:ro
-      # The single file, not its directory: the sibling cookie_secret in there
-      # signs agentgateway's admin session cookie, which this container has no
-      # business being able to read. agentgateway-pre-start.sh is a *blocking*
-      # pre-start hook, so the file exists before Compose can materialise a
-      # directory in its place - and if it ever did, the entrypoint's `cat`
-      # fails loudly instead of exporting an empty key.
+      # The file, not its directory: the sibling cookie_secret signs the
+      # gateway's admin session cookie.
       - ${DATA_LOCATION:-./data}/agentgateway/secrets/llm_api_key:/run/secrets/agentgateway_llm_key:ro
     depends_on:
       postgres:
         condition: service_healthy
-      # llama-cpp is reached through agentgateway, so this is where the wait is.
-      # service_started, not service_healthy: the gateway image is distroless
-      # and carries no healthcheck. The model picker can therefore be empty for
-      # the few seconds the gateway still needs; Open WebUI re-lists on refresh.
+      # Where the wait for llama-cpp is. service_started: the gateway image is
+      # distroless and has no healthcheck.
       agentgateway:
         condition: service_started
         required: false
-      # service_started, not service_healthy: system-tools is on the relaxed
-      # healthcheck (120s interval, no start_interval), so Docker's first probe
-      # lands at t=120s and the chat UI would wait for it on every boot - for a
-      # tool server that is only ever called mid-conversation.
+      # service_started: on the relaxed healthcheck its first probe comes two
+      # minutes in, for a tool only ever called mid-conversation.
       system-tools:
         condition: service_started
         required: false
@@ -440,29 +350,20 @@ services:
       - "traefik.http.routers.open-webui.tls=true"
       - "traefik.http.services.open-webui.loadbalancer.server.port=8080"
     cpu_shares: *cpu-prio-idle
-    # Sized on what this holds before anyone logs in, not on what a chat costs:
-    # torch and the RAG embedding model (all-MiniLM-L6-v2, which
-    # sentence-transformers loads at startup) are resident from boot and are
-    # 640M of anonymous memory on their own. At 1g the page cache took the
-    # remainder, leaving it at 1019M of 1024M and reclaiming 336 times in 2h -
-    # and a web search, which fetches five pages and embeds them, had to come
-    # out of that same margin.
+    # torch and the RAG embedding model hold ~640M from boot, and a web search
+    # embeds the fetched pages on top.
     mem_limit: 1536m
     memswap_limit: 2g
     oom_score_adj: *oom-score-deprioritize
 
-  # The one gateway everything that speaks to a model or a tool goes through:
-  # an OpenAI-compatible /v1 in front of llama-cpp, an MCP endpoint that
-  # federates tool servers, and the UI to add either - all on port 4000, all
-  # behind an Authelia login for the UI and a virtual key for /v1. So a second
-  # model, a cloud provider or an MCP target is a row in its database rather
-  # than an environment change in every client.
+  # The one gateway to every model and tool: an OpenAI-compatible /v1, an MCP
+  # endpoint and the UI to add either, all on :4000.
+  # docs/AI.md#the-gateway-agentgateway.
   agentgateway:
     <<: *service-defaults
     image: cr.agentgateway.dev/agentgateway:v1.6.0
     container_name: pi-agentgateway
-    # open-webui and openclaw, because neither has a model without this
-    # gateway. Same shape as flaresolverr under prowlarr.
+    # Started with open-webui and openclaw, which have no model without it.
     profiles: ["agentgateway", "open-webui", "openclaw", "all"]
     # The image runs as 65532, which cannot write a data directory the project
     # owner must stay able to read; 1000 is what every PUID here assumes.
@@ -474,32 +375,24 @@ services:
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
     expose:
       - 4000
-      # The stats listener, on by default - nothing enables it, this only opens
-      # it to Prometheus.
+      # The stats listener, on by default; this only opens it to Prometheus.
       - 15020
     command: ["-f", "/config.yaml"]
     environment:
       # Expanded by agentgateway inside /config.yaml, not by Compose.
       - HOST_NAME=${HOST_NAME:-pi.lan}
-      # The provider keys the path routes present upstream. Here and not in
-      # agentgateway.env, which agentgateway-pre-start.sh rewrites whole. The
-      # default is a placeholder rather than "": an empty backendAuth key exits
-      # 1, taking the gateway down on a host with no Groq account.
+      # Provider keys. A placeholder rather than empty: an empty backendAuth key
+      # exits 1. Here, not in the env file, which agentgateway-pre-start.sh
+      # rewrites whole.
       - GROQ_API_KEY=${GROQ_API_KEY:-unset}
-      # Same contract for /openrouter/v1 and the assistant's last fallback,
-      # placeholder included.
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-unset}
-      # And for /assistant/v1's Gemini groups.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-unset}
-      # AGENT_API_KEY is deliberately absent: a *client* credential, where a
-      # placeholder would be a password readable off this file. Generated by
-      # agentgateway-pre-start.sh into agentgateway.env instead.
+      # No AGENT_API_KEY above: a placeholder for a client credential would be a
+      # password readable in this file.
     env_file:
-      # OIDC_COOKIE_SECRET, UI_CLIENT_SECRET and the client keys (LLM_API_KEY,
-      # AGENT_API_KEY, TRILIUM_LLM_KEY, OPENCLAW_LLM_KEY, ...), written by
-      # scripts/agentgateway-pre-start.sh. Frozen at container
-      # creation, so a rotated secret needs `up -d`, not `restart` - a stale
-      # copy here 401s every caller.
+      # OIDC_COOKIE_SECRET, UI_CLIENT_SECRET and the client keys, from
+      # scripts/agentgateway-pre-start.sh. Frozen at creation: `up -d` after a
+      # rotation, not `restart`.
       - path: ./config/agentgateway/agentgateway.env
         required: false
     volumes:
@@ -512,17 +405,12 @@ services:
         condition: service_healthy
       traefik:
         condition: service_healthy
-      # service_started: the gateway does not probe a model backend at boot, so
-      # it starts fine without one and the first call is what would fail.
+      # service_started: no model backend is probed at boot.
       llama-cpp:
         condition: service_started
         required: false
-    # No healthcheck: the image is distroless - no shell, no HTTP client, not
-    # even `true` - and the binary's only self-test is --validate-only, which
-    # reads the config file without touching the running listener. So Uptime
-    # Kuma's docker monitor proves the process is alive and nothing more: it
-    # stayed green through six crash-loops on the 2026-09-20 cold boot. The
-    # `route llm` monitor it provisions alongside is the readiness probe.
+    # No healthcheck: the image is distroless. Uptime Kuma's docker monitor only
+    # proves the process lives; its `route llm` monitor is the readiness probe.
     labels:
       - "homepage.group=AI"
       - "homepage.name=Agentgateway"
@@ -533,40 +421,32 @@ services:
       - "traefik.docker.network=frontend"
       - "traefik.http.routers.agentgateway.rule=Host(`llm.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.agentgateway.entrypoints=websecure"
-      # No authelia@docker: the gateway runs its own OIDC authorization-code
-      # flow against the same Authelia, and a forward-auth in front of it would
-      # intercept the /oauth/callback that flow returns to.
+      # No authelia@docker: the gateway runs its own OIDC flow, whose
+      # /oauth/callback forward-auth would intercept.
       - "traefik.http.routers.agentgateway.middlewares=frame-deny@docker,lan@docker"
       - "traefik.http.routers.agentgateway.tls=true"
       - "traefik.http.services.agentgateway.loadbalancer.server.port=4000"
     cpu_shares: *cpu-prio-idle
-    # 256m while this only served the UI and MCP. It is in the chat path now,
-    # and the LLM route buffers whole request bodies up to the 32 MiB
-    # frontendPolicies limit - still a fraction of the 1g the Python proxy it
-    # replaced needed, but not 256m under a few concurrent calls.
+    # The LLM route buffers whole request bodies, up to the 32 MiB
+    # frontendPolicies limit.
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
 
-  # The family assistant: an OpenClaw agent per person, reached as @assistant in
-  # the Matrix chat (tuwunel), thinking through agentgateway's /assistant/v1
-  # route, its memory pushed to Forgejo by openclaw-sync.timer. See docs/AI.md
-  # and the PR body for why OpenClaw, and for what was measured.
+  # The family assistant: an OpenClaw agent per person, @assistant in the Matrix
+  # chat. docs/AI.md#the-family-assistant-openclaw.
   #
-  # Isolated rather than sandboxed. OpenClaw's own sandbox backends either need
-  # a container-engine socket (docker, podman) or a separate SSH target, and
-  # neither belongs here; instead the agent gets no tool that executes anything
-  # (scripts/openclaw-pre-start.py), and this container gets no route out, no
-  # socket, no host path but its own config, and no capability.
+  # Isolated rather than sandboxed: no tool that executes anything
+  # (scripts/openclaw-pre-start.py), and no route out, no socket, no host path
+  # but its own config, no capability.
   openclaw:
     <<: *service-defaults
     image: ghcr.io/openclaw/openclaw:2026.10.2@sha256:32490a7091ca02acde649af3a214704d5c0fa9d774890f6ab231a8c2c958c36f
     container_name: pi-openclaw
     profiles: ["openclaw", "all"]
-    # Not the image's docker-entrypoint.mjs, which runs `openclaw doctor --fix`
-    # before the gateway: that refreshes plugins from npm on every start, and
-    # exits 1 outright against the read-only config below (measured at
-    # 2026.9.7). The Matrix and SearXNG plugins are installed at the image's own
-    # version by scripts/openclaw-bootstrap.py instead.
+    # Not the image's docker-entrypoint.mjs: its `openclaw doctor --fix`
+    # refreshes plugins from npm on every start and exits 1 on the read-only
+    # config. scripts/openclaw-bootstrap.py installs them at the image's version
+    # instead.
     entrypoint: ["tini", "-s", "--"]
     command: ["node", "openclaw.mjs", "gateway"]
     read_only: true
@@ -582,51 +462,43 @@ services:
       - /home/node/.config:uid=1000,gid=1000,mode=0700
       - /home/node/.npm:uid=1000,gid=1000,mode=0700
     networks:
-      # agentgateway. The keyless model servers on this segment stay out of
-      # reach of the agent itself, which is given no tool that fetches a URL.
+      # agentgateway. The agent has no tool that fetches a URL.
       - ai
-      # Tuwunel, Forgejo and Nextcloud; both are internal, so there is no
-      # egress at all.
+      # Tuwunel, Forgejo and Nextcloud. Both segments are internal: no egress.
       - assistant
     environment:
       - TZ=${TIMEZONE:-Europe/Paris}
-      # The config is rendered by scripts/openclaw-pre-start.py and mounted
-      # read-only: a model-driven `config.patch` is one of the advisory classes
-      # this closes (GHSA-v3qc-wrwx-j3pw, GHSA-cwj3-vqpp-pmxr).
+      # Rendered by scripts/openclaw-pre-start.py and mounted read-only, closing
+      # model-driven `config.patch` (GHSA-v3qc-wrwx-j3pw, GHSA-cwj3-vqpp-pmxr).
       - OPENCLAW_CONFIG_READONLY=1
       - OPENCLAW_NO_AUTO_UPDATE=1
       - DO_NOT_TRACK=1
     env_file:
-      # The gateway token, the bot's Matrix password and its agentgateway key,
-      # written by scripts/openclaw-pre-start.py and resolved by the config's
-      # env secret provider, which an allowlist limits to those three. Frozen
-      # at container creation: a rotated key needs `up -d`, not `restart`.
+      # The gateway token, the bot's Matrix password and its gateway key, from
+      # scripts/openclaw-pre-start.py. Frozen at creation: `up -d` after a
+      # rotation.
       - path: ./config/openclaw/openclaw.env
         required: false
     volumes:
       - openclaw_state:/home/node/.openclaw
       - ${DATA_LOCATION:-./data}/openclaw/openclaw.json:/home/node/.openclaw/openclaw.json:ro
       - ./config/openclaw/skills:/opt/household-skills:ro
-      # The stack's own Nextcloud plugin, and the per-person app passwords it
-      # acts with (scripts/openclaw-bootstrap.py). Outside every workspace, so
-      # no agent's file tools reach them.
+      # The stack's Nextcloud plugin and the per-person app passwords it acts
+      # with, outside every workspace so no agent's file tools reach them.
       - ./config/openclaw/plugins:/opt/household-plugins:ro
       - ${DATA_LOCATION:-./data}/openclaw/secrets/nextcloud:/run/nextcloud-tokens:ro
     depends_on:
       tuwunel:
         condition: service_healthy
-      # service_started: agentgateway has no healthcheck (distroless), and the
-      # first model call is what would fail, not the start.
+      # service_started: agentgateway has no healthcheck.
       agentgateway:
         condition: service_started
-    # The gateway drains active turns before it closes the Matrix client, and the
-    # crypto snapshot is written on that close - a SIGKILL during a long turn is
-    # the unclean shutdown upstream issue #158784 describes.
+    # Turns drain before the Matrix client closes and writes its crypto
+    # snapshot; a SIGKILL mid-turn corrupts it (upstream issue #158784).
     stop_grace_period: 2m
     healthcheck:
       <<: *healthcheck-relaxed
-      # The image's own probe: GET 127.0.0.1:<gateway port>/healthz, liveness
-      # only. A disconnected Matrix channel shows on /readyz, not here.
+      # Liveness only: a disconnected Matrix channel shows on /readyz.
       test: ["CMD", "node", "dist/docker-healthcheck.js"]
       start_period: 120s
     labels:
@@ -636,13 +508,8 @@ services:
       - "homepage.href=https://chat.${HOST_NAME:-pi.lan}"
       - "homepage.description=Family assistant, @assistant in the chat"
     cpu_shares: *cpu-prio-normal
-    # Measured on this host at 2026.9.7, Matrix connected, E2EE DMs answered by
-    # a real model: 964 MiB idle, 1604 MiB peak in a turn, 1521 MiB with two
-    # per-person agents under a 2g limit. Above that because every `openclaw`
-    # CLI call - the bootstrap's `matrix verify status`, an operator's
-    # `channels status` - is a second Node process in this same cgroup:
-    # 1857 MiB peak with those alongside the gateway, which 2g would have left
-    # one turn short of an OOM kill.
+    # ~1.6 GiB peak in a turn, and every `openclaw` CLI call is a second Node
+    # process in this cgroup: 2g left a turn plus a CLI call short of an OOM.
     mem_limit: 2560m
     mem_reservation: 1g
     oom_score_adj: *oom-score-deprioritize

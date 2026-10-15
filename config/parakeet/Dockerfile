@@ -2,8 +2,8 @@
 #
 # Speech-to-text for open-webui's microphone button, split out of the open-webui
 # container so the model is sized against its own limit rather than that
-# container's 1g - see the parakeet service in compose/compose-ai.yaml for the numbers that
-# ruled out the bundled faster-whisper.
+# container's limit - see docs/AI.md#why-not-open-webuis-built-in-whisper for the numbers
+# that ruled out the bundled faster-whisper.
 FROM python:3.14-slim
 
 # int8 by default: 8.7% WER against fp32's 4.5%, but 1.2GB resident instead of

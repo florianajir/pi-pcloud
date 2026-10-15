@@ -1,17 +1,9 @@
-# The services that hold user data - files, photos, secrets, automations -
-# and the notification bus the rest of the stack publishes to.
+# The services that hold user data - files, photos, secrets, code, chat,
+# automations - and the notification bus the rest of the stack publishes to.
 #
-# Included by compose.yaml, which declares the networks and volumes named
-# below and supplies the .env this file interpolates. Not startable on its
-# own: `docker compose -f compose/compose-cloud.yaml` resolves every relative
-# path against compose/ instead of the project root.
-
-# --- shared preamble: identical in every compose/*.yaml ---
-#
-# YAML anchors are file-scoped and `include:` parses each file on its own, so
-# this block cannot be shared - it is copied. compose.yaml holds the canonical
-# copy, with the reasoning behind every tier; tests/compose-invariants.py fails
-# the build when a copy drifts from it. Change compose.yaml first, then here.
+# Included by compose.yaml, which declares the networks and volumes and holds
+# the canonical x- anchors these are copies of (tests/compose-invariants.py
+# fails if one drifts: change compose.yaml first).
 
 x-service-defaults: &service-defaults
   logging:
@@ -50,8 +42,6 @@ x-healthcheck-fast: &healthcheck-fast
   retries: 3
   start_period: 10s
 
-# --- end shared preamble ---
-
 services:
   nextcloud:
     <<: *service-defaults
@@ -77,9 +67,8 @@ services:
       - POSTGRES_USER=nextcloud
       - POSTGRES_PASSWORD=${PASSWORD}
       - REDIS_HOST=redis
-      # The file variant, so the password is not in docker inspect - and it has
-      # to stay a path every UID in the container can read, because
-      # `docker exec -u www-data` re-resolves it. See the mount below.
+      # The file variant keeps the password out of docker inspect. It must stay
+      # readable by every UID: `docker exec -u www-data` re-resolves it.
       - REDIS_HOST_PASSWORD_FILE=/run/secrets/redis_password
       - TZ=${TIMEZONE:-Europe/Paris}
       - SMTP_HOST=${SMTP_HOST:-localhost}
@@ -95,20 +84,10 @@ services:
       - ${DATA_LOCATION:-./data}/nextcloud:/var/www/html/data
       - ${DATA_LOCATION:-./data}/nextcloud-config:/var/www/html/config
       - ${DATA_LOCATION:-./data}/nextcloud-themes:/var/www/html/themes
-      # The download tree and the reading libraries, read-write, so Nextcloud is
-      # also where they get organised - renamed, moved, deleted - and not only
-      # where a file gets a public share link.
-      #
-      # Read-write here is necessary but not sufficient: Nextcloud's PHP runs as
-      # uid 33 and everything below belongs to uid/gid 1000 in mode 0755, so it
-      # would still only get r-x. scripts/nextcloud-pre-start.sh grants uid 33
-      # write access with an ACL. Note `group_add: 1000` does NOT work here,
-      # tempting as it looks: Apache calls initgroups() when it drops to
-      # www-data, which rebuilds the group list from the container's /etc/group
-      # and discards the supplementary gid compose added.
-      #
-      # config/nextcloud/hooks/post-installation/20-external-storage.sh turns
-      # these into files_external mounts; keep the two lists in step.
+      # Read-write, so files can be organised from Nextcloud. uid 33's write
+      # access is a POSIX ACL from scripts/nextcloud-pre-start.sh - not
+      # `group_add`, which Apache's initgroups() discards. Keep in step with
+      # config/nextcloud/hooks/post-installation/20-external-storage.sh.
       - ${DATA_LOCATION:-./data}/download:/mnt/qbittorrent-downloads
       - ${DATA_LOCATION:-./data}/comics:/mnt/library-comics
       - ${DATA_LOCATION:-./data}/manga:/mnt/library-manga
@@ -126,9 +105,6 @@ services:
     networks:
       - frontend
       - nextcloud
-      # The family assistant reaches it here, by name, with one app password
-      # per person (config/openclaw/plugins/nextcloud). Internal: it opens no
-      # route out for either side.
       - assistant
     labels:
       - "homepage.group=Storage"
@@ -142,34 +118,17 @@ services:
       - "homepage.widget.password={{HOMEPAGE_VAR_ADMIN_PASSWORD}}"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
-      # frame-deny@docker sends DENY, but Nextcloud's own check wants SAMEORIGIN
-      # exactly - same fix as Vaultwarden's vaultwarden-frame below.
+      # Nextcloud's own check wants SAMEORIGIN exactly; frame-deny sends DENY.
       - "traefik.http.middlewares.nextcloud-frame.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN"
       - "traefik.http.routers.nextcloud.rule=Host(`nextcloud.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.nextcloud.middlewares=nextcloud-frame@docker,lan@docker"
       - "traefik.http.routers.nextcloud.entrypoints=websecure"
       - "traefik.http.routers.nextcloud.tls=true"
       - "traefik.http.routers.nextcloud.priority=10"
-      # Same caveat as immich-public: no lan@docker, so this rule is the public
-      # surface. Two prefixes were wider than any share needs.
-      # `/avatar/` was an account-enumeration oracle - /avatar/<known-mail>/64/dark
-      # answers 200 where an unknown one answers 201, unauthenticated. Shares only
-      # ever request /avatar/guest/, so the prefix is narrowed to that.
-      # `/apps/` also exposed /apps/files/api/v1/*; the negation keeps the app
-      # assets (js, css, l10n, img, theming) that a share page genuinely loads
-      # while dropping every app's REST surface. /ocs/ and /remote.php/ were
-      # already absent from here, so the OCS API stays behind lan@docker.
-      # `/custom_apps/` is where store-installed apps serve their assets, and it
-      # was never in this rule - which quietly broke public calendar sharing:
-      # /apps/calendar/p/<token> is reachable, but the page it returns pulls
-      # /custom_apps/calendar/js/calendar-main.js, so the calendar never rendered
-      # for anyone outside the LAN. Mirrors the /apps/ negation above so the
-      # store apps' REST surfaces stay private.
-      # Assets only under /apps, /custom_apps and /core, never the whole tree:
-      # anything broader publishes /apps/user_oidc/login and with it a way to
-      # reach /apps/files/ and /core/preview from off-LAN. The subdirectory list
-      # is what a real public share page requests, plus l10n/fonts/vendor. LAN
-      # and tailnet clients match the `lan` router instead and are unaffected.
+      # No lan@docker: this rule is the public surface, kept to what a share
+      # page loads - assets only under /apps, /custom_apps and /core (never an
+      # app's REST API), and the guest avatar only (/avatar/<mail> is an account
+      # oracle). docs/SECURITY.md#per-service-protection.
       - "traefik.http.routers.nextcloud-public.rule=Host(`nextcloud.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/s/`) || PathPrefix(`/public.php`) || PathPrefix(`/avatar/guest/`) || PathPrefix(`/dist/`) || PathPrefix(`/js/`) || PathPrefix(`/themes/`) || PathPrefix(`/apps/files_sharing/publicpreview`) || PathRegexp(`^/core/(css|js|img|fonts|l10n|vendor)/`) || PathRegexp(`^/(apps|custom_apps)/[^/]+/(css|js|img|fonts|l10n|vendor|theme|favicon|icon|manifest)/`) || PathPrefix(`/remote.php/dav/calendars/`) || PathPrefix(`/remote.php/dav/public-calendars/`))"
       - "traefik.http.routers.nextcloud-public.entrypoints=websecure"
       - "traefik.http.routers.nextcloud-public.middlewares=nextcloud-frame@docker"
@@ -211,8 +170,7 @@ services:
       REDIS_PASSWORD_FILE: /run/secrets/redis_password
       IMMICH_CONFIG_FILE: /immich-oauth-config.yaml
       IMMICH_TRUSTED_PROXIES: 172.30.11.250/32
-      # The whole enum. `repo` and `io` are the expensive halves - a histogram
-      # per repository method and per filesystem op - so set
+      # `repo` and `io` are the expensive halves:
       # IMMICH_TELEMETRY_EXCLUDE=repo,io if the TSDB size cap starts biting.
       IMMICH_TELEMETRY_INCLUDE: all
       CPU_CORES: 3
@@ -227,8 +185,7 @@ services:
         condition: service_healthy
     expose:
       - 2283
-      # IMMICH_API_METRICS_PORT and IMMICH_MICROSERVICES_METRICS_PORT at their
-      # defaults: one container, two workers, two listeners.
+      # Metrics of the API and microservices workers, at their default ports.
       - 8081
       - 8082
     labels:
@@ -248,66 +205,21 @@ services:
       - "traefik.http.routers.immich.middlewares=frame-deny@docker,lan@docker"
       - "traefik.http.routers.immich.tls=true"
       - "traefik.http.routers.immich.priority=10"
-      # This router carries no lan@docker, so its rule *is* the public surface.
-      # A blanket PathPrefix(`/api`) put the whole authenticated API on the
-      # internet - /api/users/me, /api/albums, /api/faces, /api/sync/stream -
-      # none of which a share link touches. Worse, `immich@` then only ever saw
-      # the HTML shell: every API call from the logged-in app was routed here.
-      # Measured against a real share by splitting the access log per TCP
-      # connection, every anonymous request carries `key` or `slug`, without
-      # exception. So /api/assets - which a share and the app request at the
-      # same paths - is gated on that parameter rather than on the path.
-      # Fails closed: a missing path 403s from outside while still working from
-      # the LAN, so any change here must be validated off-tailnet.
-      # The three loose files are not decoration: /service-worker.js was 403ing
-      # in a retry loop on every share view (32 times over one off-tailnet test),
-      # and none of them ever matched the old rule either - they sit at the root,
-      # outside /share, /s/, /_app and /api.
+      # No lan@docker: this rule is the public surface. Anonymous share requests
+      # always carry `key` or `slug`, so the API paths are gated on that, never
+      # on a blanket /api. Fails closed: validate any change off-tailnet.
+      # docs/SECURITY.md#per-service-protection.
       - "traefik.http.routers.immich-public.rule=Host(`immich.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/share`) || PathPrefix(`/s/`) || PathPrefix(`/_app`) || Path(`/service-worker.js`) || Path(`/custom.css`) || Path(`/dark_skeleton.png`) || Path(`/api/server/config`) || Path(`/api/server/features`) || Path(`/api/server/media-types`) || ((PathPrefix(`/api/assets`) || PathPrefix(`/api/download`) || PathPrefix(`/api/timeline`) || PathPrefix(`/api/albums`)) && (QueryRegexp(`key`, `.+`) || QueryRegexp(`slug`, `.+`))))"
       - "traefik.http.routers.immich-public.entrypoints=websecure"
-      # rate-limit-burst, not rate-limit-auth: a share page pulls one thumbnail
-      # per photo from /api/assets, so the tight limiter would answer 429 to most
-      # of an album exactly as it did to AIOMetadata's posters. 100/s with a burst
-      # of 200, per source, bounds a download hammer without touching a real view.
+      # rate-limit-burst: a share page pulls one thumbnail per photo.
       - "traefik.http.routers.immich-public.middlewares=frame-deny@docker,rate-limit-burst@docker"
       - "traefik.http.routers.immich-public.tls=true"
       - "traefik.http.routers.immich-public.priority=20"
-      # The password of a protected share had no brute-force protection of any
-      # kind. Measured from an address outside the allowlist: eight consecutive
-      # wrong passwords on /api/shared-links/login all answered 401 in ~53 ms,
-      # flat - Immich throttles nothing here, and this router carried no limiter.
-      # Nextcloud, on the same test, recorded the attempts against the real client
-      # IP and armed a 25 s delay; Immich has no equivalent to enable.
-      #
-      # So the two credential endpoints get their own router and their own
-      # limiter. /login is the password submission - upstream's own summary on
-      # `Post('login')` is "Login to a password protected shared link"
-      # (server/dist/controllers/shared-link.controller.js) - and /me is where a
-      # share page learns a password is required at all. Both are carved out of the
-      # router above rather than left on the burst limiter, which at 100/s is no
-      # obstacle to guessing.
-      #
-      # Carved out means *removed* from immich-public's rule, not merely
-      # outranked by this one. Leaving them there would make the split fail
-      # open: this router is one mistyped middleware name away from being
-      # dropped from the routing table - the failure mode the ipv6Subnet note
-      # below warns about - and the credential endpoints would then quietly land
-      # back on rate-limit-burst instead of 404ing. With them gone, a router that
-      # fails to load leaves those two paths to immich@ at priority 10, which
-      # carries lan@docker: LAN keeps working, the internet gets a 403.
-      #
-      # 30 per minute with a burst of 20: a human who mistypes a share password
-      # three times never notices, while a guesser drops from unbounded to ~43k
-      # attempts a day. Not measured against real share traffic - there is none in
-      # the access log to measure - so it is sized for the call pattern (/me once
-      # per page load, /login once per submission), not observed load.
-      #
-      # ipv6Subnet is what makes it worth having. Without it a per-IP bucket is
-      # decorative against IPv6: this host answers on a /64 and a client can pick a
-      # fresh address per request. Grouping the bucket by /64 makes rotating within
-      # the prefix pointless. Traefik 3.7 field; it silently does nothing if the
-      # name is wrong, so check the middleware in /api/http/middlewares after any
-      # edit rather than trusting the label.
+      # The share-password endpoints, on their own limiter: Immich throttles
+      # nothing. Removed from immich-public's rule rather than outranked, so if
+      # this router fails to load they fall to the lan@docker router, not the
+      # burst limiter. ipv6subnet buckets a /64 together; a misspelt field is
+      # silently ignored, so check /api/http/middlewares after an edit.
       - "traefik.http.middlewares.immich-share-limit.ratelimit.average=30"
       - "traefik.http.middlewares.immich-share-limit.ratelimit.burst=20"
       - "traefik.http.middlewares.immich-share-limit.ratelimit.period=1m"
@@ -359,47 +271,41 @@ services:
     image: vaultwarden/server:1.37.4
     container_name: pi-vaultwarden
     profiles: ["vaultwarden", "all"]
-    # Not frontend: no east-west consumer at all. See `vaultwarden_web` below.
+    # Not frontend: it has no east-west consumer.
     networks:
       - vaultwarden_web
       - vault
     expose:
       - 80
-    # So the SSO_AUTHORITY discovery call resolves to Traefik, reached on
-    # vaultwarden_web since this container moved off frontend.
+    # OIDC discovery through Traefik, on vaultwarden_web.
     extra_hosts:
       - "auth.${HOST_NAME:-pi.lan}:172.30.14.250"
-    # Neither SSO_CLIENT_SECRET nor ADMIN_TOKEN has a *_FILE variant, so the mounted
-    # secrets are exported before handing over to the image's own /start.sh. Same
-    # trick as open-webui. Both values are hex/PHC, so they need no quoting.
+    # Neither SSO_CLIENT_SECRET nor ADMIN_TOKEN has a *_FILE variant, so the
+    # mounted secrets are exported before the image's /start.sh. ADMIN_TOKEN is
+    # an Argon2id digest from scripts/vaultwarden-pre-start.sh, deliberately not
+    # PASSWORD.
     entrypoint: ["sh", "-c", "export SSO_CLIENT_SECRET=$(cat /run/secrets/oidc_vaultwarden_secret) ADMIN_TOKEN=$(cat /run/secrets/admin_token_hash) && exec /start.sh"]
     environment:
       - DOMAIN=https://vault.${HOST_NAME:-pi.lan}
       - DATABASE_URL=postgresql://vaultwarden:${PASSWORD}@postgres/vaultwarden
-      # This router is only behind the LAN allowlist, so open registration would
-      # let anyone on the tailnet create a vault. Invite from /admin instead.
+      # Only the LAN allowlist is in front, so open registration would let
+      # anyone on the tailnet create a vault. Invite from /admin instead.
       - SIGNUPS_ALLOWED=false
       - INVITATIONS_ALLOWED=true
-      # ADMIN_TOKEN is exported by the entrypoint from an Argon2id digest generated
-      # by scripts/vaultwarden-pre-start.sh - deliberately not derived from PASSWORD.
-      # This does NOT remove the master password: that key encrypts the vault
-      # itself and never reaches the identity provider.
       - SSO_ENABLED=true
       - SSO_AUTHORITY=https://auth.${HOST_NAME:-pi.lan}
       - SSO_CLIENT_ID=vaultwarden
       - SSO_SCOPES=profile email offline_access
-      # Native email+password login is off, so everyone who signs in - including
-      # an emergency-access contact - must exist in LLDAP. An invitation only
-      # creates a stub account, claimed by signing in through Authelia.
+      # No native login, so everyone - emergency-access contacts included - must
+      # exist in LLDAP. An invitation only creates a stub, claimed through
+      # Authelia.
       - SSO_ONLY=true
-      # Authelia rotates refresh tokens single-use with no grace period, and the
-      # Bitwarden clients refresh even while their access token is still valid.
-      # Any refresh response that fails to reach the client (a restart mid-flight,
-      # a transient 500) therefore burns the only token it holds and locks it out
-      # for good. Authelia stays the sole way *in*; the session it opens is ours.
+      # Authelia rotates refresh tokens single-use with no grace period, and
+      # Bitwarden clients refresh early: one lost response locks a client out
+      # for good. So Authelia is only the way in, and the session is
+      # Vaultwarden's own.
       - SSO_AUTH_ONLY_NOT_SESSION=true
-      # Deliberate, not just the default: needs the SMTP below to deliver its
-      # invite, grant and takeover-notification mails.
+      # Needs the SMTP below for its invite and takeover mails.
       - EMERGENCY_ACCESS_ALLOWED=true
       # starttls suits the default port 587; use force_tls on 465.
       - SMTP_HOST=${SMTP_HOST:-localhost}
@@ -418,7 +324,6 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      # The bundled /healthcheck.sh already handles ROCKET_PORT and base paths.
       <<: *healthcheck-light
       test: ["CMD", "/healthcheck.sh"]
     labels:
@@ -429,22 +334,18 @@ services:
       - "homepage.description=Bitwarden-compatible password manager"
       - "traefik.enable=true"
       - "traefik.docker.network=vaultwarden_web"
-      # Deliberately no authelia@docker: forward-auth breaks the browser extension
-      # and mobile clients, which cannot complete the interactive portal. They are
-      # authenticated through OIDC instead (see SSO_* above).
-      # The websecure entrypoint's security-headers sets X-Frame-Options: DENY on
-      # every response, which Vaultwarden's own diagnostics flag: it replaces the
-      # SAMEORIGIN the API needs, and adds the header to the *-connector.html pages
-      # that must have none - those are framed by the browser extension from a
-      # chrome-extension:// origin, which any X-Frame-Options value would block.
-      # Restoring per-router requires re-emitting the header after the entrypoint.
+      # No authelia@docker: the browser extension and mobile apps cannot pass
+      # the portal; they authenticate through OIDC (SSO_* above).
+      #
+      # Exempt from frame-deny: the API needs SAMEORIGIN, and the
+      # *-connector.html pages, framed by the extension, need no frame header at
+      # all (router below).
       - "traefik.http.middlewares.vaultwarden-frame.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN"
       - "traefik.http.routers.vaultwarden.rule=Host(`vault.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.vaultwarden.entrypoints=websecure"
       - "traefik.http.routers.vaultwarden.middlewares=vaultwarden-frame@docker,lan@docker"
       - "traefik.http.routers.vaultwarden.tls=true"
-      # Longer rule than the catch-all above, so Traefik's rule-length priority
-      # picks it for the connector pages without an explicit priority.
+      # Longer than the catch-all's rule, so it wins on rule-length priority.
       - "traefik.http.routers.vaultwarden-connector.rule=Host(`vault.${HOST_NAME:-pi.lan}`) && (Path(`/webauthn-connector.html`) || Path(`/sso-connector.html`))"
       - "traefik.http.routers.vaultwarden-connector.entrypoints=websecure"
       - "traefik.http.routers.vaultwarden-connector.middlewares=lan@docker"
@@ -456,50 +357,34 @@ services:
     mem_reservation: 32m
     oom_score_adj: *oom-score-important
 
-  # A git forge: repositories, issues, pull requests and releases, self-hosted.
-  # It is the one service here whose data is not a copy of something else - a
-  # repository pushed only to this host exists nowhere but this host, which is
-  # why it is dumped (Postgres) *and* mirrored (the bare repos) by backrest.
+  # Its data is a copy of nothing: a repository pushed only here exists nowhere
+  # else, so backrest takes both the database dump and the bare repositories.
   forgejo:
     <<: *service-defaults
-    # Forgejo, not Gitea: same codebase originally, but Forgejo is GPLv3 and
-    # governed by Codeberg e.V. (a non-profit) rather than by Gitea Ltd. under a
-    # CLA that can relicense contributions. See the PR body for the rest of the
-    # comparison. The digest pins the multi-arch index, not one platform's
-    # manifest, so it resolves on arm64 here and on amd64 in CI.
     image: codeberg.org/forgejo/forgejo:16.0.6@sha256:e2c34a699543ca8a00217ee9ab2bea5feedc98bd6d0ea95ec287d3b7ae1355c6
     container_name: pi-forgejo
     profiles: ["forgejo", "all"]
     networks:
-      # frontend for Traefik, and for what Forgejo itself reaches out to:
-      # Authelia's discovery document, repository mirrors, and the SMTP relay.
+      # Traefik, and Forgejo's own outbound: OIDC discovery, mirrors, SMTP.
       - frontend
-      # postgres is on internal segments only; this is Forgejo's own.
       - forge
-      # The family assistant's memory and knowledge-base repositories are
-      # pushed from here by scripts/openclaw-sync.py.
+      # The assistant's repositories, pushed by scripts/openclaw-sync.py.
       - assistant
     extra_hosts:
-      # Authelia's discovery document, fetched through Traefik. Forgejo
-      # validates the URL when the auth source is *created*, so
-      # scripts/forgejo-oidc-bootstrap.sh fails outright without this - it is
-      # not only the sign-in path.
+      # Forgejo validates the discovery URL when the auth source is created, so
+      # scripts/forgejo-oidc-bootstrap.sh fails without this, not only sign-in.
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
     expose:
       - 3000
     environment:
       - TZ=${TIMEZONE:-Europe/Paris}
-      # The image chowns /data to these and drops to them. 1000:1000 is the
-      # host's own user here, so ${DATA_LOCATION}/forgejo stays readable to a
-      # non-root `make update` and to backrest's bind mount.
+      # The image chowns /data to these: the host user, so a non-root `make
+      # update` and backrest can still read it.
       - USER_UID=1000
       - USER_GID=1000
-      # Everything below lands in /data/gitea/conf/app.ini through the image's
-      # FORGEJO__<section>__<KEY> expansion, re-applied on every start - so this
-      # file stays the source of truth and an edit in the web UI's admin panel
-      # is reverted by the next recreate. The OIDC auth source is the deliberate
-      # exception: it lives in the database, because Forgejo has no ini key for
-      # it (see scripts/forgejo-oidc-bootstrap.sh).
+      # FORGEJO__<section>__<KEY> is written into app.ini on every start,
+      # reverting edits made in the admin panel. The OIDC source lives in the
+      # database instead (scripts/forgejo-oidc-bootstrap.sh).
       - FORGEJO__database__DB_TYPE=postgres
       - FORGEJO__database__HOST=postgres:5432
       - FORGEJO__database__NAME=forgejo
@@ -508,58 +393,38 @@ services:
       - FORGEJO__server__DOMAIN=git.${HOST_NAME:-pi.lan}
       - FORGEJO__server__ROOT_URL=https://git.${HOST_NAME:-pi.lan}/
       - FORGEJO__server__HTTP_PORT=3000
-      # No git-over-SSH. It needs a published host port, which every service
-      # here deliberately does without (Traefik is the only ingress), and :22 on
-      # this host is the Pi's own sshd. Clones and pushes go over HTTPS with a
-      # Forgejo access token as the password - which is also why
-      # ENABLE_BASIC_AUTHENTICATION is left at its default of true.
+      # No git-over-SSH: it needs a published port, and Traefik is the only
+      # ingress. HTTPS with an access token instead, which is why basic auth
+      # stays on.
       - FORGEJO__server__DISABLE_SSH=true
       - FORGEJO__server__LFS_START_SERVER=true
-      # Install wizard skipped: the settings it would ask for are all above, and
-      # an unlocked instance serves /install to the first caller instead.
+      # Unlocked, the instance serves /install to the first caller.
       - FORGEJO__security__INSTALL_LOCK=true
-      # Traefik's address alone, matching FreshRSS's TRUSTED_PROXY and Immich's
-      # IMMICH_TRUSTED_PROXIES. Forgejo defaults this to 127.0.0.0/8 - so
-      # without it X-Forwarded-For is never honoured and every sign-in, audit
-      # entry and rate-limit bucket is attributed to the proxy. A wider range
-      # would be worse than the default: it would let any container on
-      # `frontend` choose the address Forgejo records.
+      # Traefik alone: the loopback default attributes everything to the proxy,
+      # and a wider range lets any frontend container choose the address Forgejo
+      # records.
       - FORGEJO__security__REVERSE_PROXY_TRUSTED_PROXIES=172.30.11.250/32
-      # Accounts come from LLDAP through Authelia and from nowhere else: the
-      # sign-up form is gone, and the OIDC source creates the account on first
-      # sign-in. DISABLE_REGISTRATION would have blocked that too - it stops
-      # external registration as well as the form.
+      # Accounts from OIDC only. DISABLE_REGISTRATION would block those too.
       - FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION=true
-      # This router carries no authelia@docker (see the labels below), so
-      # without this every account on the tailnet - and every request the LAN
-      # allowlist admits - could browse the repositories anonymously. The
-      # healthcheck endpoint is exempt, verified against v16.0.5.
+      # No forward-auth on the router, so without this anyone past lan@docker
+      # could browse the repositories anonymously.
       - FORGEJO__service__REQUIRE_SIGNIN_VIEW=true
       - FORGEJO__service__ENABLE_NOTIFY_MAIL=true
-      # Trust Authelia's verified address rather than mailing a confirmation
-      # link to an identity LLDAP already vouched for.
+      # LLDAP already vouches for the address.
       - FORGEJO__service__REGISTER_EMAIL_CONFIRM=false
-      # Forgejo's *other* OpenID support - the 2007 OpenID 2.0 consumer, no
-      # relation to the OIDC source. Off, so the sign-in page offers exactly one
-      # way in.
+      # OpenID 2.0, unrelated to OIDC: off, so there is one way in.
       - FORGEJO__openid__ENABLE_OPENID_SIGNIN=false
       - FORGEJO__openid__ENABLE_OPENID_SIGNUP=false
       - FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION=true
-      # The LLDAP uid, matching FreshRSS's OIDC_REMOTE_USER_CLAIM. The default is
-      # `nickname`, which Authelia does not send - every account would be named
-      # from the fallback instead.
+      # The LLDAP uid; the default `nickname` is a claim Authelia does not send.
       - FORGEJO__oauth2_client__USERNAME=preferred_username
       - FORGEJO__oauth2_client__ACCOUNT_LINKING=auto
       - FORGEJO__oauth2_client__UPDATE_AVATAR=false
-      # Forgejo Actions, off: there is no runner on this host and there should
-      # not be one - a CI job is exactly the kind of unbounded CPU consumer the
-      # cpu_shares tiers exist to keep away from DNS and the database. Enabled
-      # it would only add a tab that never runs anything.
+      # No runner here, and a CI job is exactly the unbounded CPU load the
+      # cpu_shares tiers keep away from DNS and the database.
       - FORGEJO__actions__ENABLED=false
-      # The code search indexer, off (it is also the upstream default, stated
-      # here because it is the one setting that would change this service's
-      # memory profile): it builds a bleve index over every file of every
-      # repository, which on a Pi costs more than grep-on-demand is worth.
+      # The default, stated: a bleve index of every file costs more than it
+      # saves on a Pi.
       - FORGEJO__indexer__REPO_INDEXER_ENABLED=false
       - FORGEJO__mailer__ENABLED=true
       - FORGEJO__mailer__PROTOCOL=smtp+starttls
@@ -569,17 +434,13 @@ services:
       - FORGEJO__mailer__PASSWD=${SMTP_PASSWORD:-}
       - FORGEJO__mailer__FROM=${EMAIL:-noreply@localhost}
     volumes:
-      # Repositories, LFS objects, avatars, attachments, the session store and
-      # the generated app.ini - everything but the database.
       - ${DATA_LOCATION:-./data}/forgejo:/data
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
       <<: *healthcheck-default
-      # The image ships no HEALTHCHECK. /api/healthz is a real probe, unlike a
-      # bare GET /: it pings the database and the cache and answers 503 when
-      # either is down. curl is in the image; wget and bash are too.
+      # /api/healthz pings the database and the cache, unlike GET /.
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
       start_period: 60s
     labels:
@@ -588,52 +449,33 @@ services:
       - "homepage.icon=forgejo.png"
       - "homepage.href=https://git.${HOST_NAME:-pi.lan}"
       - "homepage.description=Self-hosted git forge"
-      # No homepage.widget: there is no forgejo/gitea widget in homepage, and
-      # the gitea one it is sometimes confused with reads a per-account token.
+      # No homepage.widget: Homepage has none for Forgejo.
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
-      # No authelia@docker: Forgejo runs the OIDC flow itself (see
-      # scripts/forgejo-oidc-bootstrap.sh), and forward-auth on top would
-      # also cover /<owner>/<repo>.git and /api/v1 - the paths git and every API
-      # client use, which send a token over basic auth and cannot complete an
-      # interactive portal. Same rationale as FreshRSS's greader API and
-      # Kavita's OPDS clients. REQUIRE_SIGNIN_VIEW above is what closes the
-      # anonymous browsing this leaves open.
-      #
-      # frame-deny@docker is not optional here: the entrypoint-wide
-      # security-headers middleware deliberately carries no frame policy, and
-      # Forgejo sends neither X-Frame-Options nor a frame-ancestors CSP of its
-      # own (checked against v16.0.5) - so without it any page can frame a
-      # signed-in session and click through to "Delete repository".
+      # No authelia@docker: git and /api/v1 clients send a token over basic auth
+      # (REQUIRE_SIGNIN_VIEW closes anonymous browsing). frame-deny is required:
+      # Forgejo sends no frame policy of its own.
       - "traefik.http.routers.forgejo.rule=Host(`git.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.forgejo.entrypoints=websecure"
       - "traefik.http.routers.forgejo.middlewares=frame-deny@docker,lan@docker"
       - "traefik.http.routers.forgejo.tls=true"
       - "traefik.http.services.forgejo.loadbalancer.server.port=3000"
     cpu_shares: *cpu-prio-batch
-    # Measured on this host at v16.0.5: 132 MiB idle, 191 MiB peak while
-    # pushing and re-cloning this repository. The headroom is for `git gc`,
-    # which the built-in cron forks on the repositories themselves.
+    # The headroom is for the `git gc` the built-in cron forks.
     mem_limit: 512m
     oom_score_adj: *oom-score-deprioritize
 
-  # The family chat: a Matrix homeserver, reached from Element Web (the service
-  # below) and from Element X on phones. Tuwunel, the conduwuit successor, keeps
-  # everything in an embedded RocksDB, so it takes neither a Postgres role nor
-  # the shared Redis. See the PR body for why not Synapse or continuwuity.
+  # The family chat: a Matrix homeserver for Element Web (below) and Element X.
+  # An embedded RocksDB, so no Postgres role and no Redis.
   tuwunel:
     <<: *service-defaults
     image: ghcr.io/matrix-construct/tuwunel:v1.9.4@sha256:0e86c6164d6c9f5b60291938eb61ad8395021c37fe58d47a963ea7edddbedaec
     container_name: pi-tuwunel
-    # openclaw too: the assistant is a bot account on this homeserver.
+    # openclaw too: the assistant is a bot account here.
     profiles: ["tuwunel", "openclaw", "all"]
-    # Root in the container, but with no capability beyond DAC_READ_SEARCH and
-    # a read-only root filesystem - verified at v1.9.3 by running it exactly
-    # like this. Not uid 1000: the database lives in named volumes (below), a
-    # new named volume is created root-owned, and this Nix image has no path
-    # Docker could copy another owner from. DAC_READ_SEARCH is what lets root
-    # without CAP_DAC_OVERRIDE read the 0600 client secret, which belongs to
-    # the project owner.
+    # Root, but with no capability beyond DAC_READ_SEARCH (to read the 0600
+    # client secret) and a read-only rootfs. Not uid 1000: new named volumes are
+    # root-owned, and this Nix image offers no other owner to copy.
     read_only: true
     cap_drop:
       - ALL
@@ -642,87 +484,63 @@ services:
     security_opt:
       - no-new-privileges:true
     # The first start after an upgrade can run a RocksDB migration, and a kill
-    # half-way leaves a database no admin command repairs (upstream
-    # docs/deploying/docker.md). Docker's default is SIGKILL after 10 s; a
-    # server that is not migrating exits on SIGTERM in well under a second, so
-    # this only ever waits on a migration.
+    # half-way leaves a database no admin command repairs. A normal stop takes
+    # under a second.
     stop_grace_period: 30m
     networks:
-      # Traefik, Authelia's discovery document, and the push gateway a phone
-      # registers for notifications.
       - frontend
-      # The family assistant's segment (compose.yaml), so OpenClaw reaches the
-      # homeserver without a network that leads out.
       - assistant
     extra_hosts:
-      # Fetched at the first sign-in, not at start. Verified at v1.9.3 that
-      # ip_range_denylist, whose default covers 172.16.0.0/12, does not refuse
-      # this address.
+      # Fetched at the first sign-in. ip_range_denylist, whose default covers
+      # 172.16.0.0/12, does not refuse it (verified at v1.9.3).
       - "auth.${HOST_NAME:-pi.lan}:172.30.11.250"
     expose:
       - 8008
     environment:
-      # Permanent: it is the suffix of every user and room ID
-      # (@alice:chat.<HOST_NAME>), and a database created under one name cannot
-      # be moved to another. chat.<HOST_NAME> rather than <HOST_NAME> itself,
-      # so no /.well-known delegation has to be served from an apex this stack
-      # routes nothing on - and it is the one name users type into Element X.
+      # Permanent: the suffix of every user and room ID. chat.<HOST_NAME> rather
+      # than the apex, so no /.well-known delegation has to be served there.
       - TUWUNEL_SERVER_NAME=chat.${HOST_NAME:-pi.lan}
       # The default is loopback only.
       - TUWUNEL_ADDRESS=0.0.0.0
-      # A family server: LAN and tailnet only, like its router below, so there
-      # is no :8448 to federate on and no reason to accept a remote server.
+      # LAN and tailnet only, like the router: there is no one to federate with.
       - TUWUNEL_ALLOW_FEDERATION=false
       # Upstream appends an emoji to every new display name by default.
       - TUWUNEL_NEW_USER_DISPLAYNAME_SUFFIX=
-      # journald stores the escape codes verbatim otherwise; Tuwunel only
-      # suppresses them when it logs to journald itself.
+      # Otherwise journald stores the escape codes verbatim.
       - TUWUNEL_LOG_COLORS=false
       # Upstream's 24 MiB refuses many of the videos a phone records.
       - TUWUNEL_MAX_REQUEST_SIZE=100 MiB
-      # Defaults to 128 + 64 per core - 384 MB here, which alone would outgrow
-      # mem_limit as the database grows.
+      # The default (128 + 64 per core) would outgrow mem_limit.
       - TUWUNEL_DB_CACHE_CAPACITY_MB=128
-      # Uploads out of the database directory and into a volume of their own,
-      # so backrest can take them without ever reading the live RocksDB.
+      # Uploads in their own volume, so backrest never reads the live RocksDB.
       - TUWUNEL_STORAGE_PROVIDER__MEDIA__LOCAL__BASE_PATH=/var/lib/tuwunel-media
-      # Serves /.well-known/matrix/client, and doubles as the issuer of the
-      # built-in OAuth server: Element X only signs in through that
-      # ("next-gen auth"), which Tuwunel then brokers to Authelia below.
+      # Also the issuer of the built-in OAuth server, which Element X signs in
+      # through and Tuwunel brokers to Authelia.
       - TUWUNEL_WELL_KNOWN__CLIENT=https://chat.${HOST_NAME:-pi.lan}
-      # A consistent online backup on SIGUSR2, which tuwunel-backup.timer sends
-      # before backrest's 04:00 snapshot - backrest has no Docker socket to send
-      # it itself, and a live RocksDB copied file by file is not a restorable
-      # database. RocksDB's BackupEngine shares unchanged files between backups,
-      # so the second one costs only what changed.
+      # An online backup on SIGUSR2, sent by tuwunel-backup.timer before
+      # backrest's snapshot: backrest has no Docker socket, and a live RocksDB
+      # copied file by file does not restore.
       - TUWUNEL_DATABASE_BACKUP_PATH=/var/lib/tuwunel-backups
       - TUWUNEL_DATABASE_BACKUPS_TO_KEEP=2
       - TUWUNEL_ADMIN_SIGNAL_EXECUTE=["server backup-database"]
-      # Accounts come from LLDAP through Authelia: password registration stays
-      # at its default (off), and an account is created on the first SSO
-      # sign-in. The first one also becomes the server admin
-      # (grant_admin_to_first_user), so the owner signs in first.
+      # Accounts are created on the first SSO sign-in (password registration
+      # stays off), and the first one becomes server admin: the owner signs in
+      # first.
       - TUWUNEL_IDENTITY_PROVIDER__0__BRAND=Authelia
-      # The provider's ID inside Tuwunel. Stored identities hang off it, so
-      # renaming it orphans every account.
+      # Stored identities hang off it: renaming it orphans every account.
       - TUWUNEL_IDENTITY_PROVIDER__0__CLIENT_ID=tuwunel
       - TUWUNEL_IDENTITY_PROVIDER__0__CLIENT_SECRET_FILE=/run/secrets/oidc_tuwunel_secret
       - TUWUNEL_IDENTITY_PROVIDER__0__ISSUER_URL=https://auth.${HOST_NAME:-pi.lan}
       - TUWUNEL_IDENTITY_PROVIDER__0__CALLBACK_URL=https://chat.${HOST_NAME:-pi.lan}/_matrix/client/unstable/login/sso/callback/tuwunel
       - TUWUNEL_IDENTITY_PROVIDER__0__DEFAULT=true
-      # The localpart is preferred_username, the LLDAP uid. Refuse the sign-in
-      # rather than hand out a random @xk3f... when that is not usable.
+      # Refuse the sign-in rather than invent a localpart when
+      # preferred_username is unusable.
       - TUWUNEL_IDENTITY_PROVIDER__0__UNIQUE_ID_FALLBACKS=false
-      # Out-of-band account creation (/_synapse/admin/v1/register, HMAC-signed),
-      # for the assistant's bot account - see scripts/tuwunel-pre-start.sh.
-      # Password registration above stays off, and Traefik routes no /_synapse
-      # path, so only a container on Tuwunel's own networks can call it.
+      # For the assistant's bot account (scripts/tuwunel-pre-start.sh). Traefik
+      # routes no /_synapse path, so only a container on Tuwunel's networks can
+      # call it.
       - TUWUNEL_REGISTRATION_SHARED_SECRET_FILE=/run/secrets/registration_shared_secret
     volumes:
-      # Named volumes on the NVMe rather than DATA_LOCATION binds, for the
-      # reason the Postgres cluster left DATA_LOCATION: it is a USB disk whose
-      # bridge acknowledges fsync before the platter has the data, which a
-      # power cut turns into a corrupt RocksDB.
       - tuwunel_data:/var/lib/tuwunel
       - tuwunel_media:/var/lib/tuwunel-media
       - tuwunel_backups:/var/lib/tuwunel-backups
@@ -730,12 +548,9 @@ services:
       - ${DATA_LOCATION:-./data}/tuwunel-secrets/registration_shared_secret:/run/secrets/registration_shared_secret:ro
     healthcheck:
       <<: *healthcheck-default
-      # The image's own probe: it reads the same environment and requests
-      # /_tuwunel/server_version on the configured listener.
       test: ["CMD", "tuwunel", "--health-check"]
-      # The image's own start period, for the same migration as
-      # stop_grace_period above: an `unhealthy` there invites the restart that
-      # kills it half-way.
+      # As long as stop_grace_period: an `unhealthy` mid-migration invites the
+      # restart that kills it.
       start_period: 30m
     labels:
       - "homepage.group=Communication"
@@ -745,25 +560,17 @@ services:
       - "homepage.description=Family chat (Matrix)"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
-      # Element Web owns chat.<HOST_NAME>; the Matrix API shares the hostname
-      # under the prefixes a client calls, and this longer rule wins on
-      # Traefik's rule-length priority. /.well-known/openid-configuration is
-      # the built-in OAuth server's discovery document at its issuer (the
-      # well_known.client URL): a client that finds the issuer through
-      # auth_issuer rather than auth_metadata fetches it there.
-      #
-      # No authelia@docker: Element and Element X hold a Matrix access token,
-      # not an Authelia session, and could not pass the portal on /_matrix.
-      # Tuwunel runs the OIDC flow against Authelia itself.
+      # The Matrix API shares chat.<HOST_NAME> with Element under the prefixes a
+      # client calls (the longer rule wins), plus the OAuth discovery document
+      # at its issuer. No authelia@docker: clients hold a Matrix token, not a
+      # session.
       - "traefik.http.routers.tuwunel.rule=Host(`chat.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/_matrix`) || PathPrefix(`/_tuwunel`) || PathPrefix(`/.well-known/matrix`) || Path(`/.well-known/openid-configuration`))"
       - "traefik.http.routers.tuwunel.entrypoints=websecure"
       - "traefik.http.routers.tuwunel.middlewares=lan@docker"
       - "traefik.http.routers.tuwunel.tls=true"
       - "traefik.http.services.tuwunel.loadbalancer.server.port=8008"
     cpu_shares: *cpu-prio-normal
-    # Measured on this host at v1.9.3: 38 MiB idle, 56 MiB after 300 messages,
-    # a 5 MiB upload and an initial sync. The ceiling is for the 128 MB block
-    # cache above filling as the history grows.
+    # The headroom is for the 128 MB block cache filling as history grows.
     mem_limit: 384m
     oom_score_adj: *oom-score-deprioritize
 
@@ -771,11 +578,11 @@ services:
     <<: *service-defaults
     image: ghcr.io/element-hq/element-web:v1.12.30@sha256:3e7dbd4424de9e11c812bc740acf2725b2abe66ea0d0802023b56fd85d3fa09a
     container_name: pi-element
-    # Started by the tuwunel profile too, like flaresolverr under prowlarr: a
-    # homeserver with no web client is not the chat anyone enabled.
+    # Started with tuwunel too: a homeserver with no web client is not the chat
+    # anyone enabled.
     profiles: ["element", "tuwunel", "openclaw", "all"]
-    # Static files behind nginx, which already runs as its own user. The entrypoint
-    # renders the nginx conf into conf.d on every start, hence that tmpfs.
+    # Static files behind an unprivileged nginx. The entrypoint renders conf.d
+    # on every start, hence its tmpfs.
     read_only: true
     cap_drop:
       - ALL
@@ -798,16 +605,14 @@ services:
       - ${DATA_LOCATION:-./data}/element/config.json:/app/config.json:ro
     healthcheck:
       <<: *healthcheck-light
-      # The image's own probe, pointed at the port set above.
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/config.json"]
     labels:
       - "homepage.description=Web client for the family chat"
       - "pi-pcloud.companion-of=tuwunel"
       - "traefik.enable=true"
       - "traefik.docker.network=frontend"
-      # Element sends no frame policy of its own, and frame-deny@docker's DENY
-      # would break it: the file download button and the Jitsi and widget pages
-      # are same-origin iframes. SAMEORIGIN keeps other sites from framing it.
+      # SAMEORIGIN, not frame-deny: downloads, Jitsi and widgets are same-origin
+      # iframes.
       - "traefik.http.middlewares.element-frame.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN"
       - "traefik.http.routers.element.rule=Host(`chat.${HOST_NAME:-pi.lan}`)"
       - "traefik.http.routers.element.entrypoints=websecure"
@@ -815,7 +620,6 @@ services:
       - "traefik.http.routers.element.tls=true"
       - "traefik.http.services.element.loadbalancer.server.port=8080"
     cpu_shares: *cpu-prio-batch
-    # Measured on this host at v1.12.29: 10 MiB serving the app.
     mem_limit: 64m
     oom_score_adj: *oom-score-deprioritize
 
@@ -859,15 +663,13 @@ services:
       - N8N_SMTP_SSL=${SMTP_SSL:-false}
       - N8N_RUNNERS_MODE=external
       - N8N_RUNNERS_BROKER_LISTEN_ADDRESS=0.0.0.0
-      # n8n has no separate telemetry listener and does not gate the endpoint,
-      # so this also makes n8n.$HOST_NAME/metrics readable by anything past
-      # lan@docker. N8N_METRICS_INCLUDE_* stay off, so no workflow names are in
-      # it. See docs/MONITORING.md#what-enabling-metrics-exposes.
+      # No separate listener and no gate: n8n.$HOST_NAME/metrics is readable
+      # past lan@docker. N8N_METRICS_INCLUDE_* stay off, so no workflow names.
+      # docs/MONITORING.md#what-enabling-metrics-exposes.
       - N8N_METRICS=true
       - NODE_OPTIONS=--max-old-space-size=512
-    # N8N_RUNNERS_AUTH_TOKEN, generated by scripts/n8n-pre-start.sh. The broker
-    # listens on 0.0.0.0 inside `frontend`, so this gates ~25 containers out of
-    # registering as a task runner - it must never fall back to a default.
+    # N8N_RUNNERS_AUTH_TOKEN, from scripts/n8n-pre-start.sh: the broker listens
+    # on frontend, and this keeps other containers from registering as runners.
     env_file:
       - path: ./config/n8n/n8n.env
         required: false
@@ -881,7 +683,7 @@ services:
       - traefik
     healthcheck:
       <<: *healthcheck-default
-      # Explicit IPv4 loopback: localhost resolves to ::1 here and the dial fails.
+      # 127.0.0.1, not localhost, which resolves to ::1 here.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5678/healthz"]
     cpu_shares: *cpu-prio-normal
     mem_limit: 768m
@@ -927,9 +729,8 @@ services:
       - 9090
     environment:
       - TZ=${TIMEZONE:-Europe/Paris}
-      # Deliberately not NTFY_ENABLE_METRICS, which would add /metrics to the
-      # routed :80. Here and not in ntfy.env, which ntfy-pre-start.sh rewrites
-      # whole.
+      # Not NTFY_ENABLE_METRICS, which would put /metrics on the routed :80. Set
+      # here because ntfy-pre-start.sh rewrites the env file whole.
       - NTFY_METRICS_LISTEN_HTTP=:9090
       - NTFY_BASE_URL=https://ntfy.${HOST_NAME:-pi.lan}
       - NTFY_BEHIND_PROXY=true
@@ -937,23 +738,11 @@ services:
       - NTFY_AUTH_FILE=/var/lib/ntfy/user.db
       - NTFY_ENABLE_LOGIN=true
       - NTFY_AUTH_DEFAULT_ACCESS=deny-all
-      # Internal publishers are tierless, so ntfy keys them on `ip:<container
-      # address>` and hands each the stock bucket - 60 requests, then one per 5s.
-      # A burst that outruns it is refused with 42901 whatever it carries:
-      # measured 2026-09, a flood of spurious Prowlarr grabs took 105 unrelated
-      # messages down with it, health alerts included.
-      #
-      # The whole /16 rather than today's segments: the `ntfy` network has no
-      # ipam block and takes whatever the daemon pool hands it, so a narrower
-      # range would stop matching the first time it is recreated, silently.
-      #
-      # This does not exempt the internet despite covering Traefik's address:
-      # with NTFY_BEHIND_PROXY the limiter keys on X-Forwarded-For, and Traefik
-      # sets no forwardedHeaders.trustedIPs, so it overwrites a client-supplied
-      # header rather than believing it.
-      #
-      # Typos are silent - an unparseable entry is one startup WARN and nothing
-      # else, so read the log rather than assume.
+      # Internal publishers share ntfy's stock per-IP bucket, and a burst past
+      # it drops messages, health alerts included. The whole /16: the `ntfy`
+      # network takes its subnet from the daemon pool. The internet stays
+      # limited: behind the proxy the limiter keys on X-Forwarded-For, which
+      # Traefik overwrites. A typo here is only a startup WARN.
       - NTFY_VISITOR_REQUEST_LIMIT_EXEMPT_HOSTS=172.30.0.0/16
       - NTFY_SMTP_SENDER_ADDR=${SMTP_HOST:-localhost}:${SMTP_PORT:-587}
       - NTFY_SMTP_SENDER_USER=${SMTP_USERNAME:-}
@@ -973,8 +762,7 @@ services:
       - "homepage.description=Push notifications"
       - "homepage.widget.type=ntfy"
       - "homepage.widget.url=http://pi-ntfy"
-      # The widget reads a single topic; monitoring is the one worth a glance on
-      # the dashboard. downloads and security are phone-only topics.
+      # The widget reads one topic; downloads and security are phone-only.
       - "homepage.widget.topic=monitoring"
       - "homepage.widget.username={{HOMEPAGE_VAR_ADMIN_USER}}"
       - "homepage.widget.password={{HOMEPAGE_VAR_ADMIN_PASSWORD}}"
