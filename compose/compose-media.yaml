@@ -562,11 +562,13 @@ services:
       # from scratch. It bounds the Go heap only, as SQLite allocates through
       # cgo: so it is mem_limit minus the SQLite budget below and some page
       # cache.
-      - GOMEMLIMIT=512MiB
-      # max_conns is a memory setting: upstream forces a 64 MB page cache on
-      # every connection, held in cgo where GOMEMLIMIT cannot see it, and pools
-      # 8 by default. Two serve as fast as four: `cpus` is the bottleneck.
-      - STREMTHRU_DATABASE_URI=sqlite://./data/stremthru.db?max_conns=2
+      - GOMEMLIMIT=768MiB
+      # max_conns trades memory for concurrency: upstream forces a 64 MB page
+      # cache on every connection, held in cgo where GOMEMLIMIT cannot see it
+      # (~135 MiB each once warm), and pools 8 by default. At 2, a mapping scan
+      # and one large write left no connection for anyone else, and four
+      # concurrent viewers timed out; at 4 none did.
+      - STREMTHRU_DATABASE_URI=sqlite://./data/stremthru.db?max_conns=4
       # An allowlist: naming any feature disables every default-on one left out,
       # so dmm_hashlist and imdb_title must be listed. Naming a default-disabled
       # one bare (`anime`, `stremio_p2p`) is fatal at boot, and `+x` enables
@@ -619,9 +621,10 @@ services:
     # drain took all four cores.
     cpus: 1.5
     cpu_shares: *cpu-prio-batch
-    # Two SQLite connections hold ~600-700 MiB of anonymous memory under load;
-    # the rest is page cache for the multi-GB database.
-    mem_limit: 1g
+    # A 53k-torrent mapping catch-up took two connections to 1.25 GiB of
+    # anonymous memory, and each extra one adds ~135 MiB. The rest is page cache
+    # for the multi-GB database, which the mapping worker rescans every batch.
+    mem_limit: 2g
     oom_score_adj: *oom-score-deprioritize
 
   prowlarr:
