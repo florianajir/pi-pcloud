@@ -2,7 +2,7 @@
 
 Eight services share one PostgreSQL cluster: `immich`, `nextcloud`, `authelia`, `lldap`, `open-webui`, `vaultwarden`, `freshrss`, `forgejo`. A major version bump therefore moves all eight at once, or none of them.
 
-It is a **dump and restore**, not `pg_upgrade`. The `ghcr.io/immich-app/postgres` image ships exactly one major's binaries and `pg_upgrade` needs both, so it would take a custom image carrying two Postgres builds plus VectorChord. The dump also rebuilds the vchord indexes at the new extension version, which is the rebuild the VectorChord release notes ask for after any vchord change anyway.
+It is a **dump and restore**, not `pg_upgrade`: the `ghcr.io/immich-app/postgres` image ships exactly one major's binaries, and `pg_upgrade` needs both. The restore also rebuilds the vchord indexes at the new extension version, which VectorChord asks for after any vchord change anyway.
 
 `scripts/pg-major-upgrade.sh` does the whole thing, wrapped as `make pg-upgrade`. This page is the procedure around it: what to check first, and what to look at afterwards.
 
@@ -10,41 +10,38 @@ It is a **dump and restore**, not `pg_upgrade`. The `ghcr.io/immich-app/postgres
 
 **Never start the stack on the new compose file before the migration has run.**
 
-The data directory moves with the major (see below), so a `make start` on the new checkout finds nothing at the new path, initialises an empty cluster, and `config/postgres/init-databases.sh` obligingly creates all eight roles and all eight *empty* databases. Every service then connects successfully — to nothing. Nextcloud reports itself uninstalled, Immich starts re-running its migrations, and both begin writing into the empty cluster. The old data is still intact, but you are now merging two divergent clusters instead of doing a migration.
+The data directory moves with the major (see below), so a `make start` on the new checkout finds nothing at the new path and initialises an empty cluster, in which `config/postgres/init-databases.sh` creates all eight roles and all eight *empty* databases. Every service then connects successfully — to nothing: Nextcloud reports itself uninstalled, Immich re-runs its migrations, and both start writing. The old data is still intact, but you are now merging two divergent clusters instead of migrating one.
 
-Between checking out the new compose file and finishing `make pg-upgrade`, the only commands that are safe are the ones on this page. Not `make start`, not `make update`, not `make restart`, and not the `pi-pcloud` service starting on its own after a reboot — if the host reboots mid-procedure, run the migration before doing anything else.
+Between checking out the new compose file and finishing `make pg-upgrade`, the only safe commands are the ones on this page. Not `make start`, not `make update`, not `make restart`, and not the `pi-pcloud` service starting on its own after a reboot — if the host reboots mid-procedure, run the migration before doing anything else.
 
 ## Why the data path changes
 
-From Postgres 18 the upstream image keeps `PGDATA` at `/var/lib/postgresql/<major>/docker` and **refuses to start** with anything mounted at `/var/lib/postgresql/data`. So the mount point became the parent directory and the host path carries the major:
+The upstream image keeps `PGDATA` at `/var/lib/postgresql/<major>/docker` and refuses to start with anything mounted at `/var/lib/postgresql/data`. So the mount point is the parent directory, and the host path carries the major:
 
 ```yaml
-# before
-- ${DATA_LOCATION:-./data}/postgres:/var/lib/postgresql/data
-# after
 - ${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres18:/var/lib/postgresql
 ```
 
-`POSTGRES_DATA_LOCATION` is empty on a default install, so unless you have set it the paths below are the ones under `DATA_LOCATION` — that is what the `:-` fallback means, and it is written out in full everywhere a command here would otherwise expand an unset variable to nothing.
+A new major lands in a new directory beside the current one, and the old cluster is **never written to** by the upgrade. That is the rollback: reverting the image and volume lines in `compose/compose-core.yaml` puts you back exactly where you started.
 
-That is not just a compatibility detail — it is the rollback. The old cluster at `${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres` is **never written to** by the upgrade, so reverting two lines in `compose/compose-core.yaml` puts you back exactly where you started.
+`POSTGRES_DATA_LOCATION` is empty on a default install, so the cluster sits under `DATA_LOCATION`. The commands below read both values out of `.env` rather than relying on your shell, where neither is set.
 
 ## Pre-flight
 
-1. **Confirm the target image supports every service.** Immich is the binding constraint: it declares a `POSTGRES_VERSION_RANGE` and a required vchord range in its release notes, and refuses to start outside them. The others follow the Postgres project's own support window.
+1. **Confirm the target image supports every service.** Immich is the binding constraint: its release notes declare a `POSTGRES_VERSION_RANGE` and a required vchord range, and it refuses to start outside them. The others follow the Postgres project's own support window.
 
-2. **Check the vchord upgrade path exists.** The dump's `CREATE EXTENSION` lines carry no version, so the restore installs vchord at the new image's `default_version` directly and no `ALTER EXTENSION` is needed as part of the cutover. Confirm the target ships the extension at all:
+2. **Check the target ships vchord.** The dump's `CREATE EXTENSION` lines carry no version, so the restore installs vchord at the new image's `default_version` directly — no `ALTER EXTENSION` is needed during the cutover. Confirm the extension is there:
 
    ```sh
    docker run --rm --entrypoint sh <target-image> \
      -c 'cat /usr/share/postgresql/*/extension/vchord.control'
    ```
 
-   `vchord.control` sets `superuser = true`, which is why the `immich` role — deliberately not a superuser — cannot install or update it itself. `scripts/postgres-bootstrap.sh` runs `ALTER EXTENSION ... UPDATE` as `postgres` on every boot, so later vchord bumps *within* a major (where the data directory is reused) are hands-off. Immich's own `pg_dumpall`-based backup is off in `config/immich/config.yaml` for the same reason; leave it off.
+   `vchord.control` sets `superuser = true`, so the `immich` role — deliberately not a superuser — cannot install or update it. `scripts/postgres-bootstrap.sh` runs `ALTER EXTENSION ... UPDATE` as `postgres` on every boot, which makes vchord bumps *within* a major hands-off. Immich's own `pg_dumpall`-based backup is off in `config/immich/config.yaml` for the same reason; leave it off.
 
 3. **Bump the Backrest client in the same change.** `config/backrest/Dockerfile` pins `postgresqlNN-client`, and `scripts/db-backup.sh` dumps through it. A client older than the server refuses to dump at all, so an unbumped Backrest silently stops backing up all eight databases the night after the cutover.
 
-4. **Check free space.** The script wants 3× the cluster size and refuses to start below it: the dumps are roughly one copy and the new cluster another.
+4. **Check free space.** The script refuses to start without 3× the cluster size when the dumps (on `DATA_LOCATION`) and the new cluster share a filesystem, or 2× on each when `POSTGRES_DATA_LOCATION` puts them on different ones.
 
 5. **Rehearse first.** `scripts/pg-major-upgrade.sh --to <image> --rehearse`, with `ENV_FILE` pointing at a scratch `.env` whose `DATA_LOCATION` and `POSTGRES_DATA_LOCATION` are spare disk, runs the entire dump/restore/verify against the live cluster **without stopping anything** — no service, not Postgres itself — and refuses `--apply`. It proves the migration on your real data for the cost of a read.
 
@@ -52,7 +49,7 @@ That is not just a compatibility detail — it is the rollback. The old cluster 
 
 ## The cutover
 
-Everything below runs from the repository root with the stack **up** — the script dumps from the live cluster, and stops the stack itself when it is ready to.
+Everything below runs from the repository root with the stack **up** — the script dumps from the live cluster, and stops what it needs to when it is ready.
 
 ```sh
 # 1. The new compose file, WITHOUT starting anything.
@@ -73,11 +70,11 @@ docker exec pi-postgres psql -U postgres -Atc 'SHOW server_version;'
 make pg-upgrade to=$(grep -m1 'image: ghcr.io/immich-app/postgres:' compose/compose-core.yaml | awk '{print $2}')
 ```
 
-`make pg-upgrade` then, in order: pulls the target image, **stops only the Postgres-backed services** (immich, nextcloud, authelia, lldap, open-webui, vaultwarden, freshrss, forgejo, plus backrest so no scheduled dump fires mid-window), dumps roles and all eight databases, counts every row in every table, stops Postgres, starts a throwaway container on the new data directory, restores into it, runs `ANALYZE` per database so the new cluster starts with planner statistics, **re-counts every table and compares the two lists whole**, and refuses to touch `compose/compose-core.yaml` if they differ at all. On a mismatch it stops with the old cluster untouched and the new one left in place for inspection.
+`make pg-upgrade` then, in order: pulls the target image, **stops only the Postgres-backed services** (plus Backrest, so no scheduled dump fires mid-window), dumps roles and all eight databases, counts every row in every table, stops Postgres, starts a throwaway container on the new data directory, restores into it, runs `ANALYZE` per database, **re-counts every table and compares the two lists whole**, and refuses to touch `compose/compose-core.yaml` if they differ at all. On a mismatch it stops with the old cluster untouched and the new one left in place for inspection.
 
-**The DNS/VPN path never stops.** Pi-hole, unbound, headscale and tailscale use no Postgres (headscale is SQLite), so devices on the tailnet keep resolving and routing through the whole cutover. What the window does cost: the stopped services themselves are unreachable, and SSO logins fail while Authelia is down — established Tailscale connections and plain internet access are unaffected. The writers stop *before* the dump on purpose: anything written between the dump and the switch would otherwise be silently absent from the new cluster.
+**The DNS/VPN path never stops.** Pi-hole, unbound, headscale and tailscale use no Postgres, so tailnet devices keep resolving and routing through the cutover. What the window costs: the stopped services are unreachable, and SSO logins fail while Authelia is down. The writers stop *before* the dump so nothing written in between goes missing from the new cluster.
 
-The counts are exact `count(*)`, not `pg_stat_user_tables.n_live_tup`. That estimate is only refreshed on (auto)analyze, and a table too small to trip the autovacuum threshold can carry a number that was never right — on this stack `lldap.groups` reported 0 against 4 real rows. Compared against a freshly restored cluster, whose counts *are* accurate, that reads as data loss on a migration that was perfect.
+The counts are exact `count(*)`, not the `pg_stat_user_tables.n_live_tup` estimate, which can be stale on small tables and would read as data loss on a perfect migration.
 
 ```sh
 # 5. Rebuild Backrest. `up -d` compares image *names*, and pi-backrest:local
@@ -91,9 +88,9 @@ make start
 
 ### What the restore does not carry over
 
-`pg_dumpall --roles-only` reproduces the source cluster's role attributes faithfully, **including any `SUPERUSER`**. An install predating the current `init-databases.sh` created the `immich` role as a superuser, and `init-databases.sh` cannot correct it: it only ever runs on a fresh `PGDATA`, from `docker-entrypoint-initdb.d`, which a restored cluster never is.
+`pg_dumpall --roles-only` reproduces the source cluster's role attributes faithfully, **including any `SUPERUSER`**, and `init-databases.sh` cannot correct them: it only runs on a fresh `PGDATA`, from `docker-entrypoint-initdb.d`, which a restored cluster never is.
 
-`scripts/postgres-bootstrap.sh` asserts it instead, on every boot, so this is handled — but verify rather than assume:
+`scripts/postgres-bootstrap.sh` asserts on every boot that `immich` is not a superuser — but verify rather than assume:
 
 ```sh
 docker exec pi-postgres psql -U postgres -Atc \
@@ -106,9 +103,9 @@ If it reads `t`, the bootstrap hook did not run (check `make logs`) and the fix 
 docker exec pi-postgres psql -U postgres -c 'ALTER ROLE immich WITH NOSUPERUSER;'
 ```
 
-The same hook creates the role and database of any service the source cluster did not have, for the same reason: a service added to the stack after that cluster was initialised is never covered by `init-databases.sh` either. It only ever creates, so a password rotated since is left alone.
+The same hook creates the role and database of any service the source cluster lacked, since `init-databases.sh` never covers a service added after the cluster was initialised. It only ever creates, so a password rotated since is left alone.
 
-The same applies to the extension versions, for a cluster that came from a restore rather than this script:
+Extension versions need the same check on a cluster that came from a restore rather than this script:
 
 ```sh
 docker exec pi-postgres psql -U postgres -d immich -Atc \
@@ -134,17 +131,13 @@ Do these in order — each one exercises a different failure mode, and the first
 | 8 | Backups still work | Run the Backrest plan by hand and check all eight `db-backup.sh` hooks succeed | The client/server major mismatch from step 5 of the cutover |
 | 9 | Row counts | Already verified by the script; `--keep-dumps` leaves `counts.before`/`counts.after` for a second look | — |
 
-Only once all nine pass:
+Only once all nine pass, delete the old cluster. It is the rollback and cannot be regenerated, so keep it until you are sure — it costs disk, not correctness:
 
 ```sh
-# The old cluster is the rollback. Keep it until you are sure — it costs disk,
-# not correctness, and there is no way to regenerate it afterwards.
-#
-# Neither variable is exported in your shell, so read them out of .env first:
-# pasted bare, ${POSTGRES_DATA_LOCATION} is empty on a default install and this
-# would expand to /postgres, delete nothing, and leave the real cluster behind.
-set -a; . ./.env; set +a
-sudo rm -rf "${POSTGRES_DATA_LOCATION:-${DATA_LOCATION:-./data}}/postgres"
+old=18   # the major you upgraded from
+data=$(sed -n 's/^DATA_LOCATION=//p' .env)
+pgdata=$(sed -n 's/^POSTGRES_DATA_LOCATION=//p' .env)
+sudo rm -rf "${pgdata:-${data:-./data}}/postgres$old"
 ```
 
 ## Rollback
@@ -162,14 +155,9 @@ Anything written to the *new* cluster since the cutover is lost by rolling back 
 
 ## Moving the cluster to another disk
 
-Unrelated to major versions, and much simpler: `POSTGRES_DATA_LOCATION` decides
-which disk the cluster sits on, defaulting to `DATA_LOCATION`. It is worth
-setting when `DATA_LOCATION` is a large external or rotational disk — see
-`docs/ARCHITECTURE.md` for why a database wants different storage from media.
+Unrelated to major versions, and much simpler: `POSTGRES_DATA_LOCATION` decides which disk the cluster sits on, defaulting to `DATA_LOCATION`. Set it when `DATA_LOCATION` is a large external or rotational disk — see [Architecture](ARCHITECTURE.md) for why a database wants different storage from media.
 
-There is deliberately no script for this. It is a one-off per host, and a copy
-that silently loses file ownership or a sparse file is worse than no automation
-at all.
+There is deliberately no script for this: it is a one-off per host, and the copy must preserve numeric ownership exactly.
 
 ```sh
 # 1. Stop everything. The cluster must not be running while it is copied.
@@ -178,10 +166,10 @@ make stop
 # 2. Copy, preserving numeric uids: PGDATA is 999:0 mode 0700 inside the
 #    container, and a uid that maps to a different name on the host (or no
 #    name at all) makes -a without --numeric-ids silently rewrite it.
-set -a; . ./.env; set +a   # DATA_LOCATION is in .env, not in your shell
+data=$(sed -n 's/^DATA_LOCATION=//p' .env)
 sudo mkdir -p /new/disk
 sudo rsync -aHAX --numeric-ids --info=progress2 \
-  "${DATA_LOCATION:-./data}/postgres18" /new/disk/
+  "${data:-./data}/postgres18" /new/disk/
 
 # 3. Point the stack at it, then start.
 #    POSTGRES_DATA_LOCATION is a *root*: the cluster lands in
@@ -202,13 +190,8 @@ docker exec pi-postgres psql -U postgres -Atc \
     WHERE NOT datistemplate ORDER BY 1;'
 ```
 
-Then check the services, at minimum a login through Authelia (which proves
-Postgres, Redis and lldap together) and one Immich photo.
+Then check the services: at minimum a login through Authelia (which proves Postgres, Redis and lldap together) and one Immich photo.
 
-Keep the old directory until you are satisfied; deleting it is the last step,
-not part of the move. While it exists, rollback is emptying
-`POSTGRES_DATA_LOCATION` in `.env` and running `make start`.
+Keep the old directory until you are satisfied; deleting it is the last step, not part of the move. While it exists, rollback is emptying `POSTGRES_DATA_LOCATION` in `.env` and running `make start`.
 
-If the destination is rotational, set `DB_STORAGE_TYPE: HDD` on the postgres
-service in `compose/compose-core.yaml` — the image defaults to `SSD` and tunes
-`effective_io_concurrency` and `random_page_cost` for flash.
+If the destination is rotational, set `DB_STORAGE_TYPE: HDD` on the postgres service in `compose/compose-core.yaml` — the image defaults to `SSD` and tunes `effective_io_concurrency` and `random_page_cost` for flash.

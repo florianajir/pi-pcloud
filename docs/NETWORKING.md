@@ -30,7 +30,7 @@ sequenceDiagram
 
 `dns_internal` is an internal bridge with no gateway; Unbound's own internet access for root-server queries goes through the separate `egress_unbound` network, of which it is the only member. No other container can reach Unbound, so nothing can bypass Pi-hole's filtering.
 
-**Unbound validates DNSSEC.** The bind mount replaces the image's entire `unbound.conf`, which is where its own trust-anchor line lived — so before this the resolver did not validate at all, and the `harden-dnssec-stripped: yes` a few lines below it was inert. `auto-trust-anchor-file: "/opt/unbound/etc/unbound/var/root.key"` restores it, and `auto-` rather than a static `trust-anchor-file` so RFC 5011 can roll the key: `var/` is owned by `_unbound`, the user the daemon drops to, so it can rewrite the file. `val-clean-additional: yes` drops unvalidated additional-section records rather than passing them through. A bogus domain now answers SERVFAIL with no address.
+**Unbound validates DNSSEC.** The bind-mounted `config/unbound/unbound.conf` replaces the image's whole configuration, trust anchor included — without one Unbound does not validate at all and `harden-dnssec-stripped: yes` is inert. The anchor comes from `config/unbound/dnssec.conf`: `auto-trust-anchor-file` rather than a static `trust-anchor-file`, so RFC 5011 can roll the key (`var/` is owned by `_unbound`, the user the daemon drops to, so it can rewrite the file). `val-clean-additional: yes` drops unvalidated additional-section records rather than passing them through. A bogus domain answers SERVFAIL with no address.
 
 ## Local names
 
@@ -84,33 +84,25 @@ private address is not routable from outside anyway.
 **Never do this on the wildcard.** `headscale.<HOST_NAME>` must keep resolving to the WAN address —
 it is how remote nodes reach the control plane to enrol and reconnect from outside the tailnet.
 
-**Nor on `aiostreams.<HOST_NAME>` or `aiometadata.<HOST_NAME>`.** Each carries a second,
-`lan@docker`-free router over the addon protocol and its playback path —
-`aiostreams-public@docker` on `/stremio/<uuid>/<encryptedPassword>/` plus
-`/api/v1/debrid/playback/`, `aiometadata-public@docker` on `/stremio/<uuid>/`.
-`stremthru.<HOST_NAME>` is **not** in this list, despite also carrying a second router:
-`stremthru-addon@docker` drops `authelia@docker` so AIOStreams can fetch the Torz manifest
-server-side, but it keeps `lan@docker` — AIOStreams reaches it over `frontend`, and it is
-AIOStreams, not a client, that resolves those results. AIOStreams and AIOMetadata each carry a *third*
-`lan@docker`-free router for the paths that cost nothing upstream and only want a looser limiter:
-`aiostreams-catalog@docker` (catalogues, metadata, the manifest, and `/static/` — the small .mp4
-status clips the playback route redirects to) and `aiometadata-art@docker` (artwork). All of it is
-published precisely so an addon installed on a Stremio
-account keeps resolving off-tailnet; a specific record aimed at `HOST_LAN_IP` hands the internet a
-private address and silently un-publishes both. The record is unnecessary here anyway: a cast
-receiver that hairpins to the WAN address now reaches the addon endpoints through the public router
-instead of the `403` this section exists to avoid. Only the configure, dashboard and admin paths stay
-LAN-only, and none of them is something a TV opens.
+**Nor on `aiostreams.<HOST_NAME>` or `aiometadata.<HOST_NAME>`.** Each has `lan@docker`-free
+routers for the addon protocol, the playback path and the catalogue and artwork paths (see
+[Security](SECURITY.md#per-service-protection)), so an addon installed on a Stremio account keeps
+resolving off-tailnet. A specific record aimed at `HOST_LAN_IP` hands the internet a private
+address and silently un-publishes them. A cast receiver does not need one anyway: hairpinned to the
+WAN address, it reaches the addon endpoints through those public routers, and only the configure,
+dashboard and admin paths stay LAN-only — none of which a TV opens. `stremthru.<HOST_NAME>` is not
+affected: its addon router keeps `lan@docker`, because only AIOStreams calls it, server-side over
+`frontend`.
 
 Verify the router does not strip private answers (some resolvers apply DNS rebinding protection):
 `dig @<router> <service>.<HOST_NAME> +short` must return `<HOST_LAN_IP>`.
 
 ### Routers that cannot set the DHCP DNS option
 
-Some ISP routers — an Orange Livebox 7, measured — expose no DHCP DNS field at all, so the whole
-LAN keeps resolving through the router. Every client then lands on the WAN address and is refused
-by `lan@docker`: a bare `403` with body `Forbidden`, no login redirect, on every gated service at
-once. The middleware runs before `authelia@docker`, so this looks nothing like an auth problem.
+Some ISP routers expose no DHCP DNS field at all, so the whole LAN keeps resolving through the
+router. Every client then lands on the WAN address and is refused by `lan@docker`: a bare `403`
+with body `Forbidden`, no login redirect, on every gated service at once. The middleware runs
+before `authelia@docker`, so this looks nothing like an auth problem.
 
 Two ways to tell it apart from a broken app, both from the Pi:
 
@@ -133,28 +125,17 @@ resolver is covered at once with nothing to configure per device:
 WAN_HAIRPIN_IP=203.0.113.7/32
 ```
 
-It admits LAN clients only, **provided the address is yours alone**. Hairpinning is what rewrites the
-source to the WAN address, and only a connection that left the LAN gets hairpinned; a request that
-really comes from the internet arrives with its own source, which the allowlist still refuses. That
-argument fails on a CGNAT or otherwise shared line, where the same address fronts other subscribers
-— so `scripts/wan-allowlist-sync.sh` refuses to allowlist anything in CGNAT or private space.
+It admits LAN clients only, **provided the address is yours alone**: only a connection that left
+the LAN gets hairpinned, and a request that really comes from the internet arrives with its own
+source, which the allowlist still refuses. That fails on a CGNAT or otherwise shared line, so
+`scripts/wan-allowlist-sync.sh` refuses to allowlist anything in CGNAT or private space. The full
+risk assessment is in [Security → Accepted risks](SECURITY.md#accepted-risks).
 
-What the entry does do is expire: once the line's address moves, it keeps admitting whoever
-inherits the old one. So that script keeps the value current on a 15-minute
-`pi-pcloud-wan-allowlist.timer` installed by `make install`. Two things about it are deliberate:
-
-- **The address comes from `tailscale netcheck`,** a STUN observation of what the line presents
-  *now*. `ddns-updater`'s state file is the obvious source and the wrong one: it records what was
-  last *published*, and is only rewritten when that changes, so it goes on confirming a stale value
-  forever once publishing has broken.
-- **The check is against the running container's label,** not against `.env`. `.env` is what the
-  next `up` will render, not what Traefik is enforcing; keying off it alone means one failed
-  `compose` call short-circuits every later run and leaves the stale range live. For the same
-  reason it is `up` and not `restart` — Traefik reads middleware definitions from container labels,
-  which are fixed at creation.
-
-Measured cadence on the line this was written for is about twice a year, so the timer is insurance
-rather than a hot path — and it is why the value is best left to the timer rather than hand-edited.
+The entry expires with the line's address: once it moves, it keeps admitting whoever inherits the
+old one. So that script keeps the value current on a 15-minute `pi-pcloud-wan-allowlist.timer`
+installed by `make install`, reading the current address from `tailscale netcheck` and recreating
+Traefik when it changes (Traefik reads middleware definitions from container labels, which are
+fixed at creation). Leave the value to the timer rather than editing it by hand.
 
 If you would rather not allowlist the public address at all, the per-device fallback is a `hosts`
 entry per gated hostname — `/etc/hosts` on Linux and macOS, `%SystemRoot%\System32\drivers\etc\hosts` on Windows:
@@ -179,10 +160,8 @@ redirect on the local path.
 **Correcting DNS is not enough on its own.** Because one certificate covers every hostname in the
 stack, an HTTP/2 client that already holds a connection to the WAN address *coalesces* new
 hostnames onto it and performs no DNS lookup at all. A dashboard left open keeps that connection
-warm indefinitely, so it never re-resolves. Measured on Orion (WebKit): a single stale connection
-kept serving `homepage`, `immich`, `kavita`, `nextcloud` and `qbittorrent` — all 403 — while Chrome
-on the same machine, having resolved afresh, got 200. Quit the browser fully after editing `hosts`;
-closing the tab is not enough.
+warm indefinitely, so it never re-resolves and keeps getting `403` on every service. Quit the
+browser fully after editing `hosts`; closing the tab is not enough.
 
 ### IPv6
 
@@ -198,46 +177,38 @@ dial `localhost` can start resolving `::1` against a v4-only listener, and `inte
 Nextcloud's `TRUSTED_PROXIES` are single `/32`s that would stop matching. So Traefik joins one extra
 network, `ingress6`, of which it is the sole member.
 
-**What that buys.** With a v6 subnet on the network Docker programs an `ip6tables` DNAT rule instead
-of falling back to userland `docker-proxy`, so the client's real address survives. Measured here:
+**What that buys.** With a v6 subnet on the network, Docker programs an `ip6tables` DNAT rule and
+the client's real address reaches Traefik. Without one, a `[::]` publish falls back to userland
+`docker-proxy`, which presents every IPv6 client as a Docker gateway address — inside
+`ALLOW_IP_RANGES` (`172.30.0.0/16`), so every gated route would admit it and only the router's IPv6
+firewall would stand in the way. Hence every port is written out per family (`"0.0.0.0:443:443"`
+*and* `"[::]:443:443"`) rather than left bare.
 
-| | logged `ClientHost` | verdict on a gated route |
-|---|---|---|
-| `[::]` served by docker-proxy | `172.30.12.1` (a Docker gateway) | `302` — **admitted**, `ALLOW_IP_RANGES` contains `172.30.0.0/16` |
-| DNAT to `ingress6` | `2001:db8:1:200:…` (the caller) | `403` off-prefix, `302` from the LAN prefix |
-
-Only the router's IPv6 firewall was holding the first row shut. Hence every port is written out per
-family (`"0.0.0.0:443:443"` *and* `"[::]:443:443"`) rather than left bare.
-
-**One daemon key, and no sysctl.** Both IPv6 subnets are pinned, so no IPv6 `default-address-pools`
-entry is needed. `install.sh` does write `"ip6tables": true` — it has been the default since Docker
-27, but the `[::]` publishes rest on it, so it is stated rather than inherited; on a host that
-already has a `daemon.json` the installer warns instead of rewriting it, and warns too when the
-running daemon is old enough to default it off. `net.ipv6.conf.all.forwarding` is already set for
+**One daemon key, and no sysctl.** Both IPv6 subnets are pinned, so no IPv6
+`default-address-pools` entry is needed. `install.sh` does write `"ip6tables": true`, because the
+`[::]` publishes rest on it — see [Security → Network segmentation](SECURITY.md#network-segmentation)
+for how it treats an existing `daemon.json`. `net.ipv6.conf.all.forwarding` is already set for
 Tailscale, and NetworkManager processes Router Advertisements in user space, so the RA-derived
-address is renewed regardless of the kernel's `accept_ra` — setting it would be a knob nothing
-reads.
+address is renewed regardless of the kernel's `accept_ra`.
 
 **Addressing.** Both subnets are ULAs (`fd00::/8` — the counterpart of `172.30.0.0/16`) mirroring
 the IPv4 numbering: `172.30.15.0/24` → `fd00:30:15::/64`, `172.31.242.0/24` → `fd00:31:242::/64`.
-RFC 4193 asks for a random Global ID; mnemonic numbering is chosen instead because these prefixes
-have to be read in an allowlist. The asymmetry is preserved: `egress_*` sits in `fd00:31:*`, outside
-the allowlist, as its `172.31.*` sits outside `172.30.0.0/16`.
+Mnemonic numbering is chosen over RFC 4193's random Global ID because these prefixes have to be
+read in an allowlist. The asymmetry is preserved: `egress_*` sits in `fd00:31:*`, outside the
+allowlist, as its `172.31.*` sits outside `172.30.0.0/16`.
 
 **The allowlist gains two kinds of entry.** Two fixed members in `ALLOW_IP_RANGES` — `::1/128` and
 `fd7a:115c:a1e0::/48`, the counterparts of `127.0.0.1/32` and `100.64.0.0/10` — and
 `HOST_LAN_SUBNET6`, appended separately because the ISP owns it and it changes when the line
-reconnects.
+reconnects. `wan-allowlist-sync.sh` reads it off the LAN interface's routing table on the same
+15-minute timer as `WAN_HAIRPIN_IP`, accepting only a global unicast (`2000::/3`) prefix between
+`/48` and `/64`. It admits what `192.168.1.0/24` admits: every device on your LAN.
 
-`172.30.0.0/16` gets **no** IPv6 counterpart, deliberately. Traefik is the only container with an
-IPv6 address and it never calls itself, so the sole source that could arrive from `fd00:30:15::/64`
-is the bridge gateway — which is precisely what `docker-proxy` substitutes when the IPv6 DNAT is
-missing. Allowlisting it would turn that failure into an open door rather than a `403`. The cost is
-that a request to `[::1]` is refused where `127.0.0.1` is admitted; nothing in the stack makes one. `wan-allowlist-sync.sh` reads it off the LAN interface's routing table on
-the same 15-minute timer as `WAN_HAIRPIN_IP`, refusing anything that is not global unicast
-(`2000::/3`) or longer than a `/64`. It admits what `192.168.1.0/24` admits: every device on your
-LAN. A source address cannot be forged through a TCP handshake, so only devices actually on the link
-present one from that range.
+`172.30.0.0/16` gets **no** IPv6 counterpart, deliberately: the only source that could arrive from
+`fd00:30:15::/64` is the bridge gateway that `docker-proxy` substitutes when the IPv6 DNAT is
+missing, so allowlisting it would turn that failure into an open door rather than a `403`. The cost
+is that a request to `[::1]` is refused where `127.0.0.1` is admitted; nothing in the stack makes
+one. Both trade-offs are argued in [Security → Accepted risks](SECURITY.md#accepted-risks).
 
 **The hairpin problem does not exist here.** With no NAT a LAN client reaches the Pi's global
 address over the local link, so there is nothing to SNAT and no `403`. `WAN_HAIRPIN_IP` is IPv4 only.
@@ -246,21 +217,21 @@ address over the local link, so there is nothing to SNAT and no `403`. `WAN_HAIR
 
 - **Pi-hole's `:53`.** `FTLCONF_dns_listeningMode` is `all`, so FTL answers any source it can see,
   and IPv6 has no NAT in front of it: an open resolver as soon as the router's firewall is opened
-  past `:443`. No client could use it anyway — the router advertises **itself** as the IPv6 resolver
-  (RDNSS) and cannot be told otherwise (measured on iOS, where the manual per-network DNS entry did
-  not displace it), and Headscale pushes an IPv4 nameserver. Filtering ads over IPv6 on the LAN is a
-  limitation of the router, not of this stack.
+  past `:443`. Clients would rarely reach it anyway: the router typically advertises itself as the
+  IPv6 resolver (RDNSS), and Headscale pushes an IPv4 nameserver. Filtering ads over IPv6 on the
+  LAN is then a limitation of the router, not of this stack.
 - **Headscale's STUN `:3478`.** It has no IPv6 address, so a `[::]` publish would fall back to
   docker-proxy and report a Docker gateway address to its own clients.
 - **Pi-hole's answers for `*.<HOST_NAME>`.** `address=/<HOST_NAME>/<lan-ip>` configures an A record
   only, and dnsmasq then answers AAAA for those names from config with `NODATA-IPv6` rather than
-  forwarding (measured in `pihole.log`). A LAN client using Pi-hole keeps the IPv4 path, which
-  works; one the router took off Pi-hole resolves publicly and, with AAAA published, reaches the Pi
-  directly over the link instead of hairpinning into a `403`.
+  forwarding. A LAN client using Pi-hole keeps the IPv4 path, which works; one the router took off
+  Pi-hole resolves publicly and, with AAAA published, reaches the Pi directly over the link instead
+  of hairpinning into a `403`.
 - **The `internal:` app segments and the `lan` macvlan.** East-west traffic already has an IPv4 path
   to both ends, and a macvlan would need a subnet carved from the delegated prefix, which is not
   stable.
-- **Unbound's transport** (`do-ip6: no`). A real improvement, independent of this, and out of scope.
+- **Unbound's upstream transport** (`do-ip6: no` in `config/unbound/unbound.conf`): it queries
+  authoritative servers over IPv4 only.
 
 #### Making it reachable from the internet
 
@@ -278,7 +249,7 @@ public DNS keeps A records only while IPv6 still works from the LAN.
 #### A host with no IPv6 at all
 
 Having IPv6 but no delegated prefix needs nothing: `HOST_LAN_SUBNET6` stays empty, no IPv6 client is
-allowlisted, and everything runs over IPv4 as before.
+allowlisted, and everything runs over IPv4.
 
 A kernel with IPv6 compiled out or switched off (`ipv6.disable=1`, no `/proc/net/if_inet6`) is a
 different case: Docker cannot create a network with an IPv6 subnet, and `docker-proxy` cannot bind
@@ -290,11 +261,11 @@ different case: Docker cannot create a network with an IPv6 subnet, and `docker-
 
 Nothing else in the stack has an IPv6 address, so nothing else has to change.
 
-**If the line later loses IPv6, unset it again.** ddns-updater can only publish an address it can
-observe, so it leaves the AAAA records at their last value and nothing reports that as wrong — its
-healthcheck compares each record against a resolver, which still agrees. Off-LAN clients then pay a
-connection timeout against a dead address on every visit. `HOST_LAN_SUBNET6` emptying itself on the
-15-minute timer is the signal to watch for.
+**If the line later loses IPv6, unset `IPV6_PUBLIC_RECORDS` again.** ddns-updater can only publish
+an address it can observe, so it leaves the AAAA records at their last value and nothing reports
+that as wrong — its healthcheck compares each record against a resolver, which still agrees.
+Off-LAN clients then pay a connection timeout against a dead address on every visit.
+`HOST_LAN_SUBNET6` emptying itself on the 15-minute timer is the signal to watch for.
 
 ## Casting to a DLNA renderer
 
@@ -321,22 +292,22 @@ anything itself, but with plain torrent sources the pieces it pulls leave on the
 
 **A known limit.** `/casting/transcode.mp4` is a live ffmpeg pipe: chunked, no `Content-Length`,
 `Accept-Ranges: none`. Renderers that require a seekable resource of known length refuse it and
-stop with `ERROR_OCCURRED`, whatever the container or MIME type — a SoftAtHome (Orange decoder)
-renderer was measured doing exactly that while playing the same content served as a static file.
-Casting here works with renderers that accept a non-seekable stream; for the others the answer is
-a media server that serves files, not this.
+stop with `ERROR_OCCURRED`, whatever the container or MIME type. Casting here works with renderers
+that accept a non-seekable stream; for the others the answer is a media server that serves files,
+not this.
 
 ## DNS inside containers
 
-Containers use Docker's embedded resolver (`127.0.0.11`), which forwards to the host's configuration. Two exceptions pin public resolvers directly in `compose/compose-media.yaml` (`dns: 1.1.1.1`): **`prowlarr`** and **`flaresolverr`**, so indexer lookups neither depend on nor are filtered by Pi-hole.
+Containers use Docker's embedded resolver (`127.0.0.11`), which forwards to the host's configuration. Five services pin public resolvers instead (`dns: [1.1.1.1, 1.0.0.1]`); container names still resolve, because Docker keeps `127.0.0.11` and forwards only external names:
 
-**`ddns-updater` is a third**, at the application level (`RESOLVER_ADDRESS: 1.1.1.1:53`) since only the names in its own settings need it. It looks a name up *before* writing it, so the first AAAA publication seeds a `NODATA` into the router's negative cache, and its healthcheck — which verifies each record by resolving it — then reports a mismatch on a correct record. Measured: `any.<HOST_NAME>` returned nothing through the router and the right address at `1.1.1.1`, five failed checks before the resolver was pinned.
+- **`prowlarr`, `flaresolverr`, `shelfmark` and `aiostreams`**, because Pi-hole's block lists cover many indexer and release-source domains. A blocked name resolves to an unusable address and surfaces as a fetch failure or a timeout, not as anything mentioning DNS. Narrowing the exception to these containers keeps the filter intact for every device on the LAN and tailnet. A service that also needs a stack hostname pins it with `extra_hosts`, since a public resolver answers with the WAN address.
+- **`ddns-updater`**, because Pi-hole and Unbound are containers themselves: for the first minute or two of a cold boot the embedded resolver has no working upstream, and ddns-updater stays unhealthy after that failure until it is restarted. It also sets `RESOLVER_ADDRESS: 1.1.1.1:53` for its own lookups: it looks a name up *before* writing it, so resolving through the router would seed a `NODATA` into the router's negative cache on the first AAAA publication, and its healthcheck — which verifies each record by resolving it — would then report a mismatch on a correct record.
 
-Unrelated to IPv6 and not worth engineering around: when an address genuinely changes, the old one stays cached for its TTL, so ddns-updater reads unhealthy for a few minutes. That now applies to a prefix change too.
+When the public address or the IPv6 prefix genuinely changes, the old record stays cached for its TTL, so ddns-updater reads unhealthy for a few minutes. That is expected.
 
 ## DNS on the VPN
 
-Headscale pushes DNS to every client (`config/headscale/config.yaml`):
+Headscale pushes DNS to every client (`config/headscale/config.yaml.template`):
 
 - **Global nameserver `100.64.0.1`** — the Pi's own tailnet IP, so every query from a VPN client travels the WireGuard tunnel to Pi-hole. Ad blocking follows the device everywhere.
 - **Split DNS** for `<HOST_NAME>` pointing at the same address, plus **MagicDNS** under `tailnet.<HOST_NAME>`.
@@ -348,14 +319,14 @@ Since Pi-hole resolves `*.<HOST_NAME>` to the Pi, every service works from the V
 | Network | Subnet | Members | Purpose |
 |---------|--------|---------|---------|
 | `frontend` | `172.30.11.0/24` (Traefik `.250`, Homepage `.240`, Pi-hole `.241`; everything else dynamic) | Traefik + every routed service except Backrest, Dockhand and Vaultwarden | The network Traefik proxies to by default (`--providers.docker.network`). The three static addresses exist because something binds to or allowlists them by number: Pi-hole's `FTLCONF_webserver_port`, Traefik's `internalapi-allow` ipallowlist, and Homepage's Traefik widget URL. They are high in the range because Docker allocates dynamically from `.2` upwards |
-| `backup` | `172.30.12.0/24` | Traefik, Homepage, Backrest | Backrest's `:9898` returns the restic key and the S3 credentials to any authenticated caller, so it is not left on a segment with ~24 other containers. Not internal: restic reaches S3 through it. A service opts in with `traefik.docker.network=backup`. The subnet is pinned rather than left to Docker, which handed out `172.31.0.0/16` — outside `ALLOW_IP_RANGES`, so any request Traefik answered from its `backup` address was refused by `lan@docker` with a bare `403` |
+| `backup` | `172.30.12.0/24` | Traefik, Homepage, Backrest | Backrest's `:9898` returns the restic key and the S3 credentials to any authenticated caller, so it is kept off the shared `frontend`. Not internal: restic reaches S3 through it. A service opts in with `traefik.docker.network=backup`. The subnet is pinned inside `172.30.0.0/16`: from an address outside `ALLOW_IP_RANGES`, any request Traefik answered over `backup` would be refused by `lan@docker` with a bare `403` |
 | `auth` | internal | Authelia, LLDAP, Postgres, Redis, Backrest | LDAP and auth traffic never crosses an app network. Backrest is there only to `pg_dump` the `authelia` and `lldap` databases |
-| `nextcloud`, `immich`, `ai`, `vault`, `ntfy`, `rss`, `forge`, `aiometadata` | internal | each app + its own backends | Per-app isolation; `vault` deliberately has no path to LLDAP, and `aiometadata` exists for the same reason — it needs the shared Redis and nothing else, so putting it on `auth` would have given a media addon a route to the directory. Backrest also joins `nextcloud` and `immich` for their dumps, and `ntfy` to push a failed run |
+| `nextcloud`, `immich`, `ai`, `vault`, `ntfy`, `rss`, `forge`, `aiometadata` | internal | each app + its own backends | Per-app isolation; `vault` deliberately has no path to LLDAP, and `aiometadata` exists for the same reason — it needs the shared Redis and nothing else, and `auth` would give a media addon a route to the directory. Backrest also joins `nextcloud` and `immich` for their dumps, and `ntfy` to push a failed run |
 | `assistant` | internal | openclaw, tuwunel, forgejo, nextcloud (and `openclaw-sync`'s throwaway container) | The family assistant reaches its homeserver, its repositories and each person's Nextcloud by name. It sits on this and `ai` only — both internal — so the agent has no route to the internet at all: its web search asks SearXNG on `ai`, which makes the outbound requests; see [Local AI](AI.md#web-search-and-prompt-injection) |
 | `dns_internal` | `172.30.53.0/24`, no gateway | Pi-hole, Unbound | Nothing else can query Unbound |
-| `dockhand` | `172.30.13.0/24` (Traefik `.250`) | Traefik, Dockhand | Dockhand reads the Docker socket, so `:3000` is a path to every container on the host; it is not left on a segment with ~20 neighbours. Also on `ntfy`, for its OOM notifications |
+| `dockhand` | `172.30.13.0/24` (Traefik `.250`) | Traefik, Dockhand | Dockhand reads the Docker socket, so `:3000` is a path to every container on the host; it is kept off the shared `frontend`. Also on `ntfy`, for its OOM notifications |
 | `vaultwarden_web` | `172.30.14.0/24` (Traefik `.250`) | Traefik, Vaultwarden | The vault has no east-west consumer at all. Traefik's address is static here because Vaultwarden's `extra_hosts` names it by number, so the OIDC discovery call resolves |
-| `egress_unbound`, `egress_immich`, `egress_ddns` | `172.31.240-242.0/24`; `egress_ddns` also `fd00:31:242::/64` | one container each | Outbound-only internet access. One shared `dns_egress` used to hold Unbound and immich-machine-learning, which let the model downloader open `unbound:5335` for no functional reason. Pinned outside `172.30.0.0/16` on purpose: these have unrestricted egress and no peer, and an address inside `ALLOW_IP_RANGES` would be a hairpin route to every LAN-only service, and the IPv6 numbering keeps that asymmetry. `egress_ddns` has IPv6 because ddns-updater has to observe its own public v6 address to publish an AAAA |
+| `egress_unbound`, `egress_immich`, `egress_ddns` | `172.31.240-242.0/24`; `egress_ddns` also `fd00:31:242::/64` | one container each | Outbound-only internet access, one network per container so that, for example, Immich's model downloader cannot reach Unbound. Pinned outside `172.30.0.0/16` on purpose: these have unrestricted egress and no peer, and an address inside `ALLOW_IP_RANGES` would be a hairpin route to every LAN-only service; the IPv6 numbering keeps that asymmetry. `egress_ddns` has IPv6 because ddns-updater has to observe its own public v6 address to publish an AAAA |
 | `lan` | macvlan on `HOST_LAN_PARENT` | Pi-hole, Stremio (`stremio-lan` profile only) | Direct LAN presence — DNS, and SSDP/mDNS cast discovery |
 | `n8n_runners` | bridge | n8n, n8n-runners | Task-runner traffic |
 | `ingress6` | `172.30.15.0/24` + `fd00:30:15::/64` (Traefik `.250` / `::250`) | Traefik only | The IPv6 ingress, and the stack's only IPv6 address — so the IPv6 DNAT can only ever target it, Docker programming those rules per address family. Which network serves the *v4* publishes is an unpinned tie-break, which is why the `/24` is pinned inside `172.30.0.0/16` too. See [IPv6](#ipv6) |
@@ -366,8 +337,8 @@ Since Pi-hole resolves `*.<HOST_NAME>` to the Pi, every service works from the V
 |------|----------|--------|---------|-------|
 | 80 | TCP | IPv4 + IPv6 | Traefik | HTTP → HTTPS redirect only |
 | 443 | TCP | IPv4 + IPv6 | Traefik | HTTPS for every web service |
-| 443 | UDP | IPv4 + IPv6 | Traefik | HTTP/3 (QUIC). `--entrypoints.websecure.http3=true` advertises it via `Alt-Svc`, which browsers cache for ~30 days; without the UDP listener every connection retried QUIC, timed out and fell back |
-| 53 | TCP/UDP | IPv4 only | Pi-hole | Host + macvlan IP, for LAN and VPN clients. IPv6 would be an open resolver with no client — see [IPv6](#what-stays-ipv4-and-why) |
+| 443 | UDP | IPv4 + IPv6 | Traefik | HTTP/3 (QUIC). `--entrypoints.websecure.http3=true` advertises it via `Alt-Svc`, which browsers cache for ~30 days; without a UDP listener every connection would retry QUIC, time out and fall back |
+| 53 | TCP/UDP | IPv4 only | Pi-hole | Host + macvlan IP, for LAN and VPN clients. IPv6 would be an open resolver — see [IPv6](#what-stays-ipv4-and-why) |
 | 3478 | UDP | IPv4 only | Headscale | STUN, via the embedded DERP relay. IPv6 would report a Docker address to its own clients. Only STUN is v4-only: the relay itself is reached over Traefik's `443`, which listens in both families. The DERP node advertises no literal address, so clients resolve `headscale.<HOST_NAME>` — over IPv6 only where an `AAAA` exists for it, i.e. with `IPV6_PUBLIC_RECORDS` set, and never from `pi-tailscale`, whose `extra_hosts` pins the name to `HOST_LAN_IP` |
 | 41641 | UDP | IPv4 + IPv6 | Tailscale (host network) | WireGuard. `tailscaled` binds a socket in each family; unlike the rows above this is the host's own listener, not a Docker publish |
 
@@ -379,47 +350,32 @@ Everything else — Postgres `5432`, Redis `6379`, LDAP `3890`, every app port �
 
 ## Why there is no Cloudflare Tunnel
 
-A tunnel is the obvious way to stop forwarding `443/tcp` and keep your public IP
-out of DNS. It was built, measured against this stack, and removed. The blocker
-is not the tunnel — it is where TLS gets terminated.
-
-A tunnel only works on a **proxied** record, so Cloudflare terminates TLS at its
-edge and serves *its own* certificate. The free Universal SSL certificate covers
-the zone apex and exactly one label below it (`example.com`, `*.example.com`),
-because a DNS wildcard matches one label and no more. With the layout this
-project suggests — `HOST_NAME=pi.example.com`, services at
-`<svc>.pi.example.com` — every hostname is one level too deep. Measured on a
-live zone: the edge answered `sslv3 alert handshake failure` in 0.09 s, before
-the tunnel was reached at all. Traefik's own Let's Encrypt wildcard cannot
-substitute for it: that certificate protects the `cloudflared → Traefik` leg,
-which no visitor ever sees.
-
-There is no free way around it. Covering `*.pi.example.com` needs [Advanced
-Certificate Manager](https://developers.cloudflare.com/ssl/edge-certificates/advanced-certificate-manager/),
-[custom edge certificates](https://developers.cloudflare.com/ssl/edge-certificates/custom-certificates/)
-start at the Business plan, and [subdomain
-zones](https://developers.cloudflare.com/dns/zone-setups/subdomain-setup/) are
-Enterprise-only.
+A tunnel is the obvious way to stop forwarding `443/tcp` and keep your public IP out of DNS.
+The blocker is where TLS gets terminated. A tunnel only works on a **proxied** record, so
+Cloudflare terminates TLS at its edge with *its own* certificate, and the default Universal
+SSL certificate covers the zone apex and one label below it (`example.com`, `*.example.com`).
+With the layout this project suggests — `HOST_NAME=pi.example.com`, services at
+`<svc>.pi.example.com` — every hostname is one level too deep, and the edge fails the TLS
+handshake before the tunnel is reached; covering deeper names takes one of Cloudflare's paid
+certificate options. Traefik's own Let's Encrypt wildcard cannot substitute for it: that
+certificate protects the `cloudflared → Traefik` leg, which no visitor ever sees.
 
 **If you want a tunnel, set `HOST_NAME` one level up** so services land at
-`<svc>.example.com`, which the free certificate does cover. Use a domain
-dedicated to the stack: pointing `HOST_NAME` at one that also serves a website
-or mail backfires, because Pi-hole's `address=/$HOST_NAME/<lan-ip>` would
-resolve that entire domain to the Pi for every LAN client, `www` and MX lookups
-included.
+`<svc>.example.com`, which the default certificate does cover. Use a domain dedicated to the
+stack: pointing `HOST_NAME` at one that also serves a website or mail backfires, because
+Pi-hole's `address=/$HOST_NAME/<lan-ip>` would resolve that entire domain to the Pi for every
+LAN client, `www` and MX lookups included.
 
-Two things worth knowing before rebuilding it. `cloudflared` must sit on its own
-Docker network *outside* `ALLOW_IP_RANGES` — on `frontend` its address satisfies
-`lan@docker`, which would quietly publish every LAN-only service. That network
-has to pin its subnet by hand, and to a range outside `172.30.0.0/16`: the
-daemon's address pool is deliberately configured to allocate *inside* that
-range (see [Security → Network segmentation](SECURITY.md#network-segmentation)),
-so a `cloudflared` network left to allocate itself would land in the allowlist —
-precisely the failure this paragraph warns about, and silently. And a wildcard
-hostname must never point at the tunnel, for the same reason. `ALLOW_IP_RANGES`
-itself cannot be narrowed instead: Uptime Kuma probes the gated routers from whatever
-address Docker hands it on `frontend`, and tailnet traffic arrives SNATed as that
-network's gateway, `172.30.11.1`.
+Two things to know before adding one. `cloudflared` must sit on its own Docker network
+*outside* `ALLOW_IP_RANGES` — on `frontend` its address satisfies `lan@docker`, which would
+quietly publish every LAN-only service. That network has to pin its subnet by hand, to a range
+outside `172.30.0.0/16`: the daemon's address pool is deliberately configured to allocate
+*inside* that range (see [Security → Network segmentation](SECURITY.md#network-segmentation)),
+so a `cloudflared` network left to allocate itself would land in the allowlist, silently. And a
+wildcard hostname must never point at the tunnel, for the same reason. `ALLOW_IP_RANGES` itself
+cannot be narrowed instead: Uptime Kuma probes the gated routers from whatever address Docker
+hands it on `frontend`, and tailnet traffic arrives SNATed as that network's gateway,
+`172.30.11.1`.
 
 ## Cloudflare records
 

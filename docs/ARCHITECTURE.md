@@ -58,8 +58,8 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **ddns-updater** | Keeps the Cloudflare records pointed at your public IP | Cloudflare API |
 | **Authelia** | SSO portal, OIDC provider, forward-auth backend | all users |
 | **LLDAP** | The user and group directory — one source of truth | Authelia, Nextcloud, Dockhand |
-| **PostgreSQL** | Database for Nextcloud, Immich, Authelia, LLDAP, Vaultwarden, Open WebUI | app containers |
-| **Redis (Valkey)** | Session store and cache, password-protected — see [Security](SECURITY.md#the-shared-redis-is-authenticated) | Authelia, Immich, Nextcloud |
+| **PostgreSQL** | Database for Nextcloud, Immich, Authelia, LLDAP, Vaultwarden, Open WebUI, FreshRSS, Forgejo | app containers |
+| **Redis (Valkey)** | Session store and cache, password-protected — see [Security](SECURITY.md#the-shared-redis-is-authenticated) | Authelia, Immich, Nextcloud, AIOMetadata |
 | **Pi-hole** | Ad blocking, local DNS for `*.<HOST_NAME>` | LAN and VPN clients |
 | **Unbound** | Recursive resolver — walks the delegation tree itself | Pi-hole only |
 | **Headscale** | Self-hosted Tailscale control plane | VPN clients, from anywhere |
@@ -81,20 +81,20 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **Shelfmark** | Book and audiobook search; files what it downloads into the Kavita Books library | users |
 | **Audiobookshelf** | Audiobook player for `download/audiobooks/`, with Audible metadata matching and progress sync | users |
 | **FreshRSS** | RSS/Atom reader; per-account subscriptions and read state in Postgres, refreshed by its own cron | users, and Google Reader API clients |
-| **SearXNG** | Metasearch: forwards a query to ~270 upstream engines and merges the answers; keeps no index and no accounts | users (browser and Homepage), and Open WebUI's web search |
+| **SearXNG** | Metasearch: forwards a query to many upstream search engines and merges the answers; keeps no index and no accounts | users (browser and Homepage), and Open WebUI's web search |
 | **Trilium** | Personal knowledge base: a single-owner note tree in SQLite, edited in the browser | the owner, plus the Web Clipper and ETAPI scripts |
 | **Forgejo** | Git forge: repositories, issues, pull requests and releases. Repositories and LFS objects on disk, everything else in Postgres. Clones and pushes over **HTTPS only** — git-over-SSH is off, because it would need a published host port and `:22` is the Pi's own sshd | users, in a browser and over `git`/`/api/v1` with a personal access token |
 | **Tuwunel** | Matrix homeserver for the family chat, on an embedded RocksDB — no Postgres, no Redis. Federation off: nobody outside this server can join a room or send to one. Accounts come from LLDAP through Authelia on the first sign-in, and the first one becomes the server admin. Also the OAuth server Element X signs in through (next-gen auth), which it brokers to Authelia | Element Web and Element X, over `chat.<HOST_NAME>/_matrix` |
 | **Element Web** | Browser client for Tuwunel, served from `chat.<HOST_NAME>`. Static files and a `config.json` rendered by `scripts/element-pre-start.sh`: integration managers, identity server, guests and account deactivation off | users, in a browser |
 | **changedetection.io** | Watches web pages and notifies on what changed; keeps its own compressed snapshot history and publishes an RSS feed of the diffs | users, and the ntfy `watches` topic |
 | **Stremio** | Streaming server | users |
-| **AIOStreams** | Stremio super-addon: fans a title out to upstream addons and the debrid service, then filters and ranks the results (its "SEL" expressions). Streams only — it serves no catalogue. Its built-in Prowlarr scraper is pointed at **our** Prowlarr by `scripts/aiostreams-pre-start.sh`, which is the only way the French trackers this stack indexes reach a Stremio result list — no public Torrentio or MediaFusion instance knows them | users, through Stremio |
+| **AIOStreams** | Stremio super-addon: fans a title out to upstream addons and the debrid service, then filters and ranks the results (its "SEL" expressions). Streams only — it serves no catalogue. `scripts/aiostreams-pre-start.sh` points its built-in Prowlarr scraper at the stack's own Prowlarr, so whatever indexers you add there reach Stremio's result lists, including ones no public addon covers | users, through Stremio |
 | **AIOMetadata** | The other half: catalogs and metadata for Stremio (TMDB/TVDB/MAL/MDBList), with its own artwork proxy and disk cache. Installed alongside AIOStreams, not inside it | users, through Stremio |
-| **StremThru** | Two features out of sixteen. **SideKick** edits the Stremio addon collection — reorder, enable or disable part of an addon — which Stremio's own UI cannot do, and which is what puts AIOMetadata in front of Cinemeta. **Torz** is a stream source for AIOStreams, contributing the DebridMediaManager hashlists and the torrent database shared between StremThru instances — neither of which AIOStreams' other scrapers nor our Prowlarr indexes. Everything else (Wrap, Store, List, Newz, the usenet engine, SABnzbd, WebDAV, the vault) is switched off | the owner in a browser, and AIOStreams server-side |
+| **StremThru** | Two features only. **SideKick** edits the Stremio addon collection — reorder, enable or disable part of an addon — which Stremio's own UI cannot do, and which is what puts AIOMetadata in front of Cinemeta. **Torz** is a stream source for AIOStreams, contributing the DebridMediaManager hashlists and the torrent database shared between StremThru instances — neither of which AIOStreams' other scrapers nor the stack's Prowlarr indexes. Every other feature is off: `STREMTHRU_FEATURE` is an allowlist | the owner in a browser, and AIOStreams server-side |
 | **stremio-lan** | The same Stremio server on a LAN macvlan address instead of the VPN, for DLNA casting — mutually exclusive with `stremio` | users, LAN renderers |
 | **Open WebUI** | Local AI chat frontend — see [Local AI](AI.md) | users |
 | **Agentgateway** | LLM and MCP gateway in front of llama.cpp: one OpenAI-compatible endpoint, one MCP endpoint, virtual keys and token rate limits | Open WebUI, and any API or MCP client |
-| **OpenClaw** | The family assistant, `@assistant` in the Matrix chat: one agent per LLDAP account, each with a workspace of its own, plus a shared agent in one family room, thinking through agentgateway's `/assistant/v1` route. No tool that executes, browses or fetches, and no network that leads out — it searches the web through the stack's SearXNG, which returns snippets, not pages; it reads and adds files in each person's own Nextcloud, as that person; its memory is pushed to Forgejo by `openclaw-sync.timer` — see [Local AI](AI.md#the-family-assistant-openclaw) | family members, in an encrypted DM or the family room |
+| **OpenClaw** | The family assistant, `@assistant` in the Matrix chat: one agent per LLDAP account plus a shared agent in a family room, thinking through agentgateway's `/assistant/v1` route. No tool that executes, browses or fetches, and no network that leads out; it searches through SearXNG and works in each person's own Nextcloud — see [Local AI](AI.md#the-family-assistant-openclaw) | family members, in an encrypted DM or the family room |
 | **llama.cpp / Piper / Parakeet / system-tools** | Inference, TTS, STT and the host-status tool | Agentgateway, Open WebUI |
 | **Homepage** | Dashboard with live widgets | users |
 | **Beszel** | Hardware metrics and threshold alerts | admins |
@@ -155,7 +155,7 @@ pi-pcloud/
 └── docs/
 ```
 
-`compose.yaml` declares no service of its own: it `include:`s the eight files under `compose/` — `compose-core.yaml`, `compose-identity.yaml`, `compose-network.yaml`, `compose-cloud.yaml`, `compose-media.yaml`, `compose-knowledge.yaml`, `compose-ai.yaml`, `compose-monitoring.yaml` — and every command still runs against the project root, not against one of them. The `compose-` prefix is Dependabot's, not a style: its fetcher matches basenames against `/(docker-)?compose(-[\w]+)?(?>\.[\w-]+)?\.ya?ml/i`, lists one directory without descending and never follows `include:`, so a file called `core.yaml` is one it never opens — and the way that fails is the daily image-bump PRs quietly stopping. `.github/dependabot.yml` naming `/compose` beside `/` is the other half; `tests/compose-invariants.py` fails the build if either half is undone. Networks and volumes stay in the root file because they are one shared namespace, and the `x-cpu-prio-*` / `x-oom-score-*` / `x-healthcheck-*` tiers are defined there too as the canonical copy: YAML anchors are file-scoped and `include:` parses each file on its own, so each domain file repeats the block and `tests/compose-invariants.py` fails the build if a copy drifts. Every include carries `project_directory: .`, without which compose would resolve an included file's `./config` and `./data` binds against `compose/`, and `env_file: /dev/null`, without which the include reads `.env` a second time on its own — behind `--env-file`, which is how a render meant to see no `.env` saw one anyway. Interpolation is unaffected: the CLI merges `.env` into the environment it hands every included file.
+`compose.yaml` declares no service of its own: it `include:`s the eight domain files under `compose/` — `compose-core.yaml`, `compose-identity.yaml`, `compose-network.yaml`, `compose-cloud.yaml`, `compose-media.yaml`, `compose-knowledge.yaml`, `compose-ai.yaml`, `compose-monitoring.yaml`. Every command runs against the project root; a file under `compose/` is not startable on its own. Networks, volumes and the `x-cpu-prio-*` / `x-oom-score-*` / `x-healthcheck-*` tiers are defined in the root file. YAML anchors do not cross files, so each domain file repeats the tiers it uses.
 
 Traefik is the exception to `config/` — it has no config directory, being driven entirely by CLI flags and Docker labels in `compose/compose-core.yaml`.
 
@@ -167,7 +167,7 @@ Persistent state is split deliberately:
 | `${POSTGRES_DATA_LOCATION}` (defaults to `${DATA_LOCATION}`) | `postgres18` — the cluster shared by Immich, Nextcloud, Authelia, lldap, Open WebUI, Vaultwarden, FreshRSS and Forgejo | **Point this at solid-state storage.** ~1 GB, and the only thing here that suffers from sharing a spindle with media I/O. See below |
 | Named Docker volumes | Pi-hole, Redis, Headscale, Beszel, ntfy, Kavita config, Tuwunel (database, media, backups), OpenClaw state, llama.cpp weights, Prometheus TSDB, Grafana, … | Smaller state, and the write-heavy or regenerable state that belongs on the fast root filesystem rather than in backups |
 
-`DATA_LOCATION` is usually the largest disk available, which on a Pi is usually an external USB one. That is the right home for originals and downloads and the wrong home for a database: a rotational disk serves random reads at tens of IOPS, and consumer USB-SATA bridges commonly acknowledge a flush before the data reaches the platter, which is a corrupt cluster after a power cut rather than a slow one. `POSTGRES_DATA_LOCATION` exists so the cluster can sit on the root NVMe while the media stays on the big disk. Postgres writes ~350 MB/day here, so the flash wear it adds is immaterial.
+`DATA_LOCATION` is usually the largest disk available, which on a Pi is usually an external USB one. That is the right home for originals and downloads and the wrong home for a database: a rotational disk serves random reads at tens of IOPS, and consumer USB-SATA bridges commonly acknowledge a flush before the data reaches the platter, which is a corrupt cluster after a power cut rather than a slow one. `POSTGRES_DATA_LOCATION` exists so the cluster can sit on the root NVMe while the media stays on the big disk. Postgres writes a few hundred MB a day there, so the flash wear it adds is immaterial.
 
 The `ghcr.io/immich-app/postgres` image also ships two tuning profiles selected by `DB_STORAGE_TYPE`, and it **defaults to `SSD`** — which sets `effective_io_concurrency=200` and `random_page_cost=1.2`. If you leave the cluster on a rotational `DATA_LOCATION`, set `DB_STORAGE_TYPE: HDD` on the postgres service in `compose/compose-core.yaml`; the defaults model a random read as ~90x cheaper than that disk can deliver.
 
@@ -186,6 +186,7 @@ a text reader for epub/pdf. Each library therefore needs its own folder.
 | Comics | ComicVine | `comics/` + `download/comics/` | Kapowarr (root folder) and the `comics` qBittorrent category |
 | Manga | Manga | `manga/` + `download/manga/` | Kapowarr (second root folder) and the `manga` qBittorrent category |
 | Books | Book | `download/books/` | the `books` qBittorrent category, and Shelfmark's imports |
+| Magazines | Comic | `download/magazines/` | the `magazines` qBittorrent category |
 
 Comics and Manga each pair a Kapowarr root folder with a `download/` one because
 Kapowarr *owns* its roots: it moves files inside them with copy-then-delete, which
@@ -193,14 +194,18 @@ races a torrent seeding from the same tree. A hand-grabbed issue therefore goes 
 `download/comics/`, which Kapowarr never touches, and Kavita reads both folders as one
 library — so the parser, the metadata provider and the OIDC library grant are shared.
 
+Magazines is a Comic library because Kavita has no magazine type, and the comic parser
+groups issues by the `<title> <number>` in their filename. An issue must therefore be
+named `<Series> <NNN>.pdf` to join its series; the folder name is not used, and a title
+embedded in the PDF overrides the filename. Details in `scripts/kavita-library-bootstrap.sh`.
+
 Everything else under `download/` stays invisible to Kavita, which matters because
 Kavita indexes *every* subfolder of a folder it is given — point it at the download
-root and a software torrent's installer tree becomes series named after its internals
-(`AdpSdk`, `IPMClient`, `Template`, ...).
+root and a software torrent's installer tree becomes a list of series.
 
 | Path | Written by | Read by Kavita |
 |------|-----------|----------------|
-| `download/manga/`, `download/comics/`, `download/books/` | the matching qBittorrent category | yes |
+| `download/manga/`, `download/comics/`, `download/books/`, `download/magazines/` | the matching qBittorrent category | yes |
 | `download/audiobooks/` | the `audiobooks` qBittorrent category, and Shelfmark (`DESTINATION_AUDIOBOOK`); read by **Audiobookshelf**, not Kavita | no |
 | `download/shelfmark/` | qBittorrent's `shelfmark` and `shelfmark-audiobooks` categories, where Shelfmark's own grabs land before import | no |
 | `download/prowlarr/` | qBittorrent's `prowlarr` category (Prowlarr's default) | no |
@@ -210,270 +215,207 @@ root and a software torrent's installer tree becomes series named after its inte
 ### qBittorrent categories
 
 The category is the whole routing decision: its save path is the destination, so it is
-also what to pick when adding a torrent by hand. `scripts/qbittorrent-bootstrap.sh` owns
-the list, `scripts/prowlarr-bootstrap.sh` the newznab ids Prowlarr maps onto it.
+also what to pick when adding a torrent by hand. `LIBRARY_CATEGORIES` in
+`scripts/qbittorrent-bootstrap.sh` owns the list, `QB_CATEGORY_MAP` in
+`scripts/prowlarr-bootstrap.sh` the category ids Prowlarr maps onto it. The mapped rows
+are in the map's order, which matters (below).
 
 | Category | Save path | Destination | Prowlarr ids |
 |----------|-----------|-------------|--------------|
-| `books` | `download/books/` | Kavita, **Books** | 7000, 7010, 7020, 7040, 7050, 7060 |
-| `manga` | `download/manga/` | Kavita, **Manga** | 7030, 107103, 117084, 156719, 111160 |
-| `comics` | `download/comics/` | Kavita, **Comics** | 107102, 107104 |
-| `audiobooks` | `download/audiobooks/` | **Audiobookshelf** | 3030, 107105 |
+| `comics` | `download/comics/` | Kavita, **Comics** | tracker-specific ids only |
+| `manga` | `download/manga/` | Kavita, **Manga** | 7030 + tracker-specific ids |
+| `audiobooks` | `download/audiobooks/` | **Audiobookshelf** | 3030 + tracker-specific ids |
+| `magazines` | `download/magazines/` | Kavita, **Magazines** | 7010 + tracker-specific ids |
+| `books` | `download/books/` | Kavita, **Books** | 7000, 7020, 7040, 7050, 7060 |
 | `shelfmark` | `download/shelfmark/` | staging — Shelfmark imports it | — |
 | `shelfmark-audiobooks` | `download/shelfmark/` | staging, same folder; a label so the list distinguishes the two | — |
 | `prowlarr` | `download/prowlarr/` | nothing; Prowlarr's fallback for unmapped ids | — |
 
-A grab that falls through to `prowlarr` is recoverable rather than lost: qBittorrent has
+Prowlarr picks the client category from the release's category ids, and a release that
+matches no mapping falls through to `prowlarr`. **newznab has no manga category**: manga
+and comics both ship as 7030 `Books/Comics`, so 7030 goes to `manga` and an ambiguous
+comic lands there too. 7010 `Books/Mags` gets its own destination and the remaining Books
+subcategories go to `books`. Audiobooks are 3030 `Audio/Audiobook`, a sibling of the
+music ids rather than a Books subcategory, so 3010 MP3 and 3040 Lossless still fall
+through. Some indexers also send their own tracker category ids next to the newznab
+ones; where those tell comics, manga or audiobooks apart better than the newznab id
+does, they are mapped too — see `QB_CATEGORY_MAP`.
+
+`books` also claims **7000**, the bare Books parent, which says nothing about *which*
+kind of book. It has to: some indexers declare no Books subcategory at all, and without
+it their book grabs would land in the `prowlarr` folder nothing indexes. Wrong library
+beats invisible.
+
+**The order of the mappings is load-bearing, and `books` must stay last.** Prowlarr
+takes the first mapping in list order whose ids intersect the release's, not the most
+specific one. A release can carry the 7000 parent beside its specific id, so anything
+listed below `books` would never be reached.
+
+Two more rules:
+
+- **`comics` has no newznab id.** It shares 7030 with manga, so only an indexer's own
+  comic id routes there; otherwise the category is hand-pick only — which is its
+  purpose, as the fallback for issues Kapowarr cannot find. `magazines` is in a similar
+  position: only releases an indexer tags as 7010 reach it automatically.
+- **The staging categories are not destinations.** Shelfmark post-processes only
+  torrents belonging to one of its own tasks, so a torrent added there by hand
+  downloads and then sits forever. Shelfmark routes by the task's content type, not by
+  category, which is why the two staging categories can share one folder.
+
+A grab that lands in the wrong category is recoverable rather than lost: qBittorrent has
 `category_changed_tmm_enabled` on, so changing a torrent's category relocates its files
 to the new save path — provided the torrent is in Automatic Torrent Management mode,
 which Prowlarr's grabs are and Shelfmark's are not (it passes an explicit save path,
 which forces Manual).
 
-Two asymmetries are deliberate. **`comics` has no Prowlarr mapping**: comics and manga
-share newznab id 7030, which goes to `manga`, so Prowlarr cannot tell them apart and the
-category is hand-pick only — which is its whole purpose, as the fallback for issues
-Kapowarr cannot find. And the **staging categories are not destinations** — Shelfmark
-post-processes only torrents belonging to one of its own tasks, so a torrent added there
-by hand downloads and then sits forever. Shelfmark itself routes by the task's content
-type, not by category, which is why the two staging categories can share one folder.
-
-Prowlarr routes the split automatically: its qBittorrent download client carries a
-category map, and Prowlarr resolves the client category as
-`GetCategoryForRelease(release) ?? Settings.Category`. **newznab has no manga
-category** — manga ships as 7030 `Books/Comics`, the same id as comics — so 7030 goes
-to `manga` and the remaining Books subcategories (7010 Mags, 7020 EBook, 7040
-Technical, 7050 Other, 7060 Foreign) go to `books`. Audiobooks are 3030
-`Audio/Audiobook`, a sibling of the music ids under 3000 rather than a Books
-subcategory, so they are mapped on their own and 3010 MP3 and 3040 Lossless keep
-falling through to the default. Comics do not come through Prowlarr at all: Kapowarr
-fetches them and imports into its own root folder.
-
-`books` also claims **7000**, the bare Books parent, which says nothing about *which*
-kind of book. It has to: 6 of the enabled indexers — YggReborn, Torrent9, Nyaa.si,
-World-torrent, Internet Archive, Torrent[CORE] — declare no Books subcategory at all, so
-every book grab from them was unroutable and landed in the default `prowlarr` folder that
-nothing indexes. Two of those six are rescued from `books` by their own tracker ids
-below; the rest genuinely are ebooks. Wrong library beats invisible.
-
-**The order of the mappings is load-bearing, and `books` must stay last.** Prowlarr
-resolves the client category with `FirstOrDefault(x => x.Categories.Intersect(release
-.Categories).Any())` (`DownloadClientBase.cs`) — first match in list order, not most
-specific. Since `books` claims the catch-all 7000, anything above it in the list wins on
-its own more specific id and anything below it is unreachable. `manga` likewise stays
-above `books` so the indexers that report a leaf *and* its parent, as Knaben does with
-`[7030, 7000]`, still reach it. All three verified by grabbing real releases and watching
-where they landed.
-
-### The 1071xx ids
-
-Those are **YggReborn's own tracker categories**, which Prowlarr passes through in
-`release.Categories` next to the newznab ones — and the map intersects raw ints, so they
-can be mapped directly. Ygg is the only enabled indexer that separates these at all:
-
-| Ygg id | Ygg name | mapped to |
-|--------|----------|-----------|
-| 107100, 107101 | Livres, Presse | `books` (via 7000) |
-| 107102 | Bandes dessinées | `comics` |
-| 107103 | Mangas | `manga` |
-| 107104 | Comics | `comics` |
-| 107105 | **Livres audio** | `audiobooks` |
-
-`107105` is the most valuable of them, since Ygg carries French audiobooks Shelfmark
-cannot see at all — it asks Prowlarr for 3030, which Ygg never emits.
-
-**Nyaa.si** is the other indexer worth mapping this way, and it cancels the cost of
-claiming 7000: Nyaa reports every book-shaped release as bare 7000, so they were all
-becoming ebooks, when Literature on Nyaa is manga.
-
-| Nyaa id | Nyaa name | mapped to |
-|---------|-----------|-----------|
-| 117084 | Literature — Raw | `manga` |
-| 156719 | Literature — English-translated | `manga` |
-| 111160 | Literature — Non-English-translated | `manga` |
-
-Sampled 158 of them: Raw is Japanese manga (コミック EPUB), English-translated is manga
-and light novels, Non-English-translated is manga scans — including its Batman entries,
-which are Otomo's and Teshirogi's manga adaptations rather than western comics. Hence
-`manga`, not `comics`.
-
-**Every other indexer's tracker ids are a rigid 1:1 rename of the newznab leaf** and
-carry no extra information, so mapping them would only add lines that can drift out of
-sync. C411 is the clearest case: over ~500 sampled results every release is exactly one
-pair — `[3030,103030]`, `[7010,107010]`, `[7020,107020]`, `[7030,107030]` — and `107030`
-is itself named *"BDs & Comics & Manga"*, which is the proof C411 cannot separate the two
-either. Its `107000 Ebook` never appears at all, being the parent node of a tracker that
-always sends a leaf. Knaben looked promising (`9101000 EBooks`, `9102000 Comics`,
-`1103000 Audiobook`) but not one sampled release carried any of those without the
-matching newznab id alongside.
-
-That is also why an ambiguous comic still lands in `manga` — 1337x `100039`, C411
-`107030`, Knaben `9102000`, The Pirate Bay `100602`, TR4KER `107030` each come back
-**identically for Batman and for Naruto**. Not a preference, just the only id available.
-
-Seven places must agree on these paths, and all seven are provisioned: the `kavita`
-volumes in `compose/compose-media.yaml`, `DESIRED_LIBRARIES` in
+These paths are set in several places that must agree, all provisioned by the stack: the
+`kavita` volumes in `compose/compose-media.yaml`, `DESIRED_LIBRARIES` in
 `scripts/kavita-library-bootstrap.sh`, `LIBRARY_CATEGORIES` in
 `scripts/qbittorrent-bootstrap.sh`, `QB_CATEGORY_MAP` in
-`scripts/prowlarr-bootstrap.sh`, `ROOT_FOLDERS` in
-`scripts/kapowarr-bootstrap.sh`, `INGEST_DIR` and `DESTINATION_AUDIOBOOK` on the
-`shelfmark` service, and `LIBRARY_PATH` in `scripts/audiobookshelf-bootstrap.sh`.
+`scripts/prowlarr-bootstrap.sh`, `ROOT_FOLDERS` in `scripts/kapowarr-bootstrap.py`,
+`INGEST_DIR` and `DESTINATION_AUDIOBOOK` on the `shelfmark` service, and
+`LIBRARY_PATH` in `scripts/audiobookshelf-bootstrap.sh`.
+
+### Shelfmark
 
 Shelfmark is the manual half of that: you search, it fetches. Torrents go out through
 the same qBittorrent instance (so through the VPN) under its own `shelfmark` category,
 and Shelfmark then renames the finished file into `download/books/`, where Kavita
-already looks — which is why its grabs are saved outside that folder in the first
-place, so Kavita indexes the imported book and not the torrent's directory tree.
-Shelfmark itself sits on `frontend`, not in gluetun's namespace: putting it behind the
-VPN would add it to the set of routers that disappear when gluetun goes unhealthy. Its
-direct downloads still egress through the tunnel, via gluetun's internal HTTP proxy
-(`HTTPPROXY=on`, `gluetun:8888`) rather than by sharing its network namespace.
+already looks. Its grabs are saved outside that folder so Kavita indexes the imported
+book and not the torrent's directory tree.
 
-The dependency is soft, and stays soft: Shelfmark is **not** in gluetun's profile list,
-so enabling it does not force a VPN container on an install that only wants
-Prowlarr-backed search. `scripts/shelfmark-settings-bootstrap.sh` asks
-`docker compose config --services` whether gluetun is part of the current selection —
-not whether it is running, so a gluetun that is merely down does not flip the setting —
-and configures the proxy only then. When it is not selected the script unwinds its own
-proxy setting and says so in the start log; a proxy set by hand is left alone.
+Shelfmark sits on `frontend`, not in gluetun's namespace, so it does not join the set of
+routers that disappear when gluetun goes unhealthy. Its direct downloads still egress
+through the tunnel, via gluetun's internal HTTP proxy (`HTTPPROXY=on`, port `8888`). The
+proxy is set in Shelfmark's `plugins/network.json` rather than as `HTTP_PROXY` in its
+environment, which the HTTP library would apply to every outbound call: this way only
+the release-source and download path uses the tunnel, while the Prowlarr API, the OIDC
+token exchange and the metadata providers stay direct — and a gluetun outage costs you
+direct downloads, not search or login. The proxy is addressed as `gluetun.docker`, an
+alias `compose/compose-media.yaml` adds because Shelfmark's bundled bypasser rejects a
+proxy host with no dot in it.
 
-That split is deliberate, and it is narrower than it looks. `PROXY_MODE`/`HTTP_PROXY`
-are set in Shelfmark's `plugins/network.json`, **not** in its environment, because
-`HTTP_PROXY` and `NO_PROXY` are the names `requests` reads out of the environment on its
-own — setting them there would route every other outbound call through the tunnel too.
-In the config file they reach only the callers of `download/network.py get_proxies()`,
-which is the release-source and download path. So Anna's Archive traffic is on the VPN,
-while the Prowlarr API, the OIDC token exchange and the metadata providers stay direct —
-and a gluetun outage costs you direct downloads, not search or login.
+The dependency is soft: Shelfmark is **not** in gluetun's profile list, so enabling it
+does not force a VPN container on an install that only wants Prowlarr-backed search.
+`scripts/shelfmark-settings-bootstrap.sh` configures the proxy only when gluetun is part
+of the current selection (`docker compose config --services`, not whether it is
+running); otherwise it unwinds its own proxy setting and says so in the start log. A
+proxy set by hand is left alone.
 
-The proxy is addressed as `gluetun.docker`, an alias compose/compose-media.yaml adds for exactly this:
-the bundled bypasser hands the string to SeleniumBase, whose proxy validation rejects a
-host with no dot in it and then fails to start the browser at all.
+### Audiobookshelf
 
-Audiobookshelf closes the other end of that chain. `download/audiobooks/` had a writer
-and no reader: Shelfmark files audiobooks there, Kavita cannot open them, and Nextcloud
-only stores them. Audiobookshelf mounts the same folder read-only as `/audiobooks` and
-adds the listening half — progress sync across devices, and Audible metadata matching,
-which is the only source in the stack carrying narrator, runtime and chapters. The
-Audible storefront is regional and a French catalogue is invisible from `audible.com`,
-so `scripts/audiobookshelf-bootstrap.sh` picks the provider from `DEFAULT_LANGUAGE`.
+Audiobookshelf mounts `download/audiobooks/` read-only as `/audiobooks` — the folder
+Shelfmark files audiobooks into — and adds the listening half: progress sync across
+devices, and Audible metadata matching, the only source in the stack carrying narrator,
+runtime and chapters. The Audible storefront is regional, so
+`scripts/audiobookshelf-bootstrap.sh` picks the provider from `DEFAULT_LANGUAGE`.
 
 None of its configuration can come from the environment or a config file — server
 settings live only in its SQLite database — so that bootstrap drives the admin API
-instead, and has to create the root account first to have anything to authenticate
-with. Three consequences worth knowing.
+instead, and creates the root account first to have anything to authenticate with.
+Three consequences:
 
-The root account *is* the SSO account: the bootstrap gives it `EMAIL` and sets
-`authOpenIDMatchExistingBy: email`, so signing in through Authelia lands on the admin
-rather than on a second, plain-user account.
+- **The root account *is* the SSO account.** The bootstrap gives it `EMAIL` and sets
+  `authOpenIDMatchExistingBy: email`, so signing in through Authelia lands on the admin
+  rather than on a second, plain-user account.
+- **Local login is off** (`authActiveAuthMethods: ["openid"]`), so the shared `PASSWORD`
+  is not a second door into a service that holds everyone's listening history — the
+  same stance as Shelfmark, Dockhand and Beszel. It is gated on the bootstrap first
+  minting itself an API key, stored at
+  `${DATA_LOCATION}/audiobookshelf/config/pi-web-api-key`, because with `local` disabled
+  `/login` stops answering altogether (500, not 401) and the API is the only way back
+  in. `audiobookshelf-bootstrap.sh`, `homepage-widgets-bootstrap.sh` and
+  `rotate-password.sh` all use that key, and it sits inside the `/config` directory
+  Backrest snapshots. Every client can do OIDC, which is why this is safe here and
+  would not be for Kavita's OPDS readers: the mobile apps get their own redirect URI
+  (`/auth/openid/mobile-redirect`), which Audiobookshelf bounces to
+  `audiobookshelf://oauth` itself.
+- **The client asks for no `groups` scope.** Audiobookshelf reads the group claim as a
+  *role* and denies any login whose groups contain none of `admin`/`user`/`guest`.
 
-Local login is then switched off (`authActiveAuthMethods: ["openid"]`), so the shared
-`PASSWORD` is not a second door into a service that holds everyone's listening history —
-the same stance as Shelfmark, Dockhand and Beszel. It is gated on the bootstrap first minting itself an
-API key and storing it at `${DATA_LOCATION}/audiobookshelf/config/pi-web-api-key`,
-because disabling `local` is otherwise a one-way door — `/login` is wired to passport's
-local strategy, and turning the method off *unuses* that strategy, so the route stops
-answering entirely (500, not 401) and the only remaining door is the API. The key is
-what keeps that door open for `audiobookshelf-bootstrap.sh`,
-`homepage-widgets-bootstrap.sh` and `rotate-password.sh` alike; it lives inside the
-`/config` directory Backrest snapshots so a restore brings it back. Every client can do
-OIDC, which is why this is safe here and would not be for Kavita's OPDS readers: the
-mobile apps get their own registered redirect URI (`/auth/openid/mobile-redirect`),
-which Audiobookshelf bounces to `audiobookshelf://oauth` itself.
+Podcasts are deliberately not offered. Audiobookshelf downloads episodes *into* the
+library folder, and its own mount of that folder is `:ro`, so a podcast library would
+fail with `EROFS` on its first fetch. It would need a writable mount of its own, which
+nothing in the download chain feeds.
 
-And the client asks for no `groups` scope: Audiobookshelf reads the group claim as a
-*role* and denies any login whose groups contain none of `admin`/`user`/`guest`, so
-requesting it would lock out every regular user in a stack where only `admin` exists.
-
-Podcasts are deliberately not offered. Audiobookshelf can serve them, but it
-downloads episodes *into* the library folder, and **its own** mount of that
-folder is `:ro` — a podcast library would fail with `EROFS` on its first fetch.
-(Nextcloud's separate mount of the same path is read-write, for organising it;
-that does not help a process writing through a different, read-only one.) It
-would need a writable mount of its own, which nothing in the download chain
-feeds.
+### Kapowarr folder naming
 
 Kapowarr's `volume_folder_naming` is deliberately flat (`{series_name} ({year})`, no
-volume subfolder): Kavita's ComicVine parser takes the series name from the folder and
-`GetFoldersTillRoot` stops below the scan root, so any intermediate folder makes every
-series come out named `Volume 01`.
+volume subfolder): Kavita's ComicVine parser takes the series name from the deepest
+folder below the scan root, so any intermediate folder makes every series come out
+named `Volume 01`.
 
-The same libraries are also mounted into Nextcloud as `files_external` mounts
-(`Comics`, `Manga`, `Books` and `Audiobooks`, alongside the existing `Downloads`),
-so any file can get a public share link the way Immich does for photos — and so
-Nextcloud is where the tree gets **organised**: renamed, moved between libraries,
-deleted. Audiobooks are in both places on purpose: Nextcloud shares the file,
-Audiobookshelf plays it and keeps your position. The mounts are created by
-`config/nextcloud/hooks/post-installation/20-external-storage.sh`, which is
-idempotent and can be re-run by hand on an existing install — worth knowing,
-because it is a *post-installation* hook and so does not fire again on an
-existing Nextcloud when a mount is added to its list.
+### The libraries in Nextcloud
 
-Write access took two pieces, and only one of them is obvious. The bind mounts
-are read-write, but Nextcloud's PHP runs as uid 33 while the tree belongs to
-uid/gid 1000 in mode 0755, so it would still only get `r-x`.
-`scripts/nextcloud-pre-start.sh` grants uid 33 write access with a POSIX ACL.
+The libraries are also mounted into Nextcloud as `files_external` mounts (`Comics`,
+`Manga`, `Books` and `Audiobooks`, alongside `Downloads`), so any file can get a public
+share link the way Immich does for photos — and so Nextcloud is where the tree gets
+**organised**: renamed, moved between libraries, deleted. Audiobooks are in both places
+on purpose: Nextcloud shares the file, Audiobookshelf plays it and keeps your position.
+The mounts are created by `config/nextcloud/hooks/post-installation/20-external-storage.sh`,
+a *post-installation* hook, so it does not fire again on an existing Nextcloud when a
+mount is added to its list. It is idempotent and can be re-run by hand:
 
-Two traps are worth recording, because both look like the right answer:
+```bash
+docker exec -u www-data pi-nextcloud sh /docker-entrypoint-hooks.d/post-installation/20-external-storage.sh
+```
 
-- **`group_add: "1000"` does not work.** Apache calls `initgroups()` when it
-  drops to `www-data`, which rebuilds the group list from the container's
-  `/etc/group` and discards the supplementary gid compose added. The group *does*
-  survive in a `docker exec`, so the mistake passes a hand test and then fails
-  every real request.
-- **`chmod -R g+w` does not last.** qBittorrent, Kapowarr and Shelfmark all run
-  with umask 022, so every directory they create afterwards comes back `0755`
-  and Nextcloud silently loses access to exactly the new downloads it is most
-  likely to be asked to tidy up. A *default* ACL is inherited by whatever is
-  created later, umask notwithstanding.
+The bind mounts are read-write, but Nextcloud's PHP runs as uid 33 while the tree
+belongs to uid/gid 1000 in mode 0755, so `scripts/nextcloud-pre-start.sh` grants uid 33
+write access with a POSIX ACL, including a *default* ACL that new files and directories
+inherit. Two tempting alternatives do not work:
 
-The trade-off is real and deliberate: `Downloads` is writable too, and
-qBittorrent seeds from there, so deleting a file in Nextcloud can break the
-torrent still serving it. Kapowarr's moves are copy-then-delete, so avoid
-reorganising `Comics`/`Manga` while it has a task running.
+- **`group_add: "1000"`.** Apache calls `initgroups()` when it drops to `www-data`, which
+  discards the supplementary gid compose added. The group *does* show up in a
+  `docker exec`, so it passes a hand test and then fails every real request.
+- **`chmod -R g+w`.** qBittorrent, Kapowarr and Shelfmark all run with umask 022, so
+  every directory they create afterwards comes back `0755` and Nextcloud loses access to
+  exactly the new downloads. A default ACL is inherited whatever the umask.
+
+The trade-off is deliberate: `Downloads` is writable too, and qBittorrent seeds from
+there, so deleting a file in Nextcloud can break the torrent still serving it. Kapowarr's
+moves are copy-then-delete, so avoid reorganising `Comics`/`Manga` while it has a task
+running.
 
 ### Feeds
 
-FreshRSS is the odd one out in this group: it has no file library at all. Subscriptions,
-articles and per-account read state live in the shared PostgreSQL (database and role
-`freshrss`), reached over its own `internal: true` `rss` segment; `${DATA_LOCATION}/freshrss`
-holds only `data/config.php`, the per-user `config.php` files, and caches. It is on
-`frontend` as well, and unlike the other library services that is not just for Traefik —
-fetching arbitrary feeds *is* the job, so an internal-only placement would break it.
+FreshRSS has no file library at all. Subscriptions, articles and per-account read state
+live in the shared PostgreSQL (database and role `freshrss`), reached over its own
+`internal: true` `rss` segment; `${DATA_LOCATION}/freshrss` holds only `data/config.php`,
+the per-user `config.php` files, and caches. It is on `frontend` as well, and not just
+for Traefik — fetching arbitrary feeds *is* the job, so an internal-only placement would
+break it.
 
 Refreshing is the image's own cron, enabled by `CRON_MIN` (twice an hour here). Left
-unset the image installs no crontab at all and feeds only update when a browser asks.
+unset, the image installs no crontab at all and feeds only update when a browser asks.
 
-The SSO wiring is unusual too, and it is why the **Debian** image is pinned rather than
-`-alpine`: the OIDC flow runs in Apache through `mod_auth_openidc`, which only that
-variant ships. Apache guards `/i/` — the whole web UI — and passes the
-`preferred_username` claim down as `REMOTE_USER`; FreshRSS is installed with
-`--auth-type http_auth` and trusts it, auto-registering an account on first sign-in
-(`http_auth_auto_register`, on by default). So Authelia's `one_factor` policy on the
-client is the entire access decision, and every LLDAP account gets its own reading list
-rather than sharing the admin's. `/api/greader.php` is deliberately outside that gate,
-because feed-reader apps cannot complete an interactive portal; it checks the account's
-own API password, which is `PASSWORD` and is rotated by `rotate-password.sh`.
+The SSO wiring is why the **Debian** image is pinned rather than `-alpine`: the OIDC flow
+runs in Apache through `mod_auth_openidc`, which only that variant ships. Apache passes
+the `preferred_username` claim down as `REMOTE_USER`; FreshRSS is installed with
+`--auth-type http_auth`, trusts it, and auto-registers an account on first sign-in, so
+every LLDAP account gets its own reading list. `/api/greader.php` stays outside that gate
+for feed-reader apps and checks the account's own API password, which is `PASSWORD`. The
+access rules are in [Security](SECURITY.md#per-service-protection).
 
 That password lands in two places a rotation has to reach together — the `freshrss`
-Postgres role and `data/config.php`, written once at install — which is the same shape
-as Nextcloud's `dbpassword`, and handled the same way: `cli/reconfigure.php` first,
-`ALTER ROLE` second.
+Postgres role and `data/config.php`, written once at install — so `rotate-password.sh`
+rewrites the file first (`cli/reconfigure.php`) and runs `ALTER ROLE` second, the same
+order it uses for Nextcloud's `dbpassword`.
 
 ### Pages that publish no feed
 
 changedetection.io covers the other half of the same need: a price, a stock status, a
-school menu, a page that changes without ever announcing it. It has no database — the
-watch list, the settings and the brotli-compressed snapshot history are plain files
-under `${DATA_LOCATION}/changedetection`, so Backrest's read-only mount of that
-directory is the whole backup and there is no `db-backup.sh` hook for it.
+page that changes without ever announcing it. It has no database — the watch list, the
+settings and the brotli-compressed snapshot history are plain files under
+`${DATA_LOCATION}/changedetection`, so Backrest's read-only mount of that directory is
+the whole backup and there is no `db-backup.sh` hook for it.
 
 It sits on `frontend`, like FreshRSS and SearXNG, because fetching arbitrary hosts *is*
-the job. What makes that safe is `ALLOW_IANA_RESTRICTED_ADDRESSES=false`: a watch URL
-whose hostname resolves to a private, loopback or link-local address is refused, so a
-watch cannot be aimed at a neighbouring container or at the router's admin page. The
-exception is what makes the ntfy route below work, and it is narrow — see
-[Security](SECURITY.md#changedetectionio-fetches-whatever-it-is-told-to). It is upstream's default, pinned explicitly because
-flipping it is what would turn this container into a path into the LAN.
+the job. `ALLOW_IANA_RESTRICTED_ADDRESSES=false` refuses a watch URL whose hostname
+resolves to a private, loopback or link-local address, so a watch cannot be aimed at a
+neighbouring container or the router's admin page; it is upstream's default, pinned
+explicitly. The narrow exception that lets it reach ntfy is described in
+[Security](SECURITY.md#changedetectionio-fetches-whatever-it-is-told-to).
 
 Notifications go to the ntfy `watches` topic. The Apprise URL is seeded as the *system
 default* by `scripts/changedetection-bootstrap.sh` — the list is a datastore setting
@@ -482,34 +424,26 @@ token the datastore mints on its first start. A per-watch URL still overrides it
 the hook only ever appends, so a list edited by hand keeps its entries.
 
 **One real limit:** only the plain-HTTP fetcher is available. The image carries the
-Playwright *client* but the browser itself is a second container (`sockpuppetbrowser`,
-Chrome) that is not deployed here — a headless Chrome per check is not what the
-remaining RAM on this box is for. Pages that render their content in JavaScript
-therefore cannot be watched, and the browser-step and visual-selector features are
-inert.
-
-**Recommended layout:** clone onto the SSD and symlink it into place, so systemd and the docs agree on one path.
-
-```bash
-git clone https://github.com/florianajir/pi-pcloud.git /mnt/ssd/pi-pcloud
-ln -s /mnt/ssd/pi-pcloud /opt/pi-pcloud
-```
+Playwright *client*, but the browser itself is a second container (`sockpuppetbrowser`,
+Chrome) that is not deployed here, to save the RAM a headless Chrome per check would
+take. Pages that render their content in JavaScript therefore cannot be watched, and the
+browser-step and visual-selector features are inert.
 
 ## Rationing CPU and memory
 
-Four cores and 16 GB, shared by ~40 containers including a local LLM. The sum of the
-`mem_limit`s is close to twice the RAM, which is deliberate — they are ceilings on a
-service that misbehaves, not an allocation. What matters is who gives way first when
-the machine is actually short, and that is expressed in three separate knobs, none of
-which substitutes for another. The picker behind `make config` adds the ceilings up for
-the selection being made, graded against the RAM of the host it runs on
+On the 16 GB reference host, four cores and the RAM are shared by ~40 containers
+including a local LLM. The sum of the `mem_limit`s is close to twice the RAM, which is
+deliberate — they are ceilings on a service that misbehaves, not an allocation. What
+matters is who gives way first when the machine is actually short, and that is
+expressed in three separate knobs, none of which substitutes for another. The picker
+behind `make config` adds the ceilings up for the selection being made, graded against
+the RAM of the host it runs on
 ([Choosing which services run](CONFIGURATION.md#choosing-which-services-run)).
 
-That sum is a worst case nothing has ever reached, and reading it as anything else is
-the mistake the numbers invite: the shipped selection declares 34G, holds 8.5G, and its
-per-container peaks add up to 22.6G over windows that never overlapped. `make doctor`
-reports the measured side — what each container holds, the most it ever held, and how
-often it reached its ceiling and had to reclaim to stay under it
+That sum is a worst case, not a forecast: per-container peaks rarely coincide, and the
+stack holds a fraction of its ceilings at idle. `make doctor` reports the measured
+side — what each container holds, the most it ever held, and how often it reached its
+ceiling and had to reclaim to stay under it
 ([Ceilings, and what PSI cannot see](MONITORING.md#ceilings-and-what-psi-cannot-see)).
 
 ### CPU
@@ -524,63 +458,50 @@ often it reached its ceiling and had to reclaim to stay under it
 | `2-3` | immich-machine-learning | Narrower still; `MACHINE_LEARNING_*_THREADS` are matched to it |
 | unpinned | everything else, Postgres and Unbound included | Free to land anywhere, arbitrated by shares |
 
-Postgres is deliberately unpinned. It was on `1-3`, which is exactly the three cores
-llama.cpp and Parakeet saturate, and left it the one core it could not use — for a
-service every other service waits on.
+Postgres is deliberately unpinned: `1-3` are exactly the cores llama.cpp and Parakeet
+saturate, and every other service waits on the database.
 
-`cpu_shares` (`x-cpu-prio-*` in `compose.yaml`, copied into every `compose/*.yaml`) has four tiers — 4096 critical, 1024
-normal, 256 batch, 128 idle — and orders them by **who waits on whom**, not by
-appetite. The model services want the most CPU and get the least: a DNS answer or a
-healthcheck blocked behind an inference is what actually breaks the stack, and an
-inference that finishes a second later breaks nothing. It costs nothing when the box
-is idle, which it is 95% of the time — cgroup weights are only consulted under
-contention.
-
-**It replaces `deploy: resources: reservations: cpus:`, which did nothing.** Compose
-drops that key outside Swarm: `docker inspect` reported `CpuShares=0` and every
-container sat at the default `cpu.weight=100`, tier notwithstanding. Five tiers were
-declared across 40 services and not one of them reached the kernel.
-`tests/compose-invariants.py` now fails on any `deploy:` key, so it cannot come back.
+`cpu_shares` (`x-cpu-prio-*` in `compose.yaml`, copied into every `compose/*.yaml`) has
+four tiers — 4096 critical, 1024 normal, 256 batch, 128 idle — and orders them by
+**who waits on whom**, not by appetite. The model services want the most CPU and get
+the least: a DNS answer or a healthcheck blocked behind an inference is what actually
+breaks the stack, and an inference that finishes a second later breaks nothing. It
+costs nothing on an idle box — cgroup weights are only consulted under contention.
 
 ### Memory
 
 `mem_limit` is the ceiling and counts page cache and shared memory, not just anonymous
 pages — which is why a tight limit on an I/O-heavy service buys nothing and costs
-re-reads. `oom_score_adj` only speaks at kill time, and nothing here has ever been
-killed. Neither says *don't page this out*, so:
+re-reads. `oom_score_adj` only speaks at kill time. Neither says *don't page this out*,
+so:
 
-- **`mem_reservation`** (cgroup v2 `memory.low`) on the latency-critical set only:
-  DNS, proxy, auth, Postgres, Redis, the VPN daemons. The kernel reclaims from
-  cgroups over their reservation before touching one under it. The total stays around
-  1.3 GB of 16 on purpose — the protection is proportional, so reserving everywhere
-  protects nothing. The model services have none: they are the pages this is meant to
-  evict first.
-- **`memswap_limit`** on the eight services that either measurably swap or carry a
-  limit big enough to take the whole file. Left unset, Docker
-  gives every container a swap allowance equal to its `mem_limit`, so the stack
-  claimed ~30 GB against a swap file a fraction of that size, and one idle llama.cpp
-  held 2.6 GB of it while resident at 21 MB. `memswap_limit` is memory *plus* swap,
-  so the ceiling is the difference: `mem_limit: 6g` with `memswap_limit: 8g` is a
-  2 GB swap ceiling. Sized against `SWAP_SIZE_MB`
-  ([Configuration](CONFIGURATION.md#host-swap)), not against RAM.
+- **`mem_reservation`** (cgroup v2 `memory.low`) on a short list, mostly the
+  latency-critical set: DNS, proxy, auth, Postgres, Redis, the VPN daemons. The kernel
+  reclaims from cgroups over their reservation before touching one under it. The total
+  stays a small fraction of RAM on purpose — the protection is proportional, so
+  reserving everywhere protects nothing. The model services have none: they are the
+  pages this is meant to evict first.
+- **`memswap_limit`** on the services that measurably swap or carry a limit big enough
+  to take the whole swap file. Left unset, Docker gives every container a swap
+  allowance equal to its `mem_limit`, so a single idle model server can fill the file.
+  `memswap_limit` is memory *plus* swap, so the ceiling is the difference:
+  `mem_limit: 6g` with `memswap_limit: 8g` is a 2 GB swap ceiling. Sized against
+  `SWAP_SIZE_MB` ([Configuration](CONFIGURATION.md#host-swap)), not against RAM.
 
 `mem_swappiness` is not used and cannot be: cgroup v2 has no per-cgroup swappiness,
-and Docker answers `WARNING: Your kernel does not support memory swappiness
-capabilities. Memory swappiness discarded.` The global `vm.swappiness = 10` in
+and Docker discards it with a warning. The global `vm.swappiness = 10` in
 `config/sysctl.d/pi-pcloud.conf` is the only lever.
 
 ### Swap, and zswap in front of it
 
-`/var/swap` is a file on the NVMe, sized by `SWAP_SIZE_MB`
-([Configuration](CONFIGURATION.md#host-swap)). A full one is not a fault here — the
-model services evict their cold weights exactly once and that is what swap is for.
-What *was* a fault is having no room left for the next spike.
+`/var/swap` is a file on the NVMe, sized by `SWAP_SIZE_MB` — why a full one is expected
+here is in [Configuration](CONFIGURATION.md#host-swap).
 
 `scripts/configure-kernel-params.sh` puts **zswap** in front of it: an evicted page
 is compressed and kept in RAM, and only reaches the NVMe once the pool (20% of RAM)
-is full. The kernel is built `CONFIG_ZSWAP=y` without `CONFIG_ZSWAP_DEFAULT_ON`, so
-it is compiled in and idle until `zswap.enabled=1` is on the boot line. Two details
-are not obvious:
+is full. The kernel is built `CONFIG_ZSWAP=y` without
+`CONFIG_ZSWAP_DEFAULT_ON`, so zswap is compiled in and idle until `zswap.enabled=1` is
+on the boot line. Two details are not obvious:
 
 - **The compressor stays at the built-in `lzo`.** `CRYPTO_ZSTD` and `CRYPTO_LZ4` are
   modules on this kernel while zswap is built in, so `zswap.compressor=zstd` on the
@@ -589,12 +510,11 @@ are not obvious:
   `/sys/module/zswap/parameters/compressor` after boot, not a boot parameter.
 - **`zswap.shrinker_enabled=1` is not the default and matters more than the pool
   size.** Without the shrinker a full pool simply stops accepting new pages, and it
-  fills with whichever arrived first — on this box, the cold model weights nobody is
+  fills with whichever arrived first — typically the cold model weights nobody is
   going to ask for. The shrinker writes those back to disk and keeps the pool for
   pages with a future.
 
-zswap is also the one setting here that can be tried without a reboot, which is why
-it is worth trying before committing to the boot line:
+zswap can be tried without a reboot before committing to the boot line:
 
 ```bash
 cat /sys/module/zswap/parameters/enabled          # N until the next reboot
@@ -605,7 +525,7 @@ echo N | sudo tee /sys/module/zswap/parameters/enabled   # back off, no reboot
 
 ## Backups
 
-Two independent layers: Backrest takes the nightly full backup of application data plus database dumps, and Beszel snapshots its own metrics database. Schedules, retention and how failures are noticed: [Monitoring → Backup strategy](MONITORING.md#backup-strategy).
+Two independent layers: Backrest takes the nightly full backup of application data plus database dumps, and Beszel snapshots its own metrics database. Schedules, retention and how failures are noticed: [Backups](BACKUP.md#what-is-backed-up).
 
 ## Deliberate limits
 
