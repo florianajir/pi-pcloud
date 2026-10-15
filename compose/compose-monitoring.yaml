@@ -637,7 +637,7 @@ services:
       - ${DATA_LOCATION:-./data}/audiobookshelf/config:/userdata/audiobookshelf:ro
       # Read by backrest-env-snapshot.sh for two plans: s3-backup, and usb-env,
       # whose password sits beside it so the env file can be restored from the
-      # data disk alone (docs/MONITORING.md). The project directory, not the
+      # data disk alone (docs/BACKUP.md). The project directory, not the
       # file: a file bind pins the inode, and every writer replaces the file.
       - ./:/pi-web-src:ro
       - ${DATA_LOCATION:-./data}/backrest/env-snapshot:/userdata/pi-web-env
