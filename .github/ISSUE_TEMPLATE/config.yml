@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/florianajir/pi-pcloud/security/advisories/new
+    about: Privately, never in a public issue.
+  - name: Documentation
+    url: https://github.com/florianajir/pi-pcloud/blob/main/docs/README.md
+    about: Installation, configuration and troubleshooting.

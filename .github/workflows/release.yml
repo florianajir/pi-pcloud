@@ -1,0 +1,44 @@
+name: Release
+
+# main is the only install channel (install.sh clones it, `make update` pulls
+# it). The monthly release is a dated changelog to read before updating, not a
+# version to pin.
+on:
+  schedule:
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish release notes
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Release main if it moved since the last release
+        run: |
+          set -euo pipefail
+          tag="v$(date -u +%Y.%m.%d)"
+          previous="$(gh release view --json tagName --jq .tagName 2>/dev/null || true)"
+          if [ -z "$previous" ]; then
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+              --notes "First tagged release. Earlier changes are listed in the merged pull requests."
+            exit 0
+          fi
+          ahead="$(gh api "repos/$GH_REPO/compare/$previous...$GITHUB_SHA" --jq .ahead_by)"
+          if [ "$ahead" = "0" ]; then
+            echo "Nothing merged since $previous"
+            exit 0
+          fi
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+            --generate-notes --notes-start-tag "$previous"
