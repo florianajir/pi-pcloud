@@ -67,3 +67,6 @@ __pycache__/
 /.claude/settings.local.json
 /.claude/worktrees/
 /.ruff_cache/
+
+# Personal editor settings; .vscode/ holds the shared ones
+/.zed/

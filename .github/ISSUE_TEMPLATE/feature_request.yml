@@ -1,0 +1,26 @@
+name: Feature or service request
+description: Propose an improvement, or a new service for the stack.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does it solve
+      description: The need, not the solution — what you cannot do today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What you would add or change.
+    validations:
+      required: true
+  - type: textarea
+    id: service
+    attributes:
+      label: For a new service
+      description: |
+        A service has to fit a Raspberry Pi next to everything else. Please answer what you can:
+        upstream repository, last release date, arm64 image available, idle RAM,
+        whether it supports OIDC and Postgres, and which alternatives you considered.

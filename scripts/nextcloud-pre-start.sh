@@ -6,9 +6,9 @@
 # sufficient. Nextcloud's PHP runs as uid 33 (www-data) while everything under
 # DATA_LOCATION belongs to uid/gid 1000 in mode 0755, so uid 33 would still get
 # r-x and could not create, move or delete anything - the Files app would show
-# a permission error on every attempt. compose/compose-cloud.yaml puts the container in gid
-# 1000 via `group_add`; this hook is the other half, granting that gid write
-# access to the tree.
+# a permission error on every attempt. A supplementary group cannot fix that:
+# Apache's initgroups() discards `group_add`. This hook grants uid 33 itself
+# write access to the tree.
 #
 # POSIX ACLs rather than `chmod -R g+w`, because a chmod does not survive. The
 # services that fill these folders - qBittorrent, Kapowarr, Shelfmark - all run

@@ -1,17 +1,9 @@
 # The directory and the SSO portal in front of it. Always on: every other
 # domain's forward-auth middleware and OIDC clients resolve here.
 #
-# Included by compose.yaml, which declares the networks and volumes named
-# below and supplies the .env this file interpolates. Not startable on its
-# own: `docker compose -f compose/compose-identity.yaml` resolves every relative
-# path against compose/ instead of the project root.
-
-# --- shared preamble: identical in every compose/*.yaml ---
-#
-# YAML anchors are file-scoped and `include:` parses each file on its own, so
-# this block cannot be shared - it is copied. compose.yaml holds the canonical
-# copy, with the reasoning behind every tier; tests/compose-invariants.py fails
-# the build when a copy drifts from it. Change compose.yaml first, then here.
+# Included by compose.yaml, which declares the networks and volumes and holds
+# the canonical x- anchors these are copies of (tests/compose-invariants.py
+# fails if one drifts: change compose.yaml first).
 
 x-service-defaults: &service-defaults
   logging:
@@ -50,10 +42,7 @@ x-healthcheck-fast: &healthcheck-fast
   retries: 3
   start_period: 10s
 
-# --- end shared preamble ---
-
 services:
-  # Authentication & SSO
   lldap:
     <<: *service-defaults
     image: lldap/lldap:v0.6.3-alpine@sha256:2a8454b668c1aba7157e832eab0e242e1e7eb5fb7591d7e7774ba05286511ca8
@@ -89,8 +78,7 @@ services:
         condition: service_healthy
     healthcheck:
       <<: *healthcheck-default
-      # A responding HTTP API confirms the LDAP port is up too, which is what
-      # authelia dials at startup.
+      # The HTTP API answering implies the LDAP port authelia dials is up too.
       test: ["CMD", "curl", "-sf", "http://localhost:17170/"]
       start_period: 30s
     labels:
@@ -120,8 +108,7 @@ services:
       - auth
     expose:
       - 9091
-      # telemetry.metrics in the Authelia template: its own listener, so
-      # /metrics is never on the port Traefik routes.
+      # telemetry.metrics: its own listener, never the port Traefik routes.
       - 9959
     environment:
       - TZ=${TIMEZONE:-Europe/Paris}
@@ -162,15 +149,15 @@ services:
       - "traefik.http.routers.authelia.tls=true"
       - "traefik.http.services.authelia.loadbalancer.server.port=9091"
       - "traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/authz/forward-auth"
-      # false so Traefik derives Method/Proto/Host/Uri from the request it actually
-      # received; true forwards the client's own, i.e. what the caller chose.
+      # false so Traefik derives Method/Proto/Host/Uri from the request it
+      # actually received; true forwards the client's own, i.e. what the caller
+      # chose.
       - "traefik.http.middlewares.authelia.forwardauth.trustForwardHeader=false"
       - "traefik.http.middlewares.authelia.forwardauth.authRequestHeaders=Accept,Cookie,Authorization"
       - "traefik.http.middlewares.authelia.forwardauth.authResponseHeaders=Remote-User,Remote-Groups,Remote-Name,Remote-Email"
       - "traefik.http.middlewares.authelia.forwardauth.maxResponseBodySize=4096"
     cpu_shares: *cpu-prio-critical
-    # Measured at 74m serving the current client list; 128m left almost no room
-    # for a request spike, and an OOM here takes every gated router down with it.
+    # Generous on purpose: an OOM here takes every gated router down with it.
     mem_limit: 192m
     mem_reservation: 48m
     oom_score_adj: *oom-score-critical

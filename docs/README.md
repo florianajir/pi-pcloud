@@ -21,9 +21,10 @@
 | | |
 |---|---|
 | **[VPN](TAILSCALE.md)** | Connecting devices, exit node, MagicDNS, managing nodes |
-| **[Monitoring](MONITORING.md)** | Beszel, Uptime Kuma, ntfy topics, alerts, backup strategy |
+| **[Monitoring](MONITORING.md)** | Beszel, Uptime Kuma, Prometheus, ntfy topics and alerts |
+| **[Backups & restore](BACKUP.md)** | What a snapshot holds, the recovery kit, rebuilding on new hardware |
 | **[Email](EMAIL.md)** | SMTP setup and which service sends what |
-| **[Local AI](AI.md)** | The model, speech in and out, the host-status tool |
+| **[Local AI](AI.md)** | The model, the gateway, the family assistant, speech in and out, the host-status tool |
 | **[Postgres upgrades](POSTGRES-UPGRADE.md)** | Moving the shared cluster to a new major: the cutover, verification, rollback |
 
 ## When something breaks
@@ -32,4 +33,4 @@
 
 ---
 
-Contributing to the project itself? See [CONTRIBUTING.md](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md).
+Contributing to the project itself? See [CONTRIBUTING.md](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md). Reporting a vulnerability? See the [security policy](../.github/SECURITY.md).

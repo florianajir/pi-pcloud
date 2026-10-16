@@ -27,7 +27,8 @@ main() {
     for dir in "$data_location/download" \
                "$data_location/download/manga" \
                "$data_location/download/comics" \
-               "$data_location/download/books"; do
+               "$data_location/download/books" \
+               "$data_location/download/magazines"; do
         [ -d "$dir" ] && continue
         mkdir -p "$dir"
         fix_ownership "$dir"

@@ -47,18 +47,14 @@ make restart
 |----------|---------|-------------|
 | `SWAP_SIZE_MB` | `8192` | Size of `/var/swap`, applied by `make install` via `scripts/configure-swap.sh` |
 
-**Two settings are needed, and raising only the obvious one does nothing.**
-`/etc/dphys-swapfile` holds `CONF_SWAPSIZE`, but `/sbin/dphys-swapfile` carries
-its own `CONF_MAXSWAP=2048` and clamps the request down to it — "restricting to
-config limit" — so the script sets both.
+Change the size here rather than in `/etc/dphys-swapfile`: `/sbin/dphys-swapfile` clamps
+`CONF_SWAPSIZE` to its own `CONF_MAXSWAP=2048` default, so raising only the first does
+nothing. The script raises both.
 
-**Why 8192 and not the 2048 Raspberry Pi OS ships.** A full swap file is not a
-fault on this box; the model services load their weights, go idle, and have
-their cold pages evicted exactly once, which is what swap is *for*. But
-`parakeet`, `llama-cpp`, `open-webui` and `immich-machine-learning` filled a
-4096 MB file to 99.99% between them, and a swap file with 360 kB free has no
-room for the next spike. The `memswap_limit` ceilings in `compose/*.yaml` are
-sized against this number — see
+The default is 8192 rather than Raspberry Pi OS's 2048 because the model services load
+their weights, go idle and have their cold pages evicted — which is what swap is for —
+and need room left for the next spike. The `memswap_limit` ceilings in `compose/*.yaml`
+are sized against this number — see
 [Architecture](ARCHITECTURE.md#rationing-cpu-and-memory).
 
 Resizing means `swapoff`, which pages everything in swap back into RAM at once.
@@ -66,9 +62,8 @@ The script only restarts `dphys-swapfile` when available RAM covers the
 swapped-out set with 20% headroom, and otherwise leaves the new size to take
 effect on the next reboot. It never fails the install.
 
-The file is not the whole story: `make install` also enables **zswap**, a
-compressed cache in RAM in front of it, so most of this size is only reached
-under real pressure — see
+`make install` also enables **zswap**, a compressed cache in RAM in front of the file,
+so most of this size is only reached under real pressure — see
 [Architecture](ARCHITECTURE.md#swap-and-zswap-in-front-of-it).
 
 ### Network
@@ -81,16 +76,16 @@ Defaults suit a `192.168.1.0/24` LAN. The installer auto-detects all of these ex
 | `HOST_LAN_SUBNET` | `192.168.1.0/24` | Your home network CIDR |
 | `HOST_LAN_GATEWAY` | `192.168.1.1` | Your router's IP |
 | `PIHOLE_IP` | `192.168.1.250` | Pi-hole's own LAN address — in the subnet, outside the DHCP range |
-| `STREMIO_IP` | `192.168.1.251` | Only for the `stremio-lan` profile — Stremio's own LAN address, so it can discover cast renderers. Same constraints as `PIHOLE_IP`. The installer derives it from the detected subnet on a `/24`; on any other subnet it warns and you set it by hand. An `.env` from before this variable existed has no line for it — `stremio-lan-pre-start.sh` refuses the start and names the fix rather than letting Compose fail with "Invalid address" |
+| `STREMIO_IP` | `192.168.1.251` | Only for the `stremio-lan` profile — Stremio's own LAN address, so it can discover cast renderers. Same constraints as `PIHOLE_IP`. The installer derives it from the detected subnet on a `/24`; on any other subnet it warns and you set it by hand. If it falls outside `HOST_LAN_SUBNET`, `stremio-lan-pre-start.sh` refuses the start and names the fix |
 | `PIHOLE_DNS_UPSTREAMS` | `172.30.53.53#5335;1.1.1.1;9.9.9.9` | Semicolon-separated. dnsmasq load-balances across all of them rather than treating the first as primary, so the public resolvers do see a share of normal traffic — leave only the Unbound entry to stop that. See [Networking](NETWORKING.md#the-dns-pipeline) |
 | `ALLOW_IP_RANGES` | `127.0.0.1/32,192.168.1.0/24,100.64.0.0/10,172.30.0.0/16,::1/128,fd7a:115c:a1e0::/48` | Comma-separated CIDRs allowed to reach the services, both families |
 | `HOST_LAN_SUBNET6` | *(empty)* | Appended to `ALLOW_IP_RANGES`: the IPv6 prefix your ISP delegates to the LAN. No fixed default is possible, so `pi-pcloud-wan-allowlist.timer` reads it off `HOST_LAN_PARENT` and keeps it current — leave it to the timer. Empty means no IPv6 client is allowlisted. See [Networking](NETWORKING.md#ipv6) |
 | `IPV6_PUBLIC_RECORDS` | *(empty)* | Any non-empty value publishes AAAA records for `<HOST_NAME>` and `*.<HOST_NAME>` — Compose can only test for emptiness, so `0` and `false` enable it too; use `1`, and empty to disable. Set it **after** allowing inbound `443/tcp` to the Pi in your router's IPv6 firewall — a firewall rule, not a port forward. Empty leaves public DNS as A records only, IPv6 still working from the LAN |
 | `WAN_HAIRPIN_IP` | *(empty)* | Appended to `ALLOW_IP_RANGES`. IPv4 only — an IPv6 client is never hairpinned. Set it to your line's public address as a `/32` if your router hairpins — see [Networking](NETWORKING.md#routers-that-cannot-set-the-dhcp-dns-option). Maintained by `pi-pcloud-wan-allowlist.timer` once set, so leave it to the timer rather than editing it back |
 
-`ALLOW_IP_RANGES` in order: localhost, your home LAN (**adjust to your network**), the Tailscale allocation, and the Docker internal networks — then the same four for IPv6, except the LAN, which `HOST_LAN_SUBNET6` carries instead. `fd7a:115c:a1e0::/48` is the tailnet's IPv6 prefix. The Docker networks have no IPv6 counterpart on purpose: only Traefik has an IPv6 address and it never calls itself, so the one source that could come from `ingress6` is its gateway — which is what `docker-proxy` substitutes when the IPv6 DNAT is missing, and allowlisting it would turn that failure into an open door. It drives Traefik's `lan` middleware — see [Security](SECURITY.md#per-service-protection).
+`ALLOW_IP_RANGES` drives Traefik's `lan` middleware — see [Security](SECURITY.md#per-service-protection). In order: localhost, your home LAN (**adjust to your network**), the Tailscale allocation and the Docker internal networks, then localhost and the tailnet's IPv6 prefix (`fd7a:115c:a1e0::/48`); `HOST_LAN_SUBNET6` carries the IPv6 LAN. The Docker networks have no IPv6 entry on purpose: the only IPv6 source that could appear from inside is the bridge gateway, which is what `docker-proxy` substitutes when the IPv6 DNAT is missing — allowlisting it would turn that failure into an open door.
 
-Three services read it, and one does not pick up a later edit: qBittorrent's `WebUI\AuthSubnetWhitelist` is written only when its config file is created. Harmless — it is reached through Traefik, which has the current list.
+qBittorrent's `WebUI\AuthSubnetWhitelist` takes the list only when its config file is created, so it ignores later edits — harmless, since qBittorrent is reached through Traefik.
 
 ### S3 storage
 
@@ -109,14 +104,14 @@ Used by Backrest (backups), Beszel (snapshots and file uploads) and optionally N
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `BACKREST_S3_URI` | `s3:${S3_ENDPOINT}/${S3_BUCKET}/restic` | Set explicitly for non-S3 storage |
-| `BACKREST_S3_REPO_PASSWORD` | — | Repository encryption key. 32+ random characters. **Keep a copy off this machine** — see [Monitoring](MONITORING.md#the-env-file-twice) |
-| `BACKREST_LOCAL_REPO_PASSWORD` | *(generated)* | Encryption key for the `usb` repository, which holds the `.env` history on the data disk. Left unset, `backrest-pre-start.sh` generates one into `${DATA_LOCATION}/backrest/repos/env-repo-password` so the disk can restore itself — see [Monitoring](MONITORING.md#the-env-file-twice) |
+| `BACKREST_S3_REPO_PASSWORD` | — | Repository encryption key. 32+ random characters. **Keep a copy off this machine** — see [Backups](BACKUP.md#the-env-file-twice) |
+| `BACKREST_LOCAL_REPO_PASSWORD` | *(generated)* | Encryption key for the `usb` repository, which holds the `.env` history on the data disk. Left unset, `backrest-pre-start.sh` generates one into `${DATA_LOCATION}/backrest/repos/env-repo-password` so the disk can restore itself — see [Backups](BACKUP.md#the-env-file-twice) |
 | `BACKREST_AUTH_USER` | — | **Not a knob**: `compose/compose-monitoring.yaml` pins the Backrest UI/API login to `${ADMIN_USER}`, so a `BACKREST_AUTH_USER` line in `.env` does nothing. Its password is not set here either — see below |
 | `NEXTCLOUD_SQL_BACKUP_KEEP` | `7` in `.env.dist`, `30` if the line is absent | Nextcloud SQL dumps retained in `data/nextcloud-config/backups`, separate from the full backups |
 
-Without complete S3 credentials Backrest still starts, but its `s3` repository is unusable — the pre-start script warns and the nightly plan has nowhere to write. The `usb` repository is unaffected — it is local and needs no S3 credentials — but it only covers `.env`. For a local-only setup, add a second repository under `/repos` (bind-mounted from `${DATA_LOCATION}/backrest/repos`, where `/repos/env` is already taken) in the Backrest UI. See [Backup strategy](MONITORING.md#backup-strategy).
+Without complete S3 credentials Backrest still starts, but its `s3` repository is unusable — the pre-start script warns and the nightly plan has nowhere to write. The `usb` repository is unaffected — it is local and needs no S3 credentials — but it only covers `.env`. For a local-only setup, add a second repository under `/repos` (bind-mounted from `${DATA_LOCATION}/backrest/repos`, where `/repos/env` is already taken) in the Backrest UI. See [Backup strategy](BACKUP.md#what-is-backed-up).
 
-**Restrict the S3 key.** The credentials Backrest holds can delete objects, and the bucket has no versioning or object lock, so anything that reads them can destroy every snapshot. In the Scaleway console, give the backup key a bucket policy without `s3:DeleteObject` and keep a second, privileged key for the weekly prune:
+**Restrict the S3 key.** Credentials that can delete objects, on a bucket without versioning or object lock, let anything that reads them destroy every snapshot. Give the backup key a bucket policy without `s3:DeleteObject` and keep a second, privileged key for the weekly prune — on Scaleway, for example:
 
 ```json
 {
@@ -130,7 +125,7 @@ Without complete S3 credentials Backrest still starts, but its `s3` repository i
 }
 ```
 
-Prune needs `DeleteObject`, so with this in place the Sunday prune fails until it runs under the privileged key. The trade-off is deliberate: unused data accumulates instead of the repository being deletable by anything that reaches port 9898.
+Prune needs `DeleteObject`, so with this in place the weekly prune fails until it runs under the privileged key. The trade-off is deliberate: unused data accumulates instead of the repository being deletable by anything that reaches Backrest on port 9898.
 
 ### Beszel
 
@@ -179,7 +174,7 @@ chmod 600 config/gluetun/gluetun.env
 | `SERVER_COUNTRIES` | `Netherlands` |
 | `FIREWALL_VPN_INPUT_PORTS` | `6881` — improves peer reachability |
 
-The file is optional: without it Gluetun starts with no tunnel and traffic takes the host's default route. `chmod 600` because `cp` copies the mode of `.dist`, which is tracked in Git and therefore world-readable — every other secret file in this repo is generated 0600 by a script (`lib.sh`'s `write_secret_file`), and this is the only one you create by hand.
+The file is optional: without it Gluetun starts with no tunnel and traffic takes the host's default route. `chmod 600` because `cp` keeps the world-readable mode of the tracked `.dist` — this is the only secret file you create by hand; scripts generate the others as 0600.
 
 qBittorrent's credentials (`ADMIN_USER` / `PASSWORD`) are applied on first start by `scripts/qbittorrent-bootstrap.sh`. The config template pre-authorises localhost and `ALLOW_IP_RANGES` so the bootstrap can call the API unauthenticated; it is idempotent on later restarts.
 
@@ -189,33 +184,27 @@ qBittorrent's credentials (`ADMIN_USER` / `PASSWORD`) are applied on first start
 |----------|-------------|---------|
 | `HARDCOVER_API_KEY` | Hardcover personal access token, from [hardcover.app/account/api](https://hardcover.app/account/api) | `hc_pat_…` |
 
-Optional, and only Shelfmark reads it. Without it, audiobook searches fall back to the
-book metadata provider — Open Library, a *book* catalogue with essentially no audio
-edition data, so audiobook results come back with paper metadata or nothing. Hardcover
-is the one provider wired here that carries audiobook editions.
+Optional, and only Shelfmark reads it. Hardcover is the one metadata provider wired here
+that carries audiobook editions; without it, audiobook searches fall back to Open Library,
+a *book* catalogue, and come back with paper metadata or nothing.
 
 Set it and `scripts/shelfmark-settings-bootstrap.sh` enables Hardcover and makes it the
-**default** audiobook provider on the next `make update`. Remove it and the next run
-releases that selection back to the book provider — leaving Hardcover selected with a key
-nobody supplies any more would point every audiobook search at a provider that can only
-fail. The key already stored in Shelfmark is deliberately left in place, since one pasted
-into **Settings → Hardcover** by hand is indistinguishable from one the bootstrap wrote;
-clear it there if you want it gone.
+**default** audiobook provider on the next `make update`; each user can still pick another.
+Remove it and the next run releases that selection back to the book provider. The key
+already stored in Shelfmark stays — a key pasted by hand looks the same — so clear it under
+**Settings → Hardcover** if you want it gone.
 
-Two deliberate details. The key is written into Shelfmark's `plugins/hardcover.json`
-rather than its environment, so `docker inspect` never prints it — the same rule as the
-OIDC client secrets. And the provider choice is written as a config-file default rather
-than an environment variable, because Shelfmark's environment values *always* win over
-per-account settings (`core/config.py`): putting it there would freeze every user's
-audiobook provider instead of moving the default they can still change.
+The key goes into Shelfmark's `plugins/hardcover.json` rather than its environment, so
+`docker inspect` never prints it — the same rule as the OIDC client secrets.
 
 ## Auto-generated secrets
 
-`BACKREST_AUTH_PASSWORD` is deliberately absent from this table: setting it in `.env` has no effect. `scripts/backrest-pre-start.sh` generates it into `config/backrest/backrest.env`, which the service loads as an `env_file`, and the image entrypoint hashes it into `config.json` on every start. Read it with `grep BACKREST_AUTH_PASSWORD config/backrest/backrest.env`; rotate it by deleting the line, then running `sudo sh scripts/backrest-pre-start.sh`, `docker compose up -d backrest` and `sudo sh scripts/homepage-widgets-bootstrap.sh` — that last step is not optional: Homepage authenticates to Backrest with its own copy at `config/homepage/secrets/backrest_password`, and without the sync its widget answers `401 Unauthorized`. The bootstrap restarts Homepage itself when the value changed. Backrest refuses to start if it ends up with no login at all.
+These need no configuration, must not be edited by hand, and have no effect if set in `.env`:
 
-`N8N_RUNNERS_AUTH_TOKEN` is absent for the same reason, and setting it in `.env` has no effect either: `scripts/n8n-pre-start.sh` generates it into `config/n8n/n8n.env`, which both `n8n` and `n8n-runners` load as an `env_file`. It used to be a hard-coded default in `compose/compose-cloud.yaml`, shared by every install — see [Security → Secrets](SECURITY.md#secrets). Rotate it by deleting the file and running `docker compose up -d n8n n8n-runners`; `env_file` values are frozen at container creation, so `restart` keeps the old one.
+- **`BACKREST_AUTH_PASSWORD`** — the Backrest UI/API password. `scripts/backrest-pre-start.sh` generates it into `config/backrest/backrest.env`, loaded as an `env_file`, and the image entrypoint hashes it into `config.json` on every start; Backrest refuses to start with no login at all. Read it with `grep BACKREST_AUTH_PASSWORD config/backrest/backrest.env`. Rotate it with `make rotate-secret TARGET=backrest-auth`, which also updates Homepage's copy in `config/homepage/secrets/backrest_password` — without that, the Homepage widget answers `401 Unauthorized`.
+- **`N8N_RUNNERS_AUTH_TOKEN`** — `scripts/n8n-pre-start.sh` generates it into `config/n8n/n8n.env`, loaded by both `n8n` and `n8n-runners`. Rotate it with `make rotate-secret TARGET=n8n-runner`.
 
-These need no configuration and must not be edited by hand. `scripts/authelia-pre-start.sh` generates most of them on first start with mode `600` under `${DATA_LOCATION}/authelia-config/secrets/`, joined there by `scripts/vaultwarden-pre-start.sh` for the Vaultwarden `/admin` token; `scripts/headscale-init.sh` generates `config/headplane/headscale_api_key`. Full inventory: [Security → Secrets](SECURITY.md#secrets).
+Most of the rest are generated on first start, mode `600`, under `${DATA_LOCATION}/authelia-config/secrets/` — by `scripts/authelia-pre-start.sh`, plus the Vaultwarden `/admin` token from `scripts/vaultwarden-pre-start.sh`; `scripts/headscale-init.sh` generates `config/headplane/headscale_api_key`. Full inventory: [Security → Secrets](SECURITY.md#secrets).
 
 ## Choosing which services run
 
@@ -231,11 +220,9 @@ COMPOSE_PROFILES=                                             # core services on
 
 **Optional services:** `beszel`, `beszel-agent`, `uptime-kuma`, `dockhand`, `n8n`, `n8n-runners`, `headplane`, `immich-server`, `immich-machine-learning`, `nextcloud`, `gluetun`, `qbittorrent`, `stremio`, `stremio-lan`, `aiostreams`, `aiometadata`, `stremthru`, `prowlarr`, `kapowarr`, `flaresolverr`, `kavita`, `shelfmark`, `audiobookshelf`, `freshrss`, `searxng`, `trilium`, `changedetection`, `forgejo`, `tuwunel`, `element`, `vaultwarden`, `llama-cpp`, `piper`, `parakeet`, `system-tools`, `open-webui`, `agentgateway`, `openclaw`, `prometheus`, `grafana`.
 
-`openclaw` starts `tuwunel`, `element`, `agentgateway` and `searxng` with it: the family assistant is a bot account on that homeserver, thinking through that gateway and searching the web through that SearXNG. Forgejo is optional for it — without it the memory simply stays in the assistant's volume.
-
 `stremio` and `stremio-lan` are the same server in two networking modes and are **mutually exclusive** — they share one data volume and the same Traefik host rules. `stremio` is the default (VPN); pick `stremio-lan` only to cast to a DLNA/UPnP renderer, and read the trade-off in [Networking → Casting](NETWORKING.md#casting-to-a-dlna-renderer) first. `stremio-lan` is not part of `all`.
 
-The exclusion is declared once, as `pi-pcloud.conflicts-with` on `stremio-lan` in `compose/compose-media.yaml`, and enforced everywhere a selection is made: `make config` unticks one box when you tick the other, `make enable` refuses and names the service to disable first, and `stack-up.sh` refuses a hand-edited `.env` before anything starts. Switching modes is therefore two steps:
+`make config` unticks one box when you tick the other, `make enable` refuses and names the service to disable first, and `stack-up.sh` refuses an `.env` that lists both. Switching modes is therefore two steps:
 
 ```bash
 make disable stremio
@@ -251,14 +238,14 @@ make enable stremio-lan
 | `n8n-runners` | `n8n` |
 | `beszel-agent` | `beszel` |
 | `prowlarr` | `flaresolverr` |
-| `open-webui` | `agentgateway` (it reaches the models through the gateway, not `llama-cpp` directly) and `searxng` (its web search has nothing to call otherwise) |
+| `open-webui` | `agentgateway` (it reaches the models through the gateway, not `llama-cpp` directly) and `searxng` (its web search) |
+| `openclaw` | `tuwunel`, `element`, `agentgateway` and `searxng` — the [assistant](AI.md#the-family-assistant-openclaw) is a bot on that homeserver that thinks through the gateway and searches through SearXNG. Forgejo is optional: without it, the assistant's memory stays in its own volume |
+| `tuwunel` | `element` |
 
-Disabling `searxng` is the one selection with a consequence outside its own service: Homepage's
-search box and quick-launch bar submit to `search.<HOST_NAME>` — a URL the browser opens, so it
-cannot fall back to an internal address — and both start answering 404. (Their type-ahead
-suggestions go the other way: Homepage fetches those server-side, so they name `searxng:8080`
-directly.) Set `provider: duckduckgo` in `config/homepage/widgets.yaml` and `settings.yaml` to
-put them back on a hosted engine.
+Disabling `searxng` has one consequence outside its own service: Homepage's search box and
+quick-launch bar submit to `search.<HOST_NAME>` in the browser, and start answering 404. Set
+`provider: duckduckgo` in `config/homepage/widgets.yaml` and `settings.yaml` to put them back
+on a hosted engine.
 
 ### Managing the selection
 
@@ -285,39 +272,37 @@ measured here 8.6G held, 22.6G at their peaks · 5 never run here
  [x]   aiostreams          190M/768M  Stream aggregator and filtering for Stremio
 ```
 
-Ticking propagates along both dependency relations — the hard ones in the table above, and the companion indent — transitively, so the screen always shows a set the stack can actually run: unticking `gluetun` unticks `qbittorrent`, `kapowarr`, `stremio` and — through `stremio` — `aiostreams`. The footer names whatever moved.
+Ticking propagates transitively along both relations — the dependencies in the table above and the companion indent — so the screen always shows a set the stack can run: unticking `gluetun` unticks `qbittorrent`, `kapowarr`, `stremio` and, through `stremio`, `aiostreams`. The footer names whatever moved.
 
-**The pair beside each service is what it holds here over what it may take.** The right-hand number is the service’s `mem_limit` — the ceiling `compose/*.yaml` gives it — and the third header line adds the ticked ones up plus the always-on services the screen never lists (Traefik, Authelia, Postgres, Pi-hole … 4.9G between them). The left-hand one is what `scripts/ram-usage.sh` last measured that service holding on *this* host, and it is missing for one the host has never run — `stremio` above, which is off in favour of `stremio-lan`. The fourth header line totals the measured side over the same population and says how many of the ticked services it has nothing to say about.
+**The pair beside each service is what it holds here over what it may take.** The right-hand number is its `mem_limit` from `compose/*.yaml`; the left-hand one is what `scripts/ram-usage.sh` last measured it holding on *this* host, missing for a service the host has never run. The third header line totals the ceilings of the ticked services plus the always-on ones the screen does not list; the fourth totals the measured side and counts the services it has no reading for.
 
-The colour grades the peak once there is one, and the ceiling until then: the ceiling says what the stack allows, the peak what this machine has actually been asked to find, and they disagree in both directions. A quarter of the host is red and a tenth amber, so `llama-cpp` — allowed 6 GB and measured taking every byte of it — is red on a 16 GB box, while `stremio-lan` is allowed 1 GB, has never held more than 113 MB, and is not.
+A service is coloured red when it is worth a quarter of the host's RAM and amber past a tenth — graded on its measured peak once there is one, on its ceiling until then.
 
-`make services`, `make enable` and `make disable` print the same ceiling total, which is the only place a host without `python3` can see it — but never on its own, because on its own it decides nothing:
+`make services`, `make enable` and `make disable` print the same totals, which is the only place a host without `python3` sees them:
 
 ```
 🧠 RAM 8.5G held by 46 containers · 7.2G free of 15.6G · swap 5.3G of 8.0G
    ceilings 33.9G for this selection — 2.2x the host, overcommitted by design
 ```
 
-The first line is measured (`scripts/ram-usage.sh`, reading each container's cgroup) and is the one that answers *can I afford this*; the second is the picker's total, and is the one that responds to a tick. With no container running to measure — a fresh install, a stopped stack — only the second line is printed, with a warning past 2.5×.
-
-`make enable` and `make disable` add the line that actually answers *what did I just do*, because neither total moves much for one service in forty:
+The first line is measured and answers *can I afford this*; the second is the picker's ceiling total. With nothing running to measure — a fresh install, a stopped stack — only the second line is printed, with a warning past 2.5×. `make enable` and `make disable` add what the change itself costs or frees:
 
 ```
 ✅ kavita disabled
    - kavita                     1.0G ceiling · 329M measured here
 ```
 
-**They are ceilings, not usage, and the header is graded accordingly.** The stack is overcommitted on purpose ([Rationing CPU and memory](ARCHITECTURE.md#rationing-cpu-and-memory)): a limit is what a service may take when it misbehaves, not what it holds, and the reference 16 GB host carries everything at 2.3× its RAM while sitting near 20% of those ceilings at idle. Colouring anything over 1× red would flag the shipped default, which is how a warning stops being read — so green means the selection fits even if every service peaked at once, amber is the ordinary overcommitted stack, and red starts at 2.5×, past what the machine this was tuned for was ever asked to carry. It is a hint for choosing between services, not a fit/no-fit verdict: what actually decides is which of them peak together, and the picker cannot know that about a service that has never run on this host. Once one has, `make doctor` says what it really took — including which ceilings are binding and which were never approached ([Monitoring](MONITORING.md#ceilings-and-what-psi-cannot-see)). The per-service comments in `compose/*.yaml` carry the measured idle figures for the rest.
+**Ceilings are not usage.** The stack is overcommitted on purpose ([Rationing CPU and memory](ARCHITECTURE.md#rationing-cpu-and-memory)): a limit is what a service may take when it misbehaves, not what it holds. So the header is green when the selection fits even if every service peaked at once, amber for the ordinary overcommitted stack, and red past 2.5×. It is a hint for choosing between services, not a verdict — what decides is which services peak together. Once a service has run, `make doctor` reports which ceilings are binding and which were never approached ([Monitoring](MONITORING.md#ceilings-and-what-psi-cannot-see)).
 
-**Where the measured numbers come from.** `scripts/ram-usage.sh` reads each running container's cgroup, and files what it saw in `.ram-observed` beside `.env` — gitignored, specific to this machine, rewritten by every `make services`, `make enable`, `make disable` and `make doctor`. The file exists because the readings do not survive what they describe: `memory.peak` dies with the container, and a service that is switched off has no cgroup at all — which is exactly the service the picker is being asked about. So the peak is kept as a maximum across restarts, what a service holds survives it being disabled, and a sample from a container less than an hour old is allowed to seed a row but never to overwrite one, because a container that young is holding its startup footprint rather than its working set. Nothing is load-bearing about the file: delete it and the screen falls back to ceilings alone until the next command refills it.
+**The measured numbers** live in `.ram-observed` beside `.env` — gitignored, specific to this machine, and refreshed by every `make services`, `make enable`, `make disable` and `make doctor`, since a container's cgroup readings die with it. Peaks are kept as a maximum across restarts, readings survive a service being disabled, and a container less than an hour old can seed a row but never overwrite one. Deleting the file is harmless: the screen falls back to ceilings until the next command refills it.
 
-The whole layout is read out of `compose/*.yaml` (`homepage.group` for the section, `homepage.description` for the text, `pi-pcloud.companion-of` for the indent, `profiles:` for the hard dependencies, `mem_limit` for the ceilings), so the picker cannot drift from the stack. It is `scripts/services-picker.py`, standard-library `curses` only — nothing to install on Raspberry Pi OS, and on a host without `python3` you simply use `make enable` / `make disable` instead. All three targets wrap `scripts/services.sh`, which is what actually writes `.env` and runs the hooks.
+The layout is read from `compose/*.yaml` — `homepage.group` for the section, `homepage.description` for the text, `pi-pcloud.companion-of` for the indent, `profiles:` for the dependencies, `mem_limit` for the ceilings — so the picker cannot drift from the stack. It is `scripts/services-picker.py`, standard-library `curses` only; on a host without `python3`, use `make enable` / `make disable`. All three targets wrap `scripts/services.sh`, which writes `.env` and runs the hooks.
 
-Enabling also runs the service's init hooks — `scripts/<service>-pre-start.sh` before the start, `scripts/<service>-bootstrap.sh` / `-oidc-bootstrap.sh` after — and the four hooks that belong to an always-on service but describe the new one: `authelia-pre-start.sh` (its OIDC client secret), `postgres-bootstrap.sh` (its role and database — `config/postgres/init-databases.sh` only runs on a fresh cluster, so a service enabled later would otherwise find nothing to authenticate against), `homepage-widgets-bootstrap.sh` (its widget key, and the Homepage restart that picks it up) and `uptime-kuma-bootstrap.sh` (its monitor, which is paused for as long as the service is disabled). Disabling runs those last two as well, for the same reason in reverse: a monitor left active against a container that has just been removed alerts as down until something pauses it again. These are the same scripts the systemd unit runs, so no `make restart` is needed: the stack is immediately consistent, and the unit reads the same `.env` at next boot.
+**Enabling runs the service's init hooks** — `scripts/<service>-pre-start.sh` before the start, `scripts/<service>-bootstrap.sh` / `-oidc-bootstrap.sh` after — plus four hooks of always-on services that cover the new one: `authelia-pre-start.sh` (its OIDC client secret), `postgres-bootstrap.sh` (its role and database, which `init-databases.sh` only creates on a fresh cluster), `homepage-widgets-bootstrap.sh` (its widget key) and `uptime-kuma-bootstrap.sh` (its monitor). Disabling runs the last two as well, so the monitor is paused rather than alerting on a removed container. These are the scripts the systemd unit runs, so no `make restart` is needed.
 
-The hooks — and only they — are run through `sudo`, because what they write under `DATA_LOCATION` is owned by the root-run unit: unprivileged, `authelia-pre-start.sh` cannot create a temp file in its own secrets directory. A failing hook stops the start and the `COMPOSE_PROFILES` line written just before it is put back, so a service that never started is never left reading as enabled.
+The hooks — and only they — run through `sudo`, because what they write under `DATA_LOCATION` belongs to the root-run unit. A failing hook stops the start and restores the previous `COMPOSE_PROFILES` line, so a service that never started is not left marked as enabled.
 
-> **Upgrading an older install:** an `.env` with no `COMPOSE_PROFILES` line keeps running everything, because the systemd unit defaults the variable to `all`. Manual `docker compose` invocations do not get that default, so add `COMPOSE_PROFILES=all` to your `.env`.
+> An `.env` with no `COMPOSE_PROFILES` line runs everything under systemd, whose unit defaults the variable to `all` — but manual `docker compose` invocations get no default, so keep the line.
 
 ## Changing passwords
 
@@ -330,9 +315,9 @@ make rotate-password-full    # the above, plus every Postgres role and every ser
 
 Editing `.env` alone is **not enough**: LLDAP does not reset an existing admin's password to match the env var on startup. `make rotate-password` performs the actual LDAP password-modify operation and updates Authelia's `ldap_password` secret — and since everything logs in through Authelia SSO, that is the credential a leaked `PASSWORD` actually exposes.
 
-`rotate-password-full` additionally covers Nextcloud, Vaultwarden, Pi-hole, qBittorrent, Prowlarr, Kapowarr, Beszel, ntfy and Dockhand. See the header comment of `scripts/rotate-password.sh` for the ordering constraints it handles (Nextcloud's `config.php` dbpassword, Authelia's `db_password` secret versus its `AUTHELIA_DB_PASSWORD` env var); doing these by hand out of order breaks things.
+`rotate-password-full` additionally covers Nextcloud, Vaultwarden, Pi-hole, qBittorrent, Prowlarr, Kapowarr, Beszel, ntfy and Dockhand, in an order that matters — the header of `scripts/rotate-password.sh` explains it. Done by hand out of order, it breaks things.
 
-Every service holding a Postgres role must be rotated *and* recreated together, since the role password and the connection string in the container's environment have to move as one. A role that is rotated without its container being recreated does not fail immediately — the running container keeps its established connection — it fails at the *next* recreate, which may be an unrelated reboot or image bump long afterwards. `vaultwarden` was missing from both lists until it was added; if you add another Postgres-backed service, wire it into `rotate_postgres_roles()`, give it a `*_ROLE_OK` gate, and add it to Backrest's gate, which needs every role it dumps.
+A Postgres role and the connection string in its container's environment must move together. A role rotated without its container being recreated keeps working on the established connection, then fails at the *next* recreate — an unrelated reboot or image bump much later. `rotate-password-full` does both; do not rotate roles by hand.
 
 **A regular user** resets their own password from the Authelia portal (**Account → Change password**) or has it reset from the LLDAP admin UI.
 

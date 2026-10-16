@@ -94,7 +94,7 @@ To restore, from any machine with restic installed:
 
 This is NOT the off-site repository. That one is "s3", its password is
 BACKREST_S3_REPO_PASSWORD, and it must be kept off this machine entirely --
-see docs/MONITORING.md.
+see docs/BACKUP.md.
 NOTE
 }
 

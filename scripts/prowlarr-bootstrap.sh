@@ -2,7 +2,8 @@
 # Bootstrap Prowlarr (idempotent, best-effort — warns, never fails the start):
 #   1. register qBittorrent as a download client
 #   2. register FlareSolverr as an indexer proxy (Cloudflare solver) with a tag
-#   3. maintain a patched tr4ker definition that maps the infohash the feed sends
+#   3. maintain a patched copy of one bundled indexer definition, so it maps the
+#      infohash the feed sends
 #   4. point a health/update notification at ntfy
 # Prowlarr shares gluetun's network namespace, so qBittorrent (localhost:8080),
 # FlareSolverr (localhost:8191) and the Prowlarr API (localhost:9696) are all reachable
@@ -22,64 +23,39 @@ QB_PORT="8080"
 # matches parent categories too. Anything unmapped falls back to the client default
 # and stays out of Kavita's library.
 # newznab has no manga category - manga ships as 7030 Books/Comics, the same id as
-# comics - so 7030 goes to manga here and comics come from Kapowarr instead, which
-# imports into its own root folder and never touches these categories.
+# comics - so 7030 goes to manga here. Comics reach the comics category only through
+# a tracker's own id (below); otherwise they come from Kapowarr, which imports into
+# its own root folder.
 # Audiobooks are 3030 Audio/Audiobook, a sibling of the music ids under 3000 rather
 # than a Books subcategory; mapped on its own so 3010 MP3 and 3040 Lossless keep
 # falling through to the client default. Shelfmark's own grabs bypass this map - it
 # adds them to qBittorrent itself, under QBITTORRENT_CATEGORY_AUDIOBOOK.
 #
 # 7000, the bare Books parent, is mapped even though it says nothing about *which*
-# kind of book: 6 of the enabled indexers declare no Books subcategory at all
-# (YggReborn, Torrent9, Nyaa.si, World-torrent, Internet Archive, Torrent[CORE]), so
-# without it every book grab from them was unroutable and landed in the client default,
-# which nothing indexes. The cost is Nyaa.si, whose 7000 is manga rather than ebooks and
-# now arrives in Kavita's Book library - visible under the wrong parser, and moved by
-# hand into download/manga/. Accepted deliberately: wrong library beats invisible.
+# kind of book: several indexers declare no Books subcategory at all, so without it
+# every book grab from them would land in the client default, which nothing indexes.
+# Wrong library beats invisible.
 #
-# The 1071xx ids are YggReborn's own tracker categories, which Prowlarr passes through in
-# release.Categories alongside the newznab ones, and the map intersects raw ints - so they
-# work as mappings. Ygg is the only enabled indexer that separates these at all: it reports
-# Bandes dessinees (107102), Mangas (107103), Comics (107104) and Livres audio (107105)
-# distinctly while collapsing all of them to 7000 for newznab. Everyone else lumps comics
-# and manga into one tracker category - 1337x 100039, C411 107030 "BDs & Comics & Manga",
-# Knaben 9102000, TPB 100602, TR4KER 107030 - each of which comes back identically for
-# Batman and for Naruto, so there is nothing to route on and 7030 stays the shared
-# fallback. 107105 is the one that matters most: it is how a French audiobook on Ygg gets
-# to Audiobookshelf, and Ygg has plenty that Shelfmark cannot see at all.
+# Some trackers send their own category ids in release.Categories next to the newznab
+# ones, and the map intersects raw ints, so those work as mappings where they say more
+# than the newznab id does: 107102/107104 (comics), 107103 (manga) and 107105
+# (audiobooks) from a tracker that collapses all four to 7000 for newznab; 117084,
+# 156719 and 111160, an anime tracker's Literature ids, which are manga; 107010, the
+# Mags id a tracker always sends beside 7010. Tracker ids that only rename a newznab
+# leaf are left out: they would add lines that drift and route nothing new.
 #
-# Nyaa.si's three Literature ids are the other case worth mapping, and they cancel the one
-# cost of claiming 7000 below: Nyaa reports every book-shaped release as bare 7000, so they
-# were all becoming ebooks, when Literature on Nyaa is manga. Sampled 158 of them - 117084
-# Raw is Japanese manga (コミック EPUB), 156719 English-translated is manga and light
-# novels, 111160 Non-English-translated is manga scans, including the Batman entries, which
-# are Otomo's and Teshirogi's manga adaptations rather than western comics. Hence manga
-# rather than comics.
+# ORDER MATTERS. Prowlarr takes the first mapping in list order whose ids intersect
+# the release's, not the most specific one:
 #
-# The other indexers' tracker ids are a rigid 1:1 rename of the newznab leaf and carry no
-# extra information, so mapping them would only add lines that can drift. C411 is the clear
-# case: over ~500 sampled results every release is exactly one pair - [3030,103030],
-# [7010,107010], [7020,107020], [7030,107030] - and 107030 is even named
-# "BDs & Comics & Manga", which is the proof C411 cannot separate the two either. Its
-# 107000 "Ebook" never appears at all, being the parent node of a tracker that always sends
-# a leaf. Knaben looked promising (9101000 EBooks, 9102000 Comics, 1103000 Audiobook) but
-# not one sampled release carried one of those without the matching newznab id alongside.
-#
-# ORDER MATTERS. Prowlarr resolves the client category with
-# `categories.FirstOrDefault(x => x.Categories.Intersect(release.Categories).Any())`
-# (DownloadClientBase.cs) - first match in list order, not most specific. Two consequences:
-#
-#   - books must stay LAST, because 7000 is a catch-all that says nothing about the kind
-#     of book. Ygg reports an audiobook as [7000,107105] and a comic as [7000,107104]; with
-#     books above them, 7000 would win and both would land in the Book library.
-#   - manga must stay above books, so the indexers that report a leaf *and* its parent
-#     (Knaben sends [7030,7000]) still reach manga rather than becoming books.
-#   - magazines must stay above books, which claimed 7010 until now.
+#   - books must stay LAST, because 7000 is a catch-all: a release that carries the
+#     parent beside a specific id ([7000,107105] for an audiobook) would otherwise
+#     land in the Book library.
+#   - manga and magazines must stay above books for the same reason, so indexers
+#     that report a leaf *and* its parent ([7030,7000]) still reach the leaf's category.
 #
 # 7010 Books/Mags is the one Books leaf naming a kind rather than a format, so it gets
-# its own destination; 107010 is C411's id for the same, and C411 always sends the
-# pair. 7020 Books/EBook stays with books on purpose: on 1337x it carries the monthly
-# magazine rips and ordinary ebooks alike, with nothing to tell them apart.
+# its own destination. 7020 Books/EBook stays with books on purpose: monthly magazine
+# rips and ordinary ebooks both arrive as 7020, with nothing to tell them apart.
 QB_CATEGORY_MAP='[
   {"clientCategory":"comics","categories":[107102,107104]},
   {"clientCategory":"manga","categories":[7030,107103,117084,156719,111160]},
@@ -334,15 +310,14 @@ ensure_ntfy_notification() {
     esac
 }
 
-# The bundled tr4ker definition maps every torznab attribute the feed sends except
-# infohash, so Prowlarr answers `infoHash: null` and a consumer that needs the hash
-# must fetch the .torrent of every result. The tracker declares `requestDelay: 1`, so
-# those serialise: 16 of them took 29s against a 30s timeout.
+# The bundled definition patched here maps every torznab attribute the feed sends
+# except infohash, so Prowlarr answers `infoHash: null` and a consumer that needs the
+# hash must fetch the .torrent of every result. The tracker declares
+# `requestDelay: 1`, so those serialise and a page of results outlasts a 30 s timeout.
 #
 # Editing the bundled file does not work - Prowlarr restores all of
 # /config/Definitions from its own bundle on start, so the edit dies with the restart
-# needed to load it. Only a sibling with a unique id, name and filename persists, as
-# yggreborn-api-patched and internetarchive-ua already are.
+# needed to load it. Only a sibling with a unique id, name and filename persists.
 #
 # Derived at every start rather than vendored, so upstream fixes keep arriving and
 # this file can be deleted the day upstream maps infohash itself.

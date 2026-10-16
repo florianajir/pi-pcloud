@@ -18,7 +18,7 @@
 # without BACKREST_S3_REPO_PASSWORD (a value inside the very file it stores),
 # and usb-env, a local repository on the data disk that keeps its own password
 # beside it precisely so this file can be recovered without the other one. See
-# docs/MONITORING.md.
+# docs/BACKUP.md.
 
 set -eu
 

@@ -128,6 +128,12 @@ Prefer the shared `postgres` over a per-service database container: add the data
 to `config/postgres/init-databases.sh` (idempotent `SELECT 'CREATE DATABASE ...'`
 pattern), join the matching internal network, and depend on `postgres` being healthy.
 
+Password rotation must follow the role, or `make rotate-password-full` leaves the
+service on the old password: add it to `rotate_postgres_roles()` in
+`scripts/rotate-password.sh` with its own `*_ROLE_OK` flag, and gate both the
+container restart and the Backrest dump credentials on that flag. Step 8's dump hook
+needs the same `<SERVICE>_DB_*` and `_SQL_BACKUP_DIR` variables on `backrest`.
+
 ## 5. Redis
 
 Reuse the shared `redis` (valkey) for cache/sessions instead of a new container.
@@ -215,9 +221,13 @@ past services silently fell out of the docs:
 - `docs/MONITORING.md` — monitor group table if step 7 changed `GROUPS`
 - The topical page (`NETWORKING.md`, `EMAIL.md`, …) if the service touches DNS,
   ports, mail or VPN
+- `README.md` — a row in "What leaves your network" if the service sends user data
+  to a third party (a cloud API, a hosted model, a debrid or search provider)
 
 State the URL, auth path and any deliberate exception (e.g. "no forward-auth
 because clients are programmatic") — the *why* is what the compose file can't say.
+The vetting from step 0 (footprint measured, alternatives weighed) goes in the PR
+body, not the docs; a download service's docs never name a tracker or shadow library.
 
 ## 12. Verify
 
