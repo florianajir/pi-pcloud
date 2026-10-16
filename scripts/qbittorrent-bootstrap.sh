@@ -21,8 +21,8 @@ NTFY_COMPLETE_URL="http://ntfy/downloads"
 # The categories that route a release to a library, "<name>:<save path>". Each save
 # path is a folder compose mounts into a reader, so this list must stay in step with
 # the kavita and audiobookshelf volumes in compose/compose-media.yaml, with scripts/kavita-pre-start.sh
-# and with scripts/audiobookshelf-pre-start.sh. Prowlarr maps its grabs onto books,
-# manga and audiobooks (scripts/prowlarr-bootstrap.sh); all four double as the
+# and with scripts/audiobookshelf-pre-start.sh. Prowlarr maps its grabs onto them
+# (QB_CATEGORY_MAP in scripts/prowlarr-bootstrap.sh); all of them double as the
 # categories to pick by hand when adding a torrent, which is the only way a manual add
 # reaches a library at all - an uncategorised torrent lands in the download root, which
 # nothing indexes.
@@ -30,13 +30,15 @@ NTFY_COMPLETE_URL="http://ntfy/downloads"
 #   books       -> Kavita's Book library
 #   manga       -> Kavita's Manga library
 #   comics      -> Kavita's Comics library, second folder
+#   magazines   -> Kavita's Magazines library
 #   audiobooks  -> Audiobookshelf
 #
 # comics saves to download/comics/, not to Kapowarr's comics/ root folder: Kapowarr
 # moves files inside that tree with copy-then-delete, which races a torrent seeding
-# from it. Kavita reads both as one library. Prowlarr cannot route to this one - comics
-# and manga share newznab id 7030, which is mapped to manga - so it is hand-pick only,
-# which is the point: it is the fallback for issues Kapowarr cannot find.
+# from it. Kavita reads both as one library. No newznab id routes here - comics and
+# manga share 7030, which is mapped to manga - so only a tracker's own comics id does;
+# otherwise it is hand-pick only, which is the point: it is the fallback for issues
+# Kapowarr cannot find.
 #
 # shelfmark-audiobooks is staging, not a library: it shares /downloads/shelfmark with
 # the plain shelfmark category so a raw release tree never reaches a reader, and exists
@@ -48,8 +50,8 @@ NTFY_COMPLETE_URL="http://ntfy/downloads"
 # relocate torrents that are seeding.
 #
 # magazines takes the 7010 route prowlarr-bootstrap.sh sends here, which only catches
-# the releases an indexer bothers to tag as such - the 1337x monthlies arrive as 7020
-# and land in books - so like comics it is also picked by hand, which the relocation
+# the releases an indexer bothers to tag as such - monthly magazine rips often arrive
+# as 7020 and land in books - so like comics it is also picked by hand, which the relocation
 # below turns into a one-click fix.
 #
 # Everything else keeps the client default ("prowlarr"), which no reader looks at.

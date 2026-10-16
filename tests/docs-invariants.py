@@ -7,10 +7,11 @@
   file, not only in Markdown.
 - No ISO date in prose: a date in a doc is an incident report or a measurement
   that will read as current long after it stopped being true.
-- No piracy source named in published prose. The download services are
-  general-purpose tools; which trackers or shadow libraries a user points them
-  at is theirs to choose, and naming them in the docs turns a tool into a
-  recommendation.
+- No piracy source named in published prose, nor in a code comment. The
+  download services are general-purpose tools; which trackers or shadow
+  libraries a user points them at is theirs to choose, and naming them turns a
+  tool into a recommendation. Only comments are read in code, so an identifier
+  that has to match an upstream definition stays possible.
 """
 
 import re
@@ -27,6 +28,8 @@ DOC_PAGE_FLOOR = 10
 
 PROSE = ("README.md", "CONTRIBUTING.md", "AGENTS.md", "docs/", ".github/", ".agents/")
 DATED_PROSE = ("README.md", "CONTRIBUTING.md", "docs/")
+COMMENTED_SUFFIXES = (".sh", ".py", ".yaml", ".yml", ".conf", ".template", ".toml", ".ini", ".hujson")
+COMMENTED_FILES = ("Makefile", "scripts/pi-pcloud")
 
 PIRACY_SOURCES = re.compile(
     r"(?<!\w)("
@@ -41,6 +44,7 @@ FENCE = re.compile(r"^\s*(```|~~~)")
 HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 HTML_ANCHOR = re.compile(r"<a\s+(?:id|name)=\"([^\"]+)\"")
 INLINE_CODE = re.compile(r"`[^`]*`")
+COMMENT = re.compile(r"(?:^|\s)#(.*)$")
 INLINE_LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 REFERENCE_LINK = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+)")
 DOC_REFERENCE = re.compile(r"(?<![\w/.-])(docs/[A-Za-z0-9_-]+\.md)(?:#([A-Za-z0-9_-]+))?")
@@ -157,6 +161,22 @@ def check_prose(rel, text):
                 report("date", rel, lineno, f"{date} in prose; state the current fact instead")
 
 
+def has_comments(rel):
+    name = Path(rel).name
+    return rel.endswith(COMMENTED_SUFFIXES) or rel in COMMENTED_FILES or name.startswith("Dockerfile")
+
+
+def check_comments(rel, text):
+    if rel.startswith(PROSE) or not has_comments(rel):
+        return
+    for lineno, line in enumerate(text.splitlines(), 1):
+        comment = COMMENT.search(line)
+        if not comment:
+            continue
+        for name in PIRACY_SOURCES.findall(comment.group(1)):
+            report("piracy-source", rel, lineno, f"comment names {name!r}; describe it generically")
+
+
 def main():
     tracked = set(tracked_files())
     tracked_dirs = {str(parent) for path in tracked for parent in Path(path).parents if str(parent) != "."}
@@ -174,6 +194,7 @@ def main():
             check_markdown_links(rel, text, tracked, tracked_dirs)
         check_doc_references(rel, text, tracked, tracked_dirs)
         check_prose(rel, text)
+        check_comments(rel, text)
     for finding in findings:
         print(finding)
     return 1 if findings else 0
