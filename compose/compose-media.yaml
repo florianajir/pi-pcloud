@@ -619,7 +619,7 @@ services:
       start_period: 30s
     # A hard cap: cpu_shares only arbitrates under contention, and the first-run
     # drain took all four cores.
-    cpus: 1.5
+    cpus: 2
     cpu_shares: *cpu-prio-batch
     # A 53k-torrent mapping catch-up took two connections to 1.25 GiB of
     # anonymous memory, and each extra one adds ~135 MiB. The rest is page cache
