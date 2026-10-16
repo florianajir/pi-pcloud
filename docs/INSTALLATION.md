@@ -79,7 +79,7 @@ Visit `https://lldap.<HOST_NAME>` and log in as `admin` with your `PASSWORD`.
 
 - Create users under **Admin → Users**.
 - Create an **`admin` group** and add your admin accounts to it. It gates the admin tools — Traefik, Pi-hole, Backrest, LLDAP, Dockhand, Headplane — behind 2FA, and it is also what makes an account a **Nextcloud server administrator** and an **Immich administrator**. Regular users need no group at all.
-- Leave the built-in `lldap_*` groups to the accounts that administer the directory itself. They are LLDAP's own permission model, they are filtered out of the `groups` claim on purpose, and `lldap_strict_readonly` in particular hands read access to every user record — it is not needed to change one's own password (that goes through the reset mail).
+- Leave the built-in `lldap_*` groups to the accounts that administer the directory itself. They are filtered out of the `groups` claim, and `lldap_strict_readonly` grants read access to every user record — nobody needs it to change their own password, which goes through the reset mail.
 
 ### 2. Log in through the SSO portal
 
@@ -95,66 +95,55 @@ Everything is wired to SSO already — just visit it and you'll be redirected to
 
 ### 4. Kavita — one manual step
 
-Kavita keeps its OIDC settings in two stores and `scripts/kavita-oidc-bootstrap.sh` now writes both: the client, secret and scopes into `appsettings.json` (which Kavita copies into its database at every startup), and account provisioning plus the role settings over `/api/Settings`. One step stays manual, and it gates everything else — the API needs an admin, and there is no login a script can use until one exists:
+`scripts/kavita-oidc-bootstrap.sh` configures Kavita's SSO, but Kavita's settings API needs an admin account and a fresh install has none:
 
 1. Visit `https://kavita.<HOST_NAME>` and create the **admin account** by normal registration.
-2. Re-run `make update` (or wait for the next start). The hook fills in Authority, Client ID, Secret, turns on **Auto-Provision**, and sets the role settings described below.
-3. Optionally, in **Settings → OpenID Connect**, turn on **Disable password authentication** once you have confirmed an SSO login works. The hook deliberately does not do this for you: imposed automatically it can lock you out of a fresh install where SSO is not working yet.
+2. Re-run `make update` (or wait for the next start). The hook fills in Authority, Client ID and Secret, turns on **Auto-Provision**, and sets the role settings described below.
+3. Optionally, once an SSO login works, turn on **Disable password authentication** in **Settings → OpenID Connect**. The hook leaves it to you because, set automatically, it can lock you out of a fresh install whose SSO is not working yet.
 
-**Role sync is off on purpose, and turning it on will lock out your family.** With it on, Kavita takes every permission from the `groups` claim on each login: an account whose claim contains neither `Login` nor `Admin` is *refused outright*, and existing accounts have their roles replaced by whatever the claim matched. Since `admin` is the only group anyone has here, that means admins work and everybody else cannot log in at all. Off, new SSO accounts get `Login`, `Change Password`, `Bookmark` and `Download` from **Default roles**, and you promote an admin with a click in **Settings → Users**. If you do want group-driven roles, you need LLDAP groups named after Kavita's own roles (`Login`, `Admin`, `library-<Name>`) behind a **Roles prefix**, *and* the `groups` scope restored on both the Authelia client and Kavita's **Custom scopes** — set on one side only, the authorization request fails with `invalid_scope` and nobody can log in.
+**Leave role sync off.** With it on, Kavita takes every permission from the `groups` claim at each login and refuses any account whose claim contains neither `Login` nor `Admin` — here, everyone outside the `admin` group. With it off, new SSO accounts get `Login`, `Change Password`, `Bookmark` and `Download` from **Default roles**, and you promote an admin in **Settings → Users**. Group-driven roles need LLDAP groups named after Kavita's roles (`Login`, `Admin`, `library-<Name>`) behind a **Roles prefix**, *and* the `groups` scope added to both the Authelia client and Kavita's **Custom scopes** — on one side only, every login fails with `invalid_scope`.
 
-All of it persists in the `kavita_config` volume. Once that admin exists, the rest is provisioned on the same run:
+Settings persist in the `kavita_config` volume. Once the admin exists, the same run also provisions:
 
-- `scripts/kavita-library-bootstrap.sh` creates the **Comics**, **Manga** and **Books** libraries with the right type and folders, repairs them if they drift, and adds every library to the OIDC default set so auto-provisioned accounts can see one added later.
-- `scripts/homepage-widgets-bootstrap.sh` publishes a Kavita **API key** for the Homepage widget — the widget cannot use a password, since Kavita refuses password logins while OIDC is enforced.
+- **Libraries** — `scripts/kavita-library-bootstrap.sh` creates **Comics**, **Manga** and **Books** with the right type and folders, repairs them if they drift, and adds every library to the OIDC default set so auto-provisioned accounts see it.
+- **The Homepage widget** — `scripts/homepage-widgets-bootstrap.sh` publishes a Kavita API key for it, since Kavita refuses password logins while OIDC is enforced.
 
-Both read that key out of `kavita.db` (read-only — never edit it, the schema is not stable across Kavita majors) because `/api/Plugin/authenticate` is the only credential path left, and both skip with a warning until the admin account exists.
+Both skip with a warning until the admin account exists.
 
-> Kavita's email settings have the same problem, but with OIDC + Auto-Provision they are usually unnecessary: they only power local-account flows (invites, setup links, password resets) that SSO bypasses. If you want them anyway, fill **Settings → Email** with your `SMTP_*` values from `.env`.
+> Kavita's email settings only power local-account flows (invites, setup links, password resets) that SSO bypasses, so they are usually unnecessary. To set them anyway, fill **Settings → Email** with your `SMTP_*` values from `.env`.
 
 ### 5. Shelfmark — pick your sources
 
 Authentication needs nothing: `scripts/shelfmark-settings-bootstrap.sh` writes the Authelia
-client into Shelfmark's `plugins/security.json`, password login is off, and the first
-Authelia user to sign in is auto-provisioned (admin if they are in the `admin` group).
-Prowlarr, qBittorrent, ntfy and SMTP are rendered into
-`config/shelfmark/shelfmark.env` on every start, so those settings show as
-environment-managed and read-only in the UI. Only discovered credentials and
-service URLs go there: Shelfmark's environment outranks per-account settings as
-well as the admin UI, so anything a user is meant to be able to change is
-seeded as a plain default instead.
+client into Shelfmark's `plugins/security.json`, password login is off, and every Authelia
+user is auto-provisioned on first sign-in (as admin if they are in the `admin` group).
+The Prowlarr, qBittorrent, ntfy and SMTP settings are rendered into
+`config/shelfmark/shelfmark.env` on every start, so they show as environment-managed and
+read-only in the UI. Anything a user should be able to change is seeded as a config-file
+default instead, because Shelfmark's environment overrides per-account settings.
 
-Two release sources are wired up:
+Release sources:
 
-- **Prowlarr indexers** work as soon as Prowlarr has some — add French trackers there
-  and they appear as a release source. Nothing else to do.
-- **Direct Download** (Anna's Archive) is on, seeded with one mirror,
-  `https://annas-archive.gl` — upstream's recommendation, and the only candidate that
-  was actually serving the site when this was written. Mirrors move; the list is
-  **seeded, not enforced**, so edit it freely under **Settings → Mirrors** and the
-  bootstrap will leave your version alone. The challenges those mirrors put up are
-  solved by the bypasser **bundled in the Shelfmark image** (`USING_EXTERNAL_BYPASSER=false`),
-  not by this stack's FlareSolverr: Anna's Archive is behind DDoS-Guard, which
-  FlareSolverr reports as solved while handing back the interstitial. That bundled
-  browser is the whole reason the full image is used instead of `-lite`.
-- **AudiobookBay and IRC** are the other audiobook sources; both need a hostname or a
-  network only you can choose.
+- **Prowlarr indexers** — when Prowlarr is enabled, the indexers you add there appear as a
+  release source. Nothing else to do.
+- **Direct download** is on, seeded with one mirror from
+  `scripts/shelfmark-settings-bootstrap.sh`. Mirrors move: the list is **seeded, not
+  enforced**, so edit it under **Settings → Mirrors** and the bootstrap leaves your version
+  alone. Challenge pages are solved by the browser bundled in the full Shelfmark image
+  (`USING_EXTERNAL_BYPASSER=false`), not by the stack's FlareSolverr, which cannot pass
+  them — that browser is why the full image is used rather than `-lite`.
+- **The other audiobook sources**, IRC included, stay off: each needs a hostname or
+  network only you can supply.
 
-For audiobook *metadata*, set `HARDCOVER_API_KEY` in `.env` (free, from
-[hardcover.app/account/api](https://hardcover.app/account/api)). Without it audiobook
-searches fall back to Open Library, which is a book catalogue and carries almost no
-audio edition data — see
+A donator key (**Settings → Direct Download**) skips the queue on the slow download
+hosts. Without one, a direct download that looks stuck is usually just queued.
+
+For audiobook *metadata*, set `HARDCOVER_API_KEY` in `.env` — see
 [Configuration](CONFIGURATION.md#audiobook-metadata-hardcover).
 
-A donator key (**Settings → Direct Download → `AA_DONATOR_KEY`**) removes the wait on
-the slow download hosts. Without one, Anna's Archive queues you for a minute or two per
-file, so a direct download that looks stuck is usually just queued.
-
-Per-account language: the stack seeds the default from `DEFAULT_LANGUAGE`
-(`fr-FR` → `fr`) on first start, and each user can override it for their own
-searches. Seeded, not enforced — changing `DEFAULT_LANGUAGE` later will not
-overwrite a language you or a user has since chosen; adjust it under
-**Settings → Search Mode**.
+The default search language is seeded from `DEFAULT_LANGUAGE` (`fr-FR` → `fr`) on first
+start, and each user can override it under **Settings → Search Mode**. Seeded, not
+enforced: changing `DEFAULT_LANGUAGE` later does not overwrite a language already chosen.
 
 ### 6. Audiobookshelf — nothing, unless you want a second admin
 
@@ -162,25 +151,22 @@ Fully provisioned by `scripts/audiobookshelf-bootstrap.sh` on the first start: t
 account (`ADMIN_USER` / `PASSWORD` from `.env`), the Authelia client, and an
 **Audiobooks** library on `download/audiobooks/` — the folder Shelfmark files into.
 Its metadata provider is the Audible storefront matching `DEFAULT_LANGUAGE`
-(`fr-FR` → `audible.fr`), because the catalogue is regional and a French audiobook is
-invisible from `audible.com`. Change it under **Library → Edit → Metadata provider**;
-the bootstrap seeds that value and never rewrites it.
+(`fr-FR` → `audible.fr`), since Audible's catalogue is regional. The bootstrap seeds that
+value and never rewrites it; change it under **Library → Edit → Metadata provider**.
 
-Two things worth knowing:
+Worth knowing:
 
 - **Local login is switched off**, so SSO is the only way in — for the web app and for
-  the mobile apps, which have their own registered redirect URI. The root account's
-  password stays in step with `.env` (`scripts/rotate-password.sh` updates it) purely so
-  the recovery path below is real; nothing accepts it while `local` is off.
-- **SSO logins are matched to the root account by email.** If the LLDAP account you sign
-  in with carries a different address than `EMAIL`, you get a second, plain-user account
-  instead — see [Troubleshooting](TROUBLESHOOTING.md#books-and-audiobooks).
+  the mobile apps, which have their own registered redirect URI. `scripts/rotate-password.sh`
+  keeps the root password in step with `.env` only for the recovery path in
+  [Troubleshooting](TROUBLESHOOTING.md#books-and-audiobooks).
+- **SSO logins are matched to the root account by email.** An LLDAP account whose address
+  differs from `EMAIL` gets a second, plain-user account instead.
 - **The bootstrap keeps its own API key**, at
-  `${DATA_LOCATION}/audiobookshelf/config/pi-web-api-key`, filed in the app as
+  `${DATA_LOCATION}/audiobookshelf/config/pi-web-api-key`, listed in the app as
   `pi-web-bootstrap`. With local logins off it is the only credential any script has —
-  do not revoke it under **Settings → API Keys**. It is inside the directory Backrest
-  snapshots, so a restore brings it back; [Troubleshooting](TROUBLESHOOTING.md#books-and-audiobooks)
-  has the path back in if both copies are gone.
+  do not revoke it under **Settings → API Keys**. Backrest snapshots it with the rest of
+  the config directory, and Troubleshooting has the way back in if every copy is gone.
 
 ### 7. Chat — sign in yourself first
 

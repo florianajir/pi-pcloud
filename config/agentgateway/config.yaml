@@ -195,8 +195,8 @@ routes:
   # The native `gemini` provider carries Gemini 3's thought signature inside
   # the tool_call id, which OpenClaw echoes back within a turn. `custom` on
   # Google's OpenAI-compatible endpoint loses it, and every tool loop then
-  # fails on its second step. Flash-Lite because the free tier allows Flash 20
-  # requests a day, about three messages. Both measured - see docs/AI.md.
+  # fails on its second step. Flash-Lite for its larger free-tier request
+  # quota: one message costs five to seven requests. See docs/AI.md.
   #
   # Failover: a 429 (quota) or 503 (overload) evicts that group for 10 minutes
   # and the retry lands on the next one, inside the same request. The two

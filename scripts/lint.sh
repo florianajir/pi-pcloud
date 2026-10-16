@@ -183,6 +183,15 @@ gate_secret_hook() {
     sh .claude/hooks/no-secret-reads.test.sh && pass "every case holds" || fail "findings above"
 }
 
+gate_docs() {
+    gate "docs"
+    if ! have python3; then
+        skip "python3 not installed"
+        return 0
+    fi
+    python3 tests/docs-invariants.py && pass "links, anchors and prose rules hold" || fail "findings above"
+}
+
 # .hadolint.yaml sets failure-threshold: warning, so info-level findings print
 # and still exit 0. Counted rather than called clean, for the reason above.
 gate_hadolint() {
@@ -252,6 +261,7 @@ gate_shellcheck
 gate_yamllint
 gate_ruff
 gate_secret_hook
+gate_docs
 gate_hadolint
 gate_actionlint
 gate_gitleaks

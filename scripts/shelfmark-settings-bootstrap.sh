@@ -2,7 +2,7 @@
 # Configure the Shelfmark settings that live in its own config files rather than
 # in its environment: the Authelia OIDC client, the proxy that puts direct
 # downloads on the VPN, the Hardcover audiobook metadata provider, and the
-# Anna's Archive mirror list.
+# direct-download mirror list.
 # A post-start hook (scripts/stack-up.sh). Idempotent: it writes, and restarts
 # Shelfmark, only when something actually differs.
 #
@@ -30,9 +30,8 @@ SETTINGS_FILE="/config/settings.json"
 OIDC_ADMIN_GROUP="admin"
 # The alias, not "gluetun": SeleniumBase rejects a proxy host with no dot in it.
 GLUETUN_HTTP_PROXY="http://gluetun.docker:8888"
-# Verified reachable and serving the real site on 2026-09-02. Upstream's readme
-# calls out annas-archive.is as not working as a source, and annas-archive.li
-# answers with a 1 KB holding page, so neither is seeded.
+# The one mirror seeded into an empty list: other domains of the same site resolve
+# but do not work as a source, per upstream's readme.
 AA_MIRROR_URL="https://annas-archive.gl"
 PUID=1000
 PGID=1000

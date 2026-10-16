@@ -704,7 +704,7 @@ services:
     container_name: pi-kapowarr
     profiles: ["kapowarr", "all"]
     # In gluetun's namespace with qBittorrent (localhost:8080), so torrent paths
-    # map one-to-one and GetComics downloads use the VPN too.
+    # map one-to-one and Kapowarr's direct downloads use the VPN too.
     network_mode: "service:gluetun"
     depends_on:
       gluetun:
@@ -729,7 +729,7 @@ services:
       - TZ=${TIMEZONE:-Europe/Paris}
     volumes:
       - ${DATA_LOCATION:-./data}/kapowarr/db:/app/db
-      # GetComics direct downloads; the entrypoint chowns it to PUID.
+      # Direct downloads; the entrypoint chowns it to PUID.
       - ${DATA_LOCATION:-./data}/kapowarr/downloads:/app/temp_downloads
       # The path qBittorrent uses, so grabbed torrents import with no path
       # mapping.
@@ -811,7 +811,7 @@ services:
   shelfmark:
     <<: *service-defaults
     # The full image, for its bundled bypasser: the -lite one's FlareSolverr
-    # reports DDoS-Guard (Anna's Archive) as solved while returning the
+    # reports the direct-download mirror's DDoS-Guard as solved while returning the
     # interstitial. Hence a second Chromium, with its mem_limit and shm_size.
     image: ghcr.io/calibrain/shelfmark:v1.4.0@sha256:4ef757349c3c7a7d90ba95b1e2a46ce4dd460a4776efbcf2aa1b1c476e7d5de5
     container_name: pi-shelfmark
@@ -846,7 +846,7 @@ services:
       # deployment.
       - USING_EXTERNAL_BYPASSER=false
       - DIRECT_DOWNLOAD_ENABLED=true
-      # Most Anna's Archive and libgen results carry no language: without this
+      # Most direct-download results carry no language: without this
       # BOOK_LANGUAGE drops them before the path's language tag is read.
       - DIRECT_DOWNLOAD_LANGUAGE_FROM_PATH=true
       # Reruns an empty query variant without its category filter: the only way

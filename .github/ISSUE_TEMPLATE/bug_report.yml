@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in the stack does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [Troubleshooting](https://github.com/florianajir/pi-pcloud/blob/main/docs/TROUBLESHOOTING.md) first.
+
+        **Never paste your `.env`, tokens or passwords**, and replace your domain with `<HOST_NAME>` below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: services
+    attributes:
+      label: Affected services
+      placeholder: nextcloud, authelia
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: "`git rev-parse --short HEAD` in your clone."
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware and OS
+      placeholder: Raspberry Pi 5 16 GB, NVMe, Raspberry Pi OS bookworm
+  - type: textarea
+    id: enabled
+    attributes:
+      label: Enabled services
+      description: Output of `make services`.
+      render: text
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Health report
+      description: Output of `make doctor`.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "`docker compose logs --tail 100 <service>`, redacted."
+      render: text

@@ -6,7 +6,7 @@ One set of SMTP credentials in `.env` serves every service that can read them. T
 
 **Two things that catch people out:**
 
-- Gmail, Office 365 and most large providers refuse your account password — generate an **app password** and use that.
+- Most large mail providers refuse your account password over SMTP — generate an **app password** and use that.
 - Nextcloud's sender domain is always `HOST_NAME`, so the address is `${MAIL_FROM_ADDRESS}@${HOST_NAME}`. Vaultwarden pins `SMTP_SECURITY=starttls` in `compose/compose-cloud.yaml`; change it to `force_tls` there if you move to port 465.
 
 **To run without email:** leave `SMTP_HOST` empty or set to `localhost`. The stack starts normally — Authelia has `disable_startup_check` enabled — and delivery simply fails silently.
@@ -20,8 +20,10 @@ Configured automatically from `.env`:
 | **Authelia** | 2FA enrolment, password reset, identity verification |
 | **Nextcloud** | Share notifications, activity digests, password resets |
 | **LLDAP** | Self-service password reset links |
-| **Vaultwarden** | Invitations, and the whole emergency-access flow (invite, grant, takeover notice). Emergency access is useless without working SMTP — and since `SSO_ONLY` is on, the trusted contact also needs an LLDAP account. See [Security](SECURITY.md#vaultwarden) |
+| **Vaultwarden** | Invitations, and the whole emergency-access flow (invite, grant, takeover notice), which is useless without working SMTP — see [Security](SECURITY.md#vaultwarden) |
 | **n8n** | Workflow **Send Email** nodes and error notifications (`N8N_SMTP_*`) |
+| **Forgejo** | Notification mail (`FORGEJO__mailer__*`) |
+| **Shelfmark** | Email delivery to a recipient each user sets in Shelfmark; `scripts/shelfmark-pre-start.sh` only renders the transport |
 | **ntfy** | Email delivery for topics, when a subscriber asks for it |
 | **Beszel** | Alert emails, configured through its API by `scripts/beszel-agent-bootstrap.py` |
 

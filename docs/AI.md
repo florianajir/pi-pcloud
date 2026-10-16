@@ -2,12 +2,10 @@
 
 Open WebUI at `https://ai.<HOST_NAME>` is a full chat assistant running entirely on the Pi's CPU: text, images and audio in, speech out, plus a tool that lets the model report the machine's own health.
 
-The two hostnames say who they are for: `ai.` is the human UI, `llm.` is the gateway clients POST to. `llm.` used to be `agent.`, a synonym of `ai.` for the opposite kind of caller - a person on one, a client library on the other. The old name is gone with no redirect, so a stale bookmark gets Traefik's 404; only admins ever typed it.
-
-`chat.<HOST_NAME>` is not the AI's: it was held back for a human-to-human
-messaging service, because for everyone outside this repository "chat" means
-talking to people, not to a model. The family's Matrix chat (Tuwunel + Element,
-see [Architecture](ARCHITECTURE.md#what-each-service-is-for)) now lives there.
+The two hostnames say who they are for: `ai.` is the human UI, `llm.` is the gateway clients POST to.
+`chat.<HOST_NAME>` is not the AI's: it is the Matrix chat (Tuwunel + Element, see
+[Architecture](ARCHITECTURE.md#what-each-service-is-for)), where the assistant
+[below](#the-family-assistant-openclaw) is one more account.
 
 | Piece | Role | Network |
 |-------|------|---------|
@@ -29,14 +27,14 @@ they are not chat completions, and the gateway would only add a hop.
 
 `llama-cpp` serves **Gemma 4 E2B** (Google's QAT Q4_0 build — text, image and audio in). There is no Ollama in the stack: llama.cpp is the engine Ollama wraps, and running it directly is faster on ARM CPU and one process instead of two.
 
-Measured on a Raspberry Pi 5 (16 GB, 3 threads pinned to cores 1–3): **~10 tok/s generation, ~40 tok/s prompt processing, ~3.7 GB resident**. A short question answers in about 3 seconds end to end.
+On a Raspberry Pi 5 (16 GB, 3 threads pinned to cores 1–3): **~10 tok/s generation, ~40 tok/s prompt processing, ~3.7 GB resident**. A short question answers in about 3 seconds end to end.
 
 ### Why the defaults look aggressive
 
 Latency comes from prompt size, not the model. Three defaults exist purely because ~40 tok/s of prompt processing punishes anything verbose:
 
 - **Thinking is off** (`LLAMA_ARG_CHAT_TEMPLATE_KWARGS`). Gemma 4 otherwise spends ~500 tokens reasoning before the first visible word — over a minute of empty chat window for "how are you".
-- **One server slot** (`LLAMA_ARG_N_PARALLEL=1`). llama-server defaults to several and runs them concurrently, so two requests each generated at ~5 tok/s instead of one at ~10. Queueing is faster than sharing three threads.
+- **One server slot** (`LLAMA_ARG_N_PARALLEL=1`). llama-server defaults to several and runs them concurrently, so two requests each generate at ~5 tok/s instead of one at ~10. Queueing is faster than sharing three threads.
 - **Open WebUI's built-in tools are off for every model, bar web search**, along with title, tag, follow-up and search-query generation. The built-in tools (time, memory, chats, notes, knowledge, channels) inject ~5000 tokens of schemas into every message — roughly three minutes of prompt processing before the model starts. Web search is the exception because the composer's toggle does nothing without it — see [Web search](#web-search-searxng) — and its two schemas are injected only while that toggle is on. The other four are invisible extra LLM calls per message.
 
 All are re-enablable in **Admin Settings** and in the model's own **Capabilities**.
@@ -50,13 +48,13 @@ All `environment:` entries on the `llama-cpp` service:
 | `LLAMA_ARG_CTX_SIZE` | `16384` | Context window. The model supports 128k; RAM and prompt-processing time do not. |
 | `LLAMA_ARG_CHAT_TEMPLATE_KWARGS` | `{"enable_thinking":false}` | Thinking off. Drop the line to restore it — `--reasoning-budget 0` is *not* equivalent: it closes the channel without telling the model, which then reasons in the visible answer. |
 | `LLAMA_ARG_N_PARALLEL` | `1` | One server slot; concurrent requests queue instead of splitting the three threads. |
-| `LLAMA_ARG_THREADS` | `3` | Matched to `cpuset: "1-3"`, leaving core 0 for Traefik and DNS. A 4th thread measured no faster. |
+| `LLAMA_ARG_THREADS` | `3` | Matched to `cpuset: "1-3"`, leaving core 0 for Traefik and DNS. Generation is memory-bandwidth bound, so a fourth thread is no faster. |
 | `LLAMA_ARG_SPEC_TYPE` | `draft-mtp` | Speculative decoding via Gemma 4's multi-token-prediction head; roughly doubles generation speed. Remove it and `LLAMA_ARG_SPEC_DRAFT_MODEL` to disable. |
-| `LLAMA_ARG_MMPROJ` | *unset* | Vision/audio input, off because it costs 1.0 GB resident (2786 MB of anonymous memory against 1779 MB) for a capability Open WebUI does not offer on this model, and because mtmd disables `--cache-reuse`. Point it at `/models/mmproj-gemma-4-E2B-it.gguf` — already in the volume — to turn image input on. |
+| `LLAMA_ARG_MMPROJ` | *unset* | Vision/audio input, off because it costs about 1 GB resident for a capability Open WebUI does not offer on this model, and because the multimodal path disables `--cache-reuse`. Point it at `/models/mmproj-gemma-4-E2B-it.gguf` — already in the volume — to turn image input on. |
 
 ### Where the weights live
 
-`scripts/llama-cpp-pre-start.sh` downloads them into the `llama_models` Docker volume (on the NVMe root, not `DATA_LOCATION`) before the stack starts, because the `ai` network is internal and the container cannot reach HuggingFace itself. It is idempotent — it only re-downloads a file whose size does not match the remote one. To re-check by hand:
+`scripts/llama-cpp-pre-start.sh` downloads them into the `llama_models` Docker volume (a named volume, not under `DATA_LOCATION`) before the stack starts, because the `ai` network is internal and the container cannot reach HuggingFace itself. It is idempotent — it only re-downloads a file whose size does not match the remote one. To re-check by hand:
 
 ```bash
 sh scripts/llama-cpp-pre-start.sh
@@ -70,9 +68,7 @@ Edit the `DOWNLOADS` list in `config/llama-cpp/fetch-models.sh`, then point `LLA
 
 `https://llm.<HOST_NAME>` is [agentgateway](https://agentgateway.dev), a Rust data plane that serves
 three things on one port: an OpenAI-compatible `/v1` in front of `llama-cpp`, an MCP endpoint at `/mcp`
-that federates tool servers, and the UI at `/ui` that configures both. It joined the
-[Agentic AI Infrastructure Foundation](https://aaif.io/blog/agentgateway-joins-aaif-as-an-open-gateway-for-agentic-ai-infrastructure)
-under the Linux Foundation in 2026.
+that federates tool servers, and the UI at `/ui` that configures both.
 
 It exists so there is exactly one endpoint per protocol in the stack: Open WebUI, your editor, n8n and
 any script all call the same `/v1`, one MCP client configuration covers every tool server, and adding a
@@ -91,29 +87,23 @@ What it buys over calling `llama-cpp:8080/v1` directly:
 ### Configuration is split in two on purpose
 
 `config/agentgateway/config.yaml` is mounted read-only and is the baseline: the gateway, the three
-capabilities, the API-key policy, the local model and the OIDC policy. `config.storage.mode: hybrid`
+capabilities, the API-key policies, the local model and the OIDC policy. `config.storage.mode: hybrid`
 sends the *resources* the UI writes — providers, models, virtual models, MCP targets, routes, policies —
 to a SQLite database under `${DATA_LOCATION}/agentgateway` instead, where they are merged over that
 baseline at read time. In the default `file` mode even those saves would fail against a read-only mount.
 
-The file carries only what has to exist before anyone can log in: `gemma-4-e2b-it` pointed at
-`http://llama-cpp:8080/v1`, and the key Open WebUI presents. Its provider is `custom`, not `openAI` —
-that one talks to api.openai.com — and `completions` with no `path` resolves to
-`<baseUrl>/chat/completions`, which is why the `baseUrl` carries the `/v1` and llama-server's own
-`/v1/chat/completions` is what gets called. No `apiKey` on it: llama-server does not check one.
+The `llm:` section carries only what has to exist before anyone can log in: `gemma-4-e2b-it` at
+`http://llama-cpp:8080/v1`, as a `custom` (OpenAI-compatible) provider, and the keys its callers
+present.
 
-Hybrid does not make the file itself editable, and that is worth knowing before opening the UI: a write to
-any top-level section is refused client-side with `File configuration is read-only in hybrid mode`. That
-is upstream's design, not a misconfiguration here — the database holds the resources *within* a section,
-but only `file` mode lets the UI create the section itself, so the refusal would happen just the same
-without the read-only mount. The
-welcome wizard's *Enable LLM* and *Enable MCP* chips are exactly such a write, and unlike the Save buttons
-elsewhere in the UI they offer neither the diff they tell you to copy nor the `Ctrl`/`Cmd`+`Shift` override
-those buttons carry — no HTTP request is even sent, which makes the error look like a broken deployment.
-That is why `llm` and `mcp` are declared in the file: the UI reads "enabled" off their presence alone.
-Targets and models added afterwards save normally. Do not make the file writable to get the wizard
-working — agentgateway expands its `${…}` references at read time, so it would write the resolved OIDC
-client secret back in cleartext and drop every comment.
+**The UI cannot create a top-level section.** In hybrid mode a write to one is refused client-side with
+`File configuration is read-only in hybrid mode` — upstream's design, not a misconfiguration: the
+database holds the resources *within* a section, and only `file` mode lets the UI create a section. The
+welcome wizard's *Enable LLM* and *Enable MCP* chips are such a write, and send no request at all, so the
+error looks like a broken deployment. That is why `llm` and `mcp` are declared in the file: the UI reads
+"enabled" off their presence alone. Targets and models added afterwards save normally. Do not make the
+file writable to get the wizard working — agentgateway expands its `${…}` references at read time, so it
+would write the resolved OIDC client secret back in cleartext and drop every comment.
 
 SQLite rather than the shared Postgres because the same database also takes a row per proxied request,
 and every service in the stack waits on that Postgres. `scripts/sqlite-backup.sh` copies it consistently
@@ -132,32 +122,25 @@ each surface has to gate itself:
 | `/assistant/v1` | its own `policies.apiKey`, OpenClaw's key alone | 401 for every other key, Open WebUI's included |
 | `/mcp` | `mcp.policies.apiKey`, `mode: strict` | 401 without a key — a *different* key from `/v1`'s |
 
-The third row repeats the second rather than inheriting it: `llm.policies.apiKey`
-is attached to the `llm:` section and does not cover a top-level route. Drop that
-block from either path route and the provider behind it is reachable with no
-credential by anything that clears the LAN allowlist.
+The path routes repeat the `/v1` policy rather than inheriting it: `llm.policies.apiKey` is attached to
+the `llm:` section and does not cover a top-level route. Drop that block from a path route and the
+provider behind it is reachable with no credential by anything that clears the LAN allowlist.
+
+`/mcp` has its own policy for the same reason, with its own key: whoever holds it reads and writes every
+note through the [Trilium target](#trilium-on-both-sides-of-the-gateway), which is not what a `/v1` key
+is for. An MCP target added through the UI is served with no policy of its own until one is attached to
+it; `jwtAuth` and `basicAuth` work there too.
 
 The gateway runs the OIDC flow itself against the `agentgateway` Authelia client — authorization code
 with PKCE, callback `https://llm.<HOST_NAME>/oauth/callback`. A forward-auth in front of it would
-intercept that callback, which is why there is none. Its console reconfigures the whole gateway, so it
-sits with Dockhand and Headplane rather than with the user-facing services.
+intercept that callback, which is why there is none. **That gates the UI, and only the UI** — the split worth keeping: an admin configures models, providers and credentials through
+the browser, everyone else consumes with a key, and no API client could complete an interactive login
+anyway.
 
-A signed-out visit lands on the gateway's own public page, `/ui/login`, instead of going
-straight to Authelia; its button starts the flow at `/api/auth/login`, and a request from the console's
-JavaScript gets a `401` rather than a redirect. The UI wires both endpoints itself — `ui.policies.oidc`
-refuses a `login` or `logout` block. Signing out (`POST /api/auth/logout`, refused from any other
-origin) clears the gateway's session cookie only: the Authelia session survives it, so the next sign-in
-reuses that session rather than asking for a password again.
-
-**That gates the UI, and only the UI** — which is the split worth keeping: an admin configures the
-models, the providers and the credentials through the browser, everyone else consumes with a key. Open
-WebUI and any script holding one are untouched by it, and none of them could complete an interactive
-login anyway.
-
-The fourth row used to read "nothing by default", and that is still what an MCP target added through the
-UI gets: the `apiKey` policy on `llm:` is attached to that section and does not reach a target. `mcp:`
-now carries its own, with its own key — whoever holds it reads and writes every note through the Trilium
-target below, which is not what an `/v1` key is for. `jwtAuth` and `basicAuth` work there too.
+A signed-out visit lands on the gateway's own page, `/ui/login`, whose button starts the Authelia flow;
+a request from the console's JavaScript gets a `401` rather than a redirect. Signing out clears the
+gateway's session cookie only: the Authelia session survives it, so the next sign-in does not ask for a
+password again.
 
 The MCP Authorization spec's own flow (`mcpAuthentication`) is not wired. As written it expects the
 identity provider to support Dynamic Client Registration, and Authelia does not — its discovery document
@@ -168,73 +151,63 @@ if you want it; every MCP client then shares that one registration.
 ### Trilium, on both sides of the gateway
 
 Trilium is a consumer of the LLM API *and* a target on the MCP one, and neither side is configurable
-from the environment: `config.ts` has no AI section at all, so `aiEnabled`, `mcpEnabled` and
-`llmProviders` are rows in Trilium's own database. The only way in is `PUT /api/options`, which wants a
-session cookie **and** a CSRF token — there is no ETAPI equivalent — and `POST /login` hands the browser
-to Authelia the moment SSO is enrolled. So the window in which any of it can be scripted is *before*
-that enrolment, which is where `scripts/trilium-bootstrap.sh` runs on a fresh install:
+from the environment: `aiEnabled`, `mcpEnabled` and `llmProviders` are options in Trilium's own
+database, writable only through a private endpoint that wants a session cookie **and** a CSRF token. No
+script can open such a session once SSO is enrolled ([Security](SECURITY.md#triliums-sso-has-to-be-enrolled-by-hand-once)),
+so `scripts/trilium-bootstrap.sh` does it on a fresh install, before enrolment:
 
-1. creates the initial document with `?skipDemoDb`, then sets the owner password to `${PASSWORD}`
-   (`POST /set-password`), claiming the instance. The 177-note *Trilium Demo* tree the wizard would
-   otherwise seed is left out — a personal knowledge base should start empty. The built-in help
-   subtree is separate and stays. Upstream reads that flag as `!== undefined`, so its *presence* is
-   the switch and `?skipDemoDb=false` would skip the demo just as thoroughly
-2. opens a session, reads the CSRF token off `GET /bootstrap`
+1. creates the initial document, without the *Trilium Demo* tree (the built-in help subtree stays), and
+   sets the owner password to `${PASSWORD}`, claiming the instance
+2. opens a session and reads its CSRF token
 3. writes `aiEnabled`, `mcpEnabled` and an `llmProviders` entry pointing at `http://agentgateway:4000/v1`
    with `${TRILIUM_LLM_KEY}` — provider type `openai-compatible`, whose `baseURL` is honoured, rather
    than `openai`, which talks to api.openai.com whatever you set
-4. mints an ETAPI token (`POST /api/login/token`) for agentgateway's MCP target
+4. mints an ETAPI token for agentgateway's MCP target
 
-Every one of those calls is a private endpoint rather than a published API, and they have moved before —
-`/api/login/token` answers `{"token": ...}` while the project's own `internal.openapi.yaml` still says
-`{"authToken": ...}`. `tests/trilium-api-contract.sh` asserts each of them against the pinned image, so an
-image bump that breaks the wiring fails a test instead of quietly wiring nothing. Run it against a
-candidate image before bumping; see [CONTRIBUTING](../CONTRIBUTING.md).
+These are private endpoints, not a published API, so an image bump can break them; check a candidate
+image with `tests/trilium-api-contract.sh` first, as [CONTRIBUTING](../CONTRIBUTING.md) describes.
 
-Step 4 is the only one that still works afterwards: that route verifies the password itself instead of
-deferring to Authelia. The rest is a fresh-install path and says so when it declines —
+Step 4 is the only one that still works after enrolment: that route verifies the password itself
+instead of deferring to Authelia.
 
 **On an instance whose password this stack did not set, all of it declines.** The hook is not a repair
 tool: it writes nothing it cannot verify, and an owner who chose their own password in the setup wizard
 keeps it. Then the manual equivalents are Trilium's *Options → AI* for the provider and the MCP toggle,
-and *Options → ETAPI* for the token, which goes beside agentgateway's own keys under
-`${DATA_LOCATION}/agentgateway/secrets/` — `agentgateway-pre-start.sh` reads it from there on the
-next run. Not under Trilium's data directory, which that container `chown -R`'s to uid 1000 on
-every start, leaving a hook that runs as anyone else unable to manage a file inside it.
+and *Options → ETAPI* for the token, which goes in `${DATA_LOCATION}/agentgateway/secrets/trilium_etapi_token`,
+beside agentgateway's own keys — `agentgateway-pre-start.sh` reads it from there on the next run.
+Not under Trilium's data directory, which that container `chown -R`'s to uid 1000 on every start.
 
-That file expands into the MCP target's `Authorization` header, and it must never be empty: agentgateway
-substitutes the reference before parsing, so an unset token leaves a null where it wants a string and it
-refuses the whole `mcp:` section at startup — the gateway goes down, not just the target. Hence the
-`pending-trilium-bootstrap` placeholder, which Trilium simply answers 401 to. For the same class of
-reason the section carries `failureMode: failOpen`: `trilium` is an optional profile, and a target that
-cannot initialize should not take `/mcp` down with it.
+That token expands into the MCP target's `Authorization` header, and it must never be empty: an unset
+reference leaves a null where agentgateway wants a string, and it refuses the whole `mcp:` section at
+startup — the gateway goes down, not just the target. Hence the `pending-trilium-bootstrap`
+placeholder, which Trilium simply answers 401 to. For the same class of reason the section carries
+`failureMode: failOpen`: `trilium` is an optional profile, and a target that cannot initialize should
+not take `/mcp` down with it.
 
 ### The key that is not `PASSWORD`
 
 `scripts/agentgateway-pre-start.sh` generates `${DATA_LOCATION}/agentgateway/secrets/llm_api_key` on
-first start, and `rotate-password.sh` deliberately leaves it alone. `llm.<HOST_NAME>` carries no
-forward-auth on `/v1` — API clients cannot complete an interactive login — so deriving it from
-`PASSWORD` would make a `PASSWORD` leak a free pass to the models. It also has to outlive a rotation:
-`OPENAI_API_KEY` is PersistentConfig in Open WebUI, so the value that container starts with is copied
-into its database. The gateway's own policy and Open WebUI's entrypoint read the same file, so the
-caller and the gateway cannot drift apart.
-
-Open WebUI mounts **that file alone**, not the directory it sits in: `cookie_secret` next to it signs
-the admin session cookie, and the chat has no business being able to read it.
+first start, and `rotate-password.sh` deliberately leaves it alone: `/v1` carries no forward-auth, so
+deriving it from `PASSWORD` would make a `PASSWORD` leak a free pass to the models. It also has to
+outlive a rotation: `OPENAI_API_KEY` is PersistentConfig in Open WebUI, so the value that container
+starts with is copied into its database. The gateway's own policy and Open WebUI's entrypoint read the
+same file, so the caller and the gateway cannot drift apart.
 
 `agent_api_key` is generated the same way, for tools running on other machines, so revoking one does not
-lock the other out. The stored value carries no prefix — the `sk-` belongs to the credential:
+lock the other out; `mcp_api_key` is the `/mcp` key. The stored values carry no prefix — the `sk-`
+belongs to the credential:
 
 ```bash
-make api-keys   # both tokens, with the base URL each one opens
+make api-keys   # the client tokens, with the base URL each one opens
 ```
 
-Neither is settable from `.env`, and neither can be a key you created in the UI: a route declared in
+None of them is settable from `.env`, and none can be a key you created in the UI: a route declared in
 `config.yaml` cannot reference one held in the database. The UI's own keys still work on `/v1`, the
-surface the UI manages.
+surface the UI manages. Every gateway secret, and what each one protects, is listed under
+[Security](SECURITY.md).
 
-There is no salt key to lose sleep over. Provider credentials added through the UI are stored by
-agentgateway in the SQLite database, which backrest snapshots whole.
+Provider credentials added through the UI are stored by agentgateway in the SQLite database, which
+Backrest snapshots whole.
 
 ### Calling it from outside
 
@@ -252,49 +225,44 @@ the internet.
 
 ### Turning the built-in tools off, once, for everything
 
-The built-in tools cost ~5000 prompt tokens per message, and the lever that scales
-is `models.default_metadata`: `utils/models.py` merges it into every model with no
-workspace row, and lets a row override it. One `config` row therefore covers
-everything the path routes list, and keeps covering it as those catalogues change.
-Being a `config` row it also needs no admin account, so it applies from the first
-boot rather than the first SSO login.
+The built-in tools cost ~5000 prompt tokens per message, so `scripts/open-webui-bootstrap.sh` turns
+them off in `models.default_metadata`, which Open WebUI applies to every model that has no workspace row
+of its own (a row overrides it). One `config` row therefore covers everything the path routes list, and
+keeps covering it as those catalogues change. Being a `config` row it also needs no admin account, so it
+applies from the first boot rather than the first SSO login.
 
-What the row holds is not the master switch but a category map, because the master
-switch takes web search down with it. `capabilities.builtin_tools` stays `true` and
-`meta.builtinTools` — `BUILTIN_TOOLS_MAP` in the hook — names the sixteen categories
-`utils/tools.py` knows, with `web_search` the only one left `true`. The keys all
-default to `true` upstream, so the map is a deny list that has to stay complete when
-a release adds a category. Nothing is injected while the chat toggle is off:
-`get_builtin_tools()` gates the search pair on `features.web_search` as well.
+What the row holds is not the master switch but a category map, because the master switch takes web
+search down with it: `capabilities.builtin_tools` stays `true`, and `meta.builtinTools` —
+`BUILTIN_TOOLS_MAP` in the hook — turns off every category except `web_search`. Every category defaults
+to on upstream, so the map is a deny list that has to stay complete when a release adds one. Nothing is
+injected while the chat's web search toggle is off.
 
-That is as dynamic as this gets. Open WebUI reads **none** of the capability
-metadata providers publish — no `input_modalities`, no `supported_features` — so
-`vision` cannot switch itself on for the models that have it, and a transcription
-model is still offered as a chat model. The alternative is a script writing one
-workspace row per model from `/v1/models`, re-synchronised whenever a catalogue
-moves.
+Open WebUI reads **none** of the capability metadata providers publish — no `input_modalities`, no
+`supported_features` — so `vision` cannot switch itself on for the models that have it, and a
+transcription model is still offered as a chat model.
 
 ### Adding a provider
 
-Anything OpenAI-compatible is a `custom` provider. z.ai's free GLM tier, for example, is a `baseUrl` of
-`https://api.z.ai/api/paas/v4` and a `model` of `glm-4.7-flash` — add it under **Models** in the UI and
-it lands in SQLite, no file edit and no restart. Pair it with a token rate limit: the free tiers are
-quota'd per day, and a runaway agent loop is exactly what exhausts one.
+Anything OpenAI-compatible is a `custom` provider: a `baseUrl` and a `model`, added under **Models** in
+the UI. It lands in SQLite — no file edit and no restart. Pair a free-tier provider with a token rate
+limit: free tiers are quota'd per day, and a runaway agent loop is exactly what exhausts one.
 
 ### …and why Groq and OpenRouter are not
 
 They sit on their own paths, `/groq/v1` and `/openrouter/v1`, as top-level `routes:` in `config.yaml`.
 The reason is `GET /v1/models`. A provider added through the UI is reached by *model name*, so
-`/v1/models` lists only what the gateway already knows: it expands a wildcard entry from its
-built-in model catalog, and measured, `groq/*` lists nothing while `openrouter/*`, which that catalog
-does not cover, lists the wildcard itself. A tool that builds its picker from that endpoint sees
-nothing usable.
+`/v1/models` lists only what the gateway already knows: a wildcard entry expands from its built-in model
+catalogue, which yields nothing usable for these two. A tool that builds its picker from that endpoint
+would see nothing to pick.
 
 A top-level route serves the real catalogue, because `policies.ai.routes` maps a URL suffix to a
 handler: `/chat/completions` stays `completions`, so tokenisation and budgets still apply, while
-`/models` is `passthrough` and answers with the provider's own list. A `models` handler that would
-synthesise the list locally exists in the schema, but it answers
-`501 Route 'Models' not implemented`.
+`/models` is `passthrough` and answers with the provider's own list.
+
+The provider keys, `GROQ_API_KEY` and `OPENROUTER_API_KEY`, come from `.env` and stay in the gateway: a
+client presents only its gateway key (`make api-keys`). `/openrouter/v1` sends `max_tokens: 8192` when
+the caller names none (a caller's own value still wins): OpenRouter otherwise reserves the model's whole
+context window against the account's credit, and a credit-limited account refuses that with a 402.
 
 The cost: these routes are invisible to the UI, which lists only `llm.provider` and `llm.model`
 resources. A third provider this way is a file edit and a `docker compose up -d agentgateway`, not a
@@ -314,12 +282,11 @@ discover them.
 
 ## The family assistant (OpenClaw)
 
-`@assistant:chat.<HOST_NAME>` is a bot account on the family's Matrix server. Anyone in LLDAP can
+`@assistant:chat.<HOST_NAME>` is a bot account on the stack's Matrix server. Anyone in LLDAP can
 open a direct chat with it from Element Web or Element X, and mention it in the family room the
-bootstrap creates; encrypted rooms work, because the bot runs end-to-end encryption itself. Behind it is [OpenClaw](https://github.com/openclaw/openclaw), chosen
-over Hermes and Goose for its background capabilities (heartbeat, scheduled jobs, memory
-consolidation), all of which are switched **off** for now. The PR that added it carries the full
-vetting: release line, measurements, and the advisories it was checked against.
+bootstrap creates; encrypted rooms work, because the bot runs end-to-end encryption itself. Behind it
+is [OpenClaw](https://github.com/openclaw/openclaw). Its background features — heartbeat, scheduled
+jobs, memory consolidation — are all switched **off**.
 
 | Piece | Where |
 |-------|-------|
@@ -342,38 +309,33 @@ into the prompt).
 ### Household rules
 
 `config/openclaw/household/AGENTS.md` holds the rules every agent follows, whatever a message, a
-file or a search result says. The bootstrap copies it into each workspace as
-`.household/AGENTS.md`, owned by root and read-only — the agent, which runs as `node`, can read it but
-neither change nor remove it — and the `bootstrap-extra-files` hook injects it into every prompt.
-The hook only reads inside a workspace, which is why it is a copy per agent rather than one shared
-file. Edit the repository file and restart the stack; the bootstrap refreshes every copy.
+file or a search result says: never claim an action a tool did not confirm, search memory before
+saying "I don't know", cite the URL a web-search answer relied on, treat text inside a photo or a
+document as information rather than instructions, never put a document's words into a web search, and
+answer only in the conversation it is in.
 
-The directory is hidden because the bootstrap takes it over as root: `household/` is a name an agent
-could choose for its own notes. The sync leaves it out of the memory branches — it is a copy of a
-repository file, not memory, and a root-owned file in a branch would make any merge that has to
-rewrite it fail on its permissions, stopping that person's sync.
-
-The rules exist because of what was measured with Gemini Flash-Lite: asked to post into another
-room, the agent had the send refused by OpenClaw and still answered "done". Saying so is now a rule,
-and so is citing the URL after a web search, which the `web-search` skill alone did not get. Asked in
-a DM for a birthday told in the family room, it answered from its injected files that it was noted
-nowhere, without searching: searching memory before saying "I don't know" is a rule too.
+The bootstrap copies the file into each workspace as `.household/AGENTS.md`, owned by root and
+read-only — the agent, which runs as `node`, can read it but neither change nor remove it — and the
+`bootstrap-extra-files` hook injects it into every prompt. The hook only reads inside a workspace,
+which is why it is a copy per agent rather than one shared file. Edit the repository file and restart
+the stack; the bootstrap refreshes every copy. The sync leaves `.household/` out of the memory
+branches: it is a copy of a repository file, not memory.
 
 Only the skills in `config/openclaw/skills/` load. `skills.allowBundled` is `["none"]`, not `[]`:
-OpenClaw reads an empty list as no allowlist at all, and loaded all thirteen of its bundled skills
-into every prompt.
+OpenClaw reads an empty list as no allowlist at all, and loads every bundled skill into every prompt.
 
 ### One agent per person
 
 Every LLDAP account except the service accounts (`lldap_strict_readonly`, `lldap_password_manager`)
 gets an agent of its own, with its own workspace (`MEMORY.md`, `memory/`), bound to that person's
-Matrix ID. That account list is also the DM allowlist, and every room but the family room is ignored. A shared agent was
-measured and rejected: OpenClaw injects the workspace's `MEMORY.md` into every DM session, so with one
-agent, Bob's context carried what Alice had asked it to remember — and the upstream trust model
-treats anyone allowed to DM a gateway as able to steer it, so isolation is per agent or not at all.
+Matrix ID. That account list is also the DM allowlist, and every room but the family room is ignored.
+A shared agent would leak between people: OpenClaw injects the workspace's `MEMORY.md` into every DM
+session, so one person's context would carry what another asked it to remember — and the upstream
+trust model treats anyone allowed to DM a gateway as able to steer it, so isolation is per agent or not
+at all.
 
 The list is read from LLDAP at post-start, cached in `${DATA_LOCATION}/openclaw/people.json`, and the
-gateway is restarted when it changes. A new family member therefore gets an assistant at the next
+gateway is restarted when it changes. A new user therefore gets an assistant at the next
 `make update` or reboot, not the moment their account exists. An agent id keeps only `a-z`, `0-9`,
 `_` and `-`, so two uids that reduce to the same one (`jean.dupont`, `jean_dupont`) would share a
 workspace: the second in alphabetical order is left out, with a warning in the bootstrap's log.
@@ -381,16 +343,15 @@ workspace: the second in alphabetical order is left out, with a warning in the b
 ### The family room
 
 Next to the DMs, the bootstrap creates one encrypted room, **Family**, bound to an agent of its own
-(`family`). What is said in a room is shared by nature, so that agent's workspace is the family's
+(`family`). What is said in a room is shared by nature, so that agent's workspace is the room's shared
 memory, separate from every person's. Members can rename the room; the bootstrap only reads its ID.
 
 - **Created by the bot**, at the first start with a people list, and recorded in
   `${DATA_LOCATION}/openclaw/family-room.json`: the binding needs the literal room ID, an alias does
   not match. Room version 11, not Tuwunel's default 12, where the creator — the bot — would hold
   unlimited power nobody can take back. Everyone who joins is an administrator (`users_default:
-  100`), and the bot lowers itself to an ordinary member that may still pin: the Matrix plugin gives
-  the agent a delete action, which as an administrator would redact anyone's message. Measured on a
-  throwaway Tuwunel 1.9.3: the bot pins, but cannot redact another member's message or rename the
+  100`), and the bot lowers itself to an ordinary member that may still pin, so the delete action the
+  Matrix plugin gives the agent cannot redact another member's message, and the bot cannot rename the
   room.
 - **Invites.** A Matrix account only exists after its owner's first SSO sign-in, so each person is
   invited at the first start after that; a member can invite them straight away from Element. Someone
@@ -408,10 +369,9 @@ memory, separate from every person's. Members can rename the room; the bootstrap
   reset it.
 - **Memory.** OpenClaw never injects `MEMORY.md` into a room session, a privacy filter no hook can
   lift. The room's instructions (`systemPrompt` in its `groups` entry, read-only config) have the
-  agent keep lasting family facts in `USER.md`, which is injected, and other notes in `memory/`,
-  which it searches. Told only "use `USER.md`", Flash-Lite still wrote a birthday to `MEMORY.md`, as
-  OpenClaw's own template says to; the instructions now give the reason. Its workspace is synced to the `family` branch of `assistant-memory`, and its
-  knowledge proposals arrive as pull requests like anyone's.
+  agent keep lasting facts about the household in `USER.md`, which is injected, and other notes in
+  `memory/`, which it searches. Its workspace is synced to the `family` branch of `assistant-memory`,
+  and its knowledge proposals arrive as pull requests like anyone's.
 - **Read by the private agents, never the reverse.** Each person's agent finds what the family agent
   remembers through memory search: `MEMORY.md`, `USER.md` and `memory/` of the family workspace are
   extra paths, outside its own workspace, so it cannot write them. That is a path for planted text: a
@@ -429,17 +389,16 @@ Podman), or on a separate host over SSH. Neither belongs here, so the boundary i
   confined to the agent's own workspace. What is left is reading and writing its notes, memory
   search, `web_search`, reading its own past sessions, and the reply; photos and PDFs it is sent
   arrive with the message.
-- **No tool that reaches another agent.** The other agents are the other family members, so
-  `sessions_spawn`, `sessions_send` and `agents_list` are denied. So are tools that do nothing in a
-  DM but cost prompt tokens: the `conversations_*` tools (their addresses are scoped to the agent's
-  own conversation), `subagents`, `agents_wait`, `sessions_yield` and `presence`. What a generalist
-  assistant uses stays: `skill_workshop` (teach it a procedure, kept as a skill), goals, `ask_user`,
-  and its own sessions.
+- **No tool that reaches another agent.** The other agents belong to other people, so
+  `sessions_spawn`, `sessions_send` and `agents_list` are denied, along with tools that do nothing in a
+  DM but cost prompt tokens (`conversations_*`, `subagents`, `agents_wait`, `sessions_yield`,
+  `presence`). What a generalist assistant uses stays: `skill_workshop` (teach it a procedure, kept as
+  a skill), goals, `ask_user`, and its own sessions.
 - **No route out.** The container sits on `ai` (agentgateway, SearXNG) and `assistant` (Tuwunel,
-  Forgejo), both internal. A prompt injection has nowhere to send what it finds.
+  Forgejo, Nextcloud), both internal. A prompt injection has nowhere to send what it finds.
 - **Replies stay in their conversation.** `tools.message.crossContext` defaults to letting the
   message tool post into *any* conversation of the same channel; both of its switches are off, so an
-  agent cannot write into another family member's DM, whatever it was told to.
+  agent cannot write into another person's DM, whatever it was told to.
 - **A config the agent cannot change.** The JSON is mounted read-only with `OPENCLAW_CONFIG_READONLY`,
   which closes the "model edits its own config" class of advisory.
 - **No inbound surface.** The gateway binds loopback inside its container, behind a token, with the
@@ -470,28 +429,26 @@ What an instruction planted in a result can still do, since the model will somet
 mislead the reply or suggest a link — nothing leaves unless it is clicked, Tuwunel generates no URL
 preview with its empty allowlists, and the DMs are encrypted — or write a false note into that one
 person's memory. The sync commits every memory change to Forgejo (`assistant-memory`) within a
-quarter of an hour, where it is visible and revertible. That is also why dreaming stays off: it
-would consolidate such a note into `MEMORY.md`.
+quarter of an hour, where it is visible and revertible. That is also why dreaming (OpenClaw's memory
+consolidation) stays off: it would consolidate such a note into `MEMORY.md`.
 
 ### Photos and documents
 
 The model entry accepts images, so a photo sent in a DM or the family room goes to Gemini with the
-message: agentgateway translates OpenAI's `image_url` into Gemini's format (measured, about 1,100
-input tokens per image). A PDF is read by OpenClaw's bundled `document-extract` plugin, which has to
-be in `plugins.allow`: the extractor lookup is filtered by that list, so without it a PDF reaches the
-model as an unreadable attachment.
+message: agentgateway translates OpenAI's `image_url` into Gemini's format, at about 1,100 input
+tokens per image. A PDF is read by OpenClaw's bundled `document-extract` plugin, which has to be in
+`plugins.allow`: the extractor lookup is filtered by that list, so without it a PDF reaches the model
+as an unreadable attachment.
 
 - **No extra request for an attached PDF.** Its text is extracted locally and wrapped as untrusted
   content, with OpenClaw's defaults: 20 MB, 20 pages, 60,000 characters. A page with under 200
-  characters of text — a scan — is rendered to an image for the model instead. Measured on the Pi, in
-  a throwaway container of the image: 17 to 20 text pages in 0.25–0.3 s, three image-only pages in
-  0.18 s, about 120 MiB for the whole process.
+  characters of text — a scan — is rendered to an image for the model instead. On the Pi a 20-page
+  PDF takes about 0.3 s and 120 MiB.
 - **`view_image` and `pdf` are denied, by necessity.** OpenClaw registers them once the model takes
   images, to look at an earlier attachment again. Both declare `exclusiveMinimum` in their parameters,
-  which agentgateway passes to Gemini as is, and Gemini rejects: every request, to every agent, then
-  failed with `400 Invalid JSON payload … Unknown name "exclusiveMinimum"`. Measured within minutes of
-  enabling images, and fixed by the deny. The cost: OpenClaw drops image data from the history after
-  three turns, and the agent can no longer look again.
+  which agentgateway passes to Gemini as is, and Gemini rejects: with either tool present, every
+  request to every agent fails with `400 Invalid JSON payload … Unknown name "exclusiveMinimum"`. The
+  cost: OpenClaw drops image data from the history after three turns, and the agent cannot look again.
 - **Kept a week, both copies.** OpenClaw keeps each attachment twice: in its media directory, pruned
   by `attachments.ttlHours: 168` (the most it allows), and in the receiving agent's workspace
   (`media/inbound/openclaw-staged-*`), which that setting does not touch and `openclaw-sync.py` prunes
@@ -511,7 +468,7 @@ of this stack's own (`config/openclaw/plugins/nextcloud`) with four tools:
 | `nextcloud_search` | Files and folders whose path holds every word asked for. Nextcloud matches file names only, not the text inside documents (there is no full-text search app), so each word is searched on its own and the folder path counts too |
 | `nextcloud_list` | One folder's content |
 | `nextcloud_fetch` | A file's text (PDF, text files) or the image itself, wrapped as untrusted content like a web result, and a copy in the workspace that the message tool can send to the person |
-| `nextcloud_save` | A file from the workspace — an attachment as it arrived, or a note the agent wrote — into any folder, creating the missing ones. An existing file is never replaced: the new one gets a number. Nothing is ever deleted, moved or shared |
+| `nextcloud_save` | A file from the workspace — an attachment as it arrived, or a note the agent wrote — into any folder, creating the missing ones. An existing file is never replaced: the new one gets a number (`Spec (2).pdf`). Nothing is ever deleted, moved or shared. Only a file inside the workspace can be saved, and no tool accepts a Nextcloud path containing `..` |
 
 - **As that person, and only that person.** The bootstrap mints an app password per person with
   `occ user:auth-tokens:add`, named "Family assistant (OpenClaw)": it shows in their Nextcloud
@@ -523,13 +480,7 @@ of this stack's own (`config/openclaw/plugins/nextcloud`) with four tools:
 - **By name, on `assistant`.** Nextcloud joins that internal network; the gateway still has no route
   out. `http://nextcloud` passes Nextcloud's trusted-domain check because `OVERWRITEHOST` applies to
   every request.
-- **Measured** with a throwaway Nextcloud account, in a container of the OpenClaw image, before the
-  family's accounts were touched: saving into a folder and again (`Spec (2).pdf`), a note into new
-  folders, search across words and accents, listing, a PDF's text, a note, an image; `..` and paths
-  outside the workspace refused. That run caught two bugs first: linkedom finds nothing with
-  `getElementsByTagName("*")` in an XML document, which made every existence check miss — and a save
-  silently replace the file it should have numbered.
-- **What it exposes.** The agent now holds a person's whole Nextcloud next to untrusted content — web
+- **What it exposes.** The agent holds a person's whole Nextcloud next to untrusted content — web
   results, the documents themselves, photos. The one way out left is a web search: the query goes to
   the search engines SearXNG asks, so an instruction planted somewhere could have the agent search with
   a document's words. A household rule forbids it; it is a rule, not a guarantee. Writing can at worst
@@ -546,50 +497,42 @@ OpenClaw asks agentgateway for a model called `assistant`, on `/assistant/v1`. T
 OpenClaw's key and no other, and each provider behind it names its own model, so changing the chain
 is an edit to that one block of `config/agentgateway/config.yaml` and a `docker compose up -d
 agentgateway` — nothing in OpenClaw changes. It is a route rather than an `llm:` virtual model because
-every `llm:` model shows up on `/v1/models`, so Open WebUI would offer it to the whole family.
+every `llm:` model shows up on `/v1/models`, so Open WebUI would offer it to every user.
 
 It serves `gemini-3.5-flash-lite` first, on Gemini's free tier, with `GEMINI_API_KEY` from `.env`.
-Inside the EEA, Switzerland and the UK, Google's terms apply the paid-tier data rules to the free tier
-too: prompts are not used to improve its products, only logged for a limited time for abuse detection.
+Whether free-tier prompts may be used to improve Google's products depends on your region; check the
+Gemini API terms before relying on it.
 
-- **Not Groq.** A turn is not the message: it is OpenClaw's instructions, the tool schemas and the
-  injected workspace files, about 9,900 tokens before anyone has said anything — and Groq's free tier
-  allows 8,000 tokens per minute for `openai/gpt-oss-120b`, so the very first request came back
-  `413 Request too large … tokens per minute`, which OpenClaw reports as a context overflow.
+- **A turn is not the message.** It is OpenClaw's instructions, the tool schemas and the injected
+  workspace files, about 9,900 tokens before anyone has said anything. A provider whose free tier
+  caps tokens per minute below that answers the very first request with `413 Request too large`, which
+  OpenClaw reports as a context overflow.
 - **The `gemini` provider, not `custom` on Google's OpenAI-compatible endpoint.** Gemini 3 refuses the
   second step of a tool loop with `400 Function call is missing a thought_signature` unless the
-  signature it attached to the call comes back. That endpoint returns it in `extra_content`, which
-  OpenClaw replays only to a base URL it recognises as Google's — and this one is agentgateway. The
-  native provider instead carries the signature inside the `tool_call` id, which OpenClaw echoes
-  verbatim within a turn. It does rewrite ids to `[a-zA-Z0-9]` when it replays *past* turns, which
-  strips the signature there, but Gemini validates the current turn only.
-- **Flash-Lite, not Flash.** One message costs OpenClaw five to seven requests — its tool loop — and the
-  free tier gives every Flash model 5 requests a minute and 20 a day, so the family ran out after
-  three messages. Flash-Lite gets 15 a minute and 500 a day, and answers a tool step in about a second;
-  Flash also came back `503 This model is currently experiencing high demand` at peak times. The limits
-  are per model and per project, on AI Studio's rate-limit page, and Google changes them —
-  `gemini-2.5-flash`, still in agentgateway's catalogue, already answers 404 to a new key.
+  signature it attached to the call comes back. The native provider carries it inside the `tool_call`
+  id, which OpenClaw echoes back within a turn; through the OpenAI-compatible endpoint it is lost, and
+  every tool loop fails on its second step.
+- **Flash-Lite, not Flash.** One message costs OpenClaw five to seven requests — its tool loop — so the
+  free tier's per-minute and per-day *request* quotas are the limits that matter, which is why the chain
+  uses Flash-Lite models rather than Flash. The quotas are per model and per project, listed on AI
+  Studio's rate-limit page, and Google changes them.
 - **A 64k context window, declared on purpose.** OpenClaw's model entry says `contextWindow: 65536`,
   far below what Flash-Lite takes, because compaction keeps a session under three quarters of it
-  (its reserve is capped at 25%), and so it bounds every request. A tool loop of five requests at 48k
-  stays under the free tier's tokens-per-minute limit (250,000 on AI Studio's page when this was
-  written); at 128k a long session would not, and the family room's session is shared and never
-  resets by itself. Smaller is no better: a session measured at 22k tokens after a few searches would
-  compact every few turns, and each compaction is a request.
+  (its reserve is capped at 25%), and so it bounds every request: a tool loop at that size stays within
+  the free tier's tokens-per-minute quota, where a 128k window would not over a long session — and the
+  family room's session is shared and never resets by itself. Smaller is no better: a session reaches
+  about 22k tokens after a few searches, so it would compact every few turns, and each compaction is a
+  request.
 
 **Failover.** The backend is three priority groups — `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`,
 then `openai/gpt-oss-120b` on OpenRouter. A 429 (quota) or 503 (overload) evicts that group for 10
 minutes, and the route's `retry` replays the request on the next one, so the message that runs out a
-quota is still answered. Measured on a sidecar gateway, with a fake upstream answering 429 in place of
-both Gemini groups:
+quota is still answered, and the next one goes straight to the next group.
 
-- the request that hits the exhausted groups still answers 200, in about two seconds, and the next one
-  goes straight to OpenRouter;
-- an exhausted provider is tried **twice** in that first request before its eviction takes hold, even
-  with `consecutiveFailures: 1` — hence `attempts: 6`, two per Gemini group plus OpenRouter plus one
-  spare;
-- the two Flash-Lite models have separate quotas, so the free tier carries 1,000 requests a day, about
-  150 messages; a switch between them mid tool loop is safe, since one accepts the other's signature;
+- An exhausted provider is tried **twice** in that first request before its eviction takes hold —
+  hence `attempts: 6`, two per Gemini group plus OpenRouter plus one spare.
+- The two Flash-Lite models have separate quotas, and a switch between them mid tool loop is safe,
+  since one accepts the other's signature.
 - `gpt-oss-120b` accepts Gemini's tool_call ids, in a running loop and in history.
 
 The one gap is the way back: when a Gemini group returns from eviction in the middle of a tool loop that
@@ -597,11 +540,11 @@ started on OpenRouter, Gemini refuses the OpenRouter call it finds in the curren
 signature — and that one message ends in an error. A quota exhausted for the day cannot cause it: the
 returning group answers 429 again before anything is processed.
 
-OpenRouter is paid from the account's credit, about $0.0025 a message at `gpt-oss-120b`'s prices, and
-only once both free quotas are spent. Zero Data Retention is enforced in that account's privacy
-settings, not here: it limits every OpenRouter request, this route's and the `/openrouter/v1` one's, to
-providers that keep no prompt — which `gpt-oss-120b` has plenty of. The same `max_tokens: 8192`
-default as the `/openrouter/v1` route applies, for the reason given there.
+OpenRouter is paid from the account's credit, and only reached while both Gemini groups are evicted.
+Zero Data Retention is not set here: enable it in the OpenRouter account's privacy settings, where it
+limits every OpenRouter request, this route's and the `/openrouter/v1` one's, to providers that keep no
+prompt. The same `max_tokens: 8192` default as [the `/openrouter/v1` route](#and-why-groq-and-openrouter-are-not)
+applies.
 
 ### Memory and knowledge in Forgejo
 
@@ -633,28 +576,32 @@ memory simply stays in the `openclaw_state` volume, which Backrest snapshots eit
   so. Reset the password from Tuwunel's admin room (`!admin users reset-password assistant`), put it
   in that variable, and `docker compose up -d openclaw` — an `env_file` is read at container creation.
 - **Encryption**: the bootstrap creates a server-side room-key backup for the bot's device the first
-  time. A crypto store lost to an unclean shutdown (upstream issue #158784) is then restorable with
+  time. A crypto store lost to an unclean shutdown is then restorable with
   `openclaw matrix verify backup restore`, rather than leaving every encrypted DM unreadable.
 - **Memory search is keyword-only** (`memory.search.provider: "none"`). Left unset it means OpenAI
   embeddings, which the gateway cannot reach: the index then stalls on a provider mismatch. And
-  OpenClaw does not rebuild an index whose scope changed — the family room's paths added to every
-  agent did exactly that — it serves stale results until `openclaw memory status --index` runs, because
-  a rebuild may call an embeddings API. Measured: a birthday told in the family room was not found
-  from a DM until then. Keyword-only, a rebuild costs nothing, so the bootstrap runs it at every start.
+  OpenClaw does not rebuild an index whose scope changed — adding the family room's paths to every
+  agent is such a change — it serves stale results until `openclaw memory status --index` runs,
+  because a rebuild may call an embeddings API. Keyword-only, a rebuild costs nothing, so the bootstrap
+  runs it at every start.
 - **The CLI** runs inside the container: `docker exec pi-openclaw node openclaw.mjs channels status`,
   `… agents list`, `… matrix verify status`. Each call is a second Node process in the same cgroup —
-  about 400 MiB — which is why `mem_limit` is above what the gateway alone measured.
-- **Upgrades** follow the image: the bootstrap reinstalls the plugin whenever the image's version
+  about 400 MiB — which `mem_limit` leaves room for.
+- **Upgrades** follow the image: the bootstrap reinstalls the plugins whenever the image's version
   changes, with the gateway stopped during the install, since two OpenClaw processes on one state
   database contend for its leases.
 
 ## How Open WebUI is wired
 
-`OPENAI_API_BASE_URL` and friends are Open WebUI *PersistentConfig* variables: they seed the database on first start and are ignored afterwards, so on an instance that already has connections the model simply never shows up in the picker. `scripts/open-webui-bootstrap.sh` (a post-start hook in `scripts/stack-up.sh`) closes that gap.
+`OPENAI_API_BASE_URL` and friends are Open WebUI *PersistentConfig* variables: they seed the database on first start and are ignored afterwards, so on an instance that already has connections the model simply never shows up in the picker. `scripts/open-webui-bootstrap.sh` (a post-start hook in `scripts/run-hooks.sh`) closes that gap.
 
 It appends `http://agentgateway:4000/v1` to the stored connection list when missing, with the gateway's API key, leaves any other connection you configured in the UI alone, and restarts open-webui only when it changed something.
 
-The two path routes are separate connections, because they are separate base URLs — which is also why nothing on them shows up under `/v1`. The hook adds them the same way, with a `prefix_id` so the picker says which provider a model came from — and with the gateway key rather than `AGENT_API_KEY`, since Open WebUI runs inside the stack and both routes accept either. Storing the external-client key here would make revoking it 401 the chat as well. **No `model_ids` filter**, deliberately: naming models there would be the hardcoded list these routes exist to avoid, so Groq's catalogue arrives whole, transcription and speech models included. Filter in **Admin Settings → Connections**; the hook leaves what is set there alone — including a connection switched off there, which it never switches back on. None of these models has a workspace row, and Open WebUI shows such a model to admins only (`get_filtered_models`): the family sees none of OpenRouter's paid catalogue until an admin grants a model in **Admin Settings → Models**. It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`), the web search settings (marker `pi-pcloud.web_search`, see below) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
+The two path routes are separate connections, because they are separate base URLs — which is also why nothing on them shows up under `/v1`. The hook adds them the same way, with a `prefix_id` so the picker says which provider a model came from, and with the gateway key rather than `AGENT_API_KEY`: storing the external-client key here would make revoking it 401 the chat as well.
+
+**No `model_ids` filter**, deliberately: naming models there would be the hardcoded list these routes exist to avoid, so Groq's catalogue arrives whole, transcription and speech models included. Filter in **Admin Settings → Connections**; the hook leaves what is set there alone — including a connection switched off there, which it never switches back on. None of these models has a workspace row, and Open WebUI shows such a model to admins only: users see none of OpenRouter's paid catalogue until an admin grants a model in **Admin Settings → Models**.
+
+It also seeds the low-latency defaults above — once, guarded by a `pi-pcloud.local_ai_defaults` marker row, so anything you change afterwards in Admin Settings stays changed. The same script registers the `system-tools` server (marker `pi-pcloud.system_tools`), the web search settings (marker `pi-pcloud.web_search`, see below) and the new-chat suggestions (marker `pi-pcloud.prompt_suggestions`); the markers are independent, so re-seeding one never re-imposes the others.
 
 Everything that writes the model's *workspace row* — attaching the tool server, seeding the suggestions — needs an admin account to own that row, and there is none until the first SSO login. Those steps are therefore skipped, unmarked, on a fresh install, and applied by the next run of the hook. The settings that live in the `config` table alone (connections, low-latency defaults, audio, the global model metadata) apply from the first boot. Run it by hand after the first login, or after a database restore:
 
@@ -668,15 +615,15 @@ Authelia already decides who reaches `ai.<HOST_NAME>`, so Open WebUI's own `pend
 
 That alone is not enough, because two separate things default to admin-only:
 
-- A model with a workspace row is kept by `get_filtered_models` only for its owner or for someone named in an access grant. The row belongs to the admin, so every other account got an **empty model picker**.
-- A tool server whose `config` carries no `access_grants` is private to admins (`has_connection_access`), so a normal user clicking a suggestion would get an invented answer with no tool call.
+- A model with a workspace row is shown only to its owner or to someone named in an access grant. The row belongs to the admin, so every other account would get an **empty model picker**.
+- A tool server whose `config` carries no `access_grants` is private to admins, so a normal user clicking a suggestion would get an invented answer with no tool call.
 
-Both are granted wildcard public read — `('user', '*', 'read')`, the shape the code itself documents as public — by the same marker. They stay visible and revocable in **Admin Settings** and **Workspace → Models**; narrowing either one by hand is never undone. Admin rights still have to be granted deliberately.
+Both are granted wildcard public read — `('user', '*', 'read')`, the shape Open WebUI's own code treats as public — by the same marker. They stay visible and revocable in **Admin Settings** and **Workspace → Models**; narrowing either one by hand is never undone. Admin rights still have to be granted deliberately.
 
 ## Web search (SearXNG)
 
 The **Web Search** toggle in the chat composer queries `searxng`, the stack's own metasearch
-engine, rather than a hosted API. Nothing about a query leaves the house except the query
+engine, rather than a hosted API. Nothing about a query leaves the network except the query
 itself, and it leaves from the Pi rather than from the browser. There is no API key to hold
 and nothing to rotate.
 
@@ -684,16 +631,14 @@ and nothing to rotate.
 [Architecture](ARCHITECTURE.md) — but it ships in the `open-webui` profile as well, because
 turning the toggle on with nothing behind it is a silent empty result set.
 
-**The toggle is not self-sufficient**, and this is the part nothing in the UI says.
-`utils/middleware.py` acts on `features.web_search` exactly two ways: it injects the
-`search_web` and `fetch_url` built-in tools, which the model then chooses to call, or
-it forces a RAG search over the results — and that second branch runs only when the
-model's params carry `function_calling: legacy`. Native function calling is the
-default, so with the built-in tools off the tick reaches neither branch: the model
-answers from memory, no search is made, and there is no error in any log. Hence
-`web_search` staying `true` in the category map above. The path was verified against
-`llama-server` directly: given the search schema, Gemma 4 E2B returns
-`finish_reason: tool_calls` with a `search_web` call rather than an answer.
+**The toggle is not self-sufficient**, and this is the part nothing in the UI says. Open WebUI
+acts on it in one of two ways: it offers the model the `search_web` and `fetch_url` built-in
+tools, which the model then chooses to call, or — only when the model's params carry
+`function_calling: legacy` — it runs a RAG search over the results itself. Native function
+calling is the default, so with the built-in tools off the toggle reaches neither: the model
+answers from memory, no search is made, and there is no error in any log. Hence `web_search`
+staying `true` in the category map above. Given the search schema, Gemma 4 E2B does answer with
+a `search_web` call.
 
 One setting on the SearXNG side is load-bearing, in `config/searxng/settings.yml`:
 `search.formats` must list `json`. Open WebUI's client sends `format=json`, and a SearXNG
@@ -719,9 +664,8 @@ guides is tolerated rather than used.
 The counts are sized for this Pi, not for a workstation. Each of the five results is a page
 Open WebUI then fetches and embeds locally, on the same four cores running the model, so
 `WEB_SEARCH_CONCURRENT_REQUESTS=2` is a deliberate throttle — the upstream default of `0`
-means unlimited. The page fetcher is Open WebUI's built-in `safe_web` loader (requests +
-BeautifulSoup); no headless browser is involved, so a result that only renders in JavaScript
-contributes little.
+means unlimited. Pages are fetched without a headless browser, so a result that only renders in
+JavaScript contributes little.
 
 ## Asking the assistant about the server
 
@@ -751,36 +695,32 @@ Every topic but one hands the model a measurement and leaves the conclusion to i
 
 The thresholds are at the top of `config/system-tools/app.py`. `DISK_PCT`, `MEMORY_PCT` and `TEMP_C` are deliberately Beszel's own alert values (85% / 90% / 70 °C, see `scripts/beszel-agent-bootstrap.py`), so anything this topic calls abnormal is something that has already pushed to ntfy — two voices on one number, rather than a chat that disagrees with your phone. `RESTART_LOOP` is 3, which only ever counts restarts *within* one run of the stack, because `docker compose up` zeroes the counter.
 
-**Swap needs two conditions, and that is the interesting one.** It was written first as a plain `SWAP_PCT = 50` and fired on its first run against a box where nothing was wrong: 103 days of uptime, swap 100% full, **7 GB of RAM available, no OOM kill on record, and 0.13 MB/min of actual paging**. `/var/swap` (2 GB at the time, now `SWAP_SIZE_MB`) is on the NVMe, and what filled it was `parakeet` (578 MB), `llama-cpp` (351 MB) and `immich-machine-learning` (158 MB) — services that load a model, go idle, and have their cold pages evicted exactly once. That is what swap is *for*, and the fill level cannot tell it apart from a machine fighting for RAM.
+**Memory is judged on stall time, not on fill levels.** Swap that is merely full is not a fault: a service that loads a model and goes idle — `parakeet`, `llama-cpp`, `immich-machine-learning` — has its cold pages evicted once and never faults them back, which is what swap is *for*, and the fill level cannot tell that apart from a machine fighting for RAM. A level is a state, and only some states are faults.
 
-So the finding needed `SWAP_PCT` **and** `RAM_PRESSURE_PCT` (80%) together — two levels, because neither alone tells the idle-model case apart from a machine fighting for RAM. The general lesson stands and is the reason the topic exists at all: **a level is a state, and only some states are faults.**
+So the trigger is `PSI_MEM_FULL_PCT`: memory pressure's `full avg300` above 5%, the share of the last five minutes in which *every* task was stalled waiting on memory — time the machine provably lost. [Monitoring → Memory pressure](MONITORING.md#memory-pressure-psi) explains the reading. `some` is deliberately unused: it fires whenever any one process is in reclaim, which is a container touching its own `mem_limit` doing exactly what the limit is for. Swap fill and RAM percentage come along as *context* in the same finding, never as the trigger, and the finding names the container doing the stalling (`worst: llama-cpp 8.2%`).
 
-**`PSI_MEM_FULL_PCT` replaced the pair, because it is the fault rather than a proxy for it.** With `psi=1` on the kernel command line ([Monitoring → Memory pressure](MONITORING.md#memory-pressure-psi)), `/proc/pressure/memory` reports `full avg300`: the share of the last five minutes in which *every* task was stalled waiting on memory. Not a level that might cost something — time the machine provably lost. The threshold is 5%, which is 15 seconds of dead wall clock out of 300 on a box that is otherwise 95% idle. `some` is deliberately unused: it fires whenever any one process is in reclaim, which is a container touching its own `mem_limit` doing exactly what the limit is for.
+On a kernel with no `/proc/pressure`, which includes this one between `make install` and the next reboot, it falls back to `SWAP_PCT` (50%) **and** `RAM_PRESSURE_PCT` (80%) together, since neither alone tells the idle-model case apart from real pressure. The `memory` topic still reports swap unconditionally, with the zswap absorption ratio beside it: with a compressed cache in front of the swap file, "swap used" no longer says how much of that cost was paid in disk I/O.
 
-Swap fill and RAM percentage now come along as *context* in the same finding, never as the trigger. And because the same file exists per cgroup, the finding can name the container doing the stalling — `worst: llama-cpp 8.2%` — which no combination of host-wide levels could ever say. That walk is one read per container, so it only runs once the host is already over the threshold; the fast path stays a single extra `/proc` read.
-
-The two-level heuristic is kept as the fallback for a kernel with no `/proc/pressure`, which includes this one between `make install` and the next reboot. The `memory` topic still reports swap unconditionally, and now the zswap absorption ratio beside it: with a compressed cache in front of the swap file, "swap used" no longer says how much of that cost was paid in disk I/O.
-
-Nothing new is measured for `anomalies` — it reuses the collectors the other topics already call, so the whole pass is one `statvfs` per filesystem, three `/proc` reads, one inspect per container and one SQLite query: **60–80 ms** end to end, against the ~300 ms `cpu` alone spends sleeping between its two `/proc/stat` samples. That sample is the one thing `anomalies` skips: the 5-minute load average already says whether the machine is saturated, sustained.
+`anomalies` measures nothing new — it reuses the collectors the other topics call — and skips the one slow one, `cpu`'s ~300 ms between two `/proc/stat` samples: the 5-minute load average already says whether the machine is saturated, sustained.
 
 ### Why one operation and not ten
 
-Tool schemas are injected into the prompt of every message. At ~40 tok/s of prompt processing they *are* the latency budget — which is why the built-in tools are off above. This one is 170 tokens (`curl llama-cpp:8080/tokenize` on the payload Open WebUI builds from the spec), which llama-server then caches for the rest of the conversation.
+Tool schemas are injected into the prompt of every message. At ~40 tok/s of prompt processing they *are* the latency budget — which is why the built-in tools are off above. This one is about 170 tokens, which llama-server then caches for the rest of the conversation.
 
-That shape keeps growth cheap, and the difference is measured: the enum has gone 6 → 10 topics for 113 → 170 tokens, about **+14 per topic**, where a single extra *operation* costs **+72** on its own. So a new capability becomes a topic, never a second operation. (`anomalies` came in at +19 — above average, because its clause has to say what a threshold *is* and not merely name a subject.)
+That shape keeps growth cheap: a topic costs about 14 tokens of schema, a second *operation* about 72 on its own. So a new capability becomes a topic, never a second operation.
 
 Replies are digested for the same reason, and it matters more than the schema does: a reply is re-processed on every later turn. `df -h` alone is ~400 tokens of column padding, so nothing here returns raw command output, and `errors` caps itself at three containers and three lines each.
 
 ### Topic selection is testable, so test it
 
-The real ceiling is not tokens, it is whether a 4B model still picks the right topic as the list grows. One prompt per topic, sent to `llama-server` with the schema attached, currently scores **10/10 at ten topics** — no degradation from six.
+The real ceiling is not tokens, it is whether a 4B model still picks the right topic as the list grows. Test it with one prompt per topic, sent to `llama-server` with the schema attached, and check which topic each call names.
 
 What breaks is phrasing, not the number of topics. Two reproducible failure modes:
 
 - **The singular** — *"is a container stopped?"* makes the model ask *which* container instead of calling anything. *"are all services running?"* calls `services` every time.
 - **Negation** — *"since when is X no longer online?"* makes it answer nothing at all. Stated positively, it calls `devices`.
 
-Re-run the check when adding a topic, and when writing a suggestion tile. One known miss stays: a vague *"is everything okay?"* routes to `overview` rather than `anomalies` — defensible, since `overview` does report the container count, though it would miss a full swap. Widening the `anomalies` description was tried and changed that case not at all, only the token count, so the short clause stayed and the tile names anomalies outright instead.
+Re-run the check when adding a topic, and when writing a suggestion tile. One known miss: a vague *"is everything okay?"* routes to `overview` rather than `anomalies` — defensible, since `overview` does report the container count — so the suggestion tile names anomalies outright.
 
 ### What it can reach
 
@@ -788,10 +728,8 @@ Re-run the check when adding a topic, and when writing a suggestion tile. One kn
 - The Docker socket is mounted `:ro`, the same way `homepage` mounts it — but be clear about what that buys: `:ro` protects the socket *inode*, not the Docker API, and anything holding an open socket can still `POST /containers/create` and get host root. What actually constrains this server is its own code: it only ever issues `GET`, to two paths, and `services` is the only caller. There is no endpoint that accepts a command, a path or a pattern — the model picks a topic from a closed list and each topic maps to fixed code, so a prompt injection has nothing to steer. The container runs `read_only` with `no-new-privileges`.
 - `services`, `restarts` and `errors` filter the container list on `com.docker.compose.project=$COMPOSE_PROJECT` (from `COMPOSE_PROJECT_NAME`, default `pi-web`), so a stray `docker run` left in `Exited` is not reported as something needing attention.
 - `errors` reads container logs, which is where "the model picks a topic, not a target" earns its keep: it only ever reads the tail of containers it has *already* found stopped or unhealthy. The model cannot name what gets read.
-- `backups` reads Backrest's operation log, `$DATA_LOCATION/backrest/data/oplog.sqlite`, opened `mode=ro`. Its *directory* is bind-mounted at `/run/backrest` rather than reached through `/hostfs`, for two reasons: `DATA_LOCATION` is relative to the project directory by default, and the oplog does not exist until Backrest's first run, so mounting the file would have Docker create a directory in its place. The same reading is served as JSON at `/health/backups` — `ok`, `stale`, `failed`, `unknown`, no status a substring of another — which the Uptime Kuma `backup freshness` monitor matches on ([Monitoring](MONITORING.md#what-is-actually-checked)). That endpoint is kept out of the OpenAPI schema, so it costs no prompt tokens.
-- `devices` reads headscale's node API — the tailnet is self-hosted, so there is no Tailscale SaaS call — reusing the API key `homepage`'s headscale widget already holds, mounted read-only at `/run/secrets/headscale_api_key`. Those keys expire, so this topic and the Homepage widget break together. It is the only topic needing the `frontend` network, and it still takes no parameter naming a device: ten devices fit in eleven digested lines, so *"when was the iPad last online?"* is answered by the model reading its own tool result. Past `DEVICE_LINES` devices the offline ones are trimmed oldest-first, and the reply says how many it dropped.
-
-> Two gotchas in `backups`: the status codes come from `proto/v1/operations.proto`, where `WARNING` is declared before `ERROR` but numbered *after* the cancellations (reading declaration order off the binary gets it backwards — `ERROR` is 4); and a WAL database opened read-only can refuse the read if the WAL needs replaying, which surfaces as `backup log unreadable` rather than an error.
+- `backups` reads Backrest's operation log, `$DATA_LOCATION/backrest/data/oplog.sqlite`, opened `mode=ro` from its directory, bind-mounted at `/run/backrest` (the file itself does not exist until Backrest's first run). A WAL database opened read-only can refuse the read when the WAL needs replaying, which surfaces as `backup log unreadable` rather than an error. The same reading is served as JSON at `/health/backups` — `ok`, `stale`, `failed`, `unknown`, no status a substring of another — which the Uptime Kuma `backup freshness` monitor matches on ([Monitoring](MONITORING.md#what-is-actually-checked)). That endpoint is kept out of the OpenAPI schema, so it costs no prompt tokens.
+- `devices` reads headscale's node API — the tailnet is self-hosted, so there is no Tailscale SaaS call — reusing the API key `homepage`'s headscale widget already holds, mounted read-only at `/run/secrets/headscale_api_key`. Those keys expire, so this topic and the Homepage widget break together. It is the only topic needing the `frontend` network, and it still takes no parameter naming a device: the whole list fits in a digest, so *"when was the tablet last online?"* is answered by the model reading its own tool result. Past `DEVICE_LINES` devices the offline ones are trimmed oldest-first, and the reply says how many it dropped.
 
 There is deliberately **no `network` topic**: routes and link speeds are static configuration, traffic *since boot* is a number nothing can be acted on, and the rate is already graphed by Beszel and the Homepage widget.
 
@@ -805,7 +743,7 @@ Either way, `docker compose build system-tools` afterwards.
 
 ## The new-chat suggestions
 
-Open WebUI's own six suggestions — vocabulary drills, the Roman Empire, options trading — advertise a model this box does not run and never touch the tool, so nobody discovers the assistant can be asked about the machine. `scripts/open-webui-bootstrap.sh` replaces them with nine that each map to a topic, written in the stack's `DEFAULT_LANGUAGE`: free disk space, whether anything is abnormal, general status, CPU temperature and load, uptime, who is online on the tailnet, last night's backup, recent restarts, and the errors of whatever is failing.
+Open WebUI's own suggestions are general-knowledge prompts that never touch the tool, so nobody discovers the assistant can be asked about the machine. `scripts/open-webui-bootstrap.sh` replaces them with nine that each map to a topic, written in the stack's `DEFAULT_LANGUAGE`: free disk space, whether anything is abnormal, general status, CPU temperature and load, uptime, who is online on the tailnet, last night's backup, recent restarts, and the errors of whatever is failing.
 
 They go on the model (`suggestion_prompts`) rather than the global `ui.prompt_suggestions`, because the frontend reads `model.info.meta.suggestion_prompts` first — a suggestion that assumes the status tool exists belongs to the model the tool is attached to.
 
@@ -833,7 +771,7 @@ Roughly **five seconds of speech per second of CPU, ~215 MB resident.** Voices a
 
 | Voice | |
 |-------|---|
-| `fr_FR-siwis-medium` | French, female — the default |
+| `fr_FR-siwis-medium` | French, female — the default for French |
 | `fr_FR-tom-medium` | French, male |
 | `fr_FR-upmc-medium` | French, female, different timbre |
 | `en_US-lessac-medium` | English, so English text is not read with a French phonemiser |
@@ -850,7 +788,7 @@ It needs nothing done by hand. A fresh install is configured by the `AUDIO_STT_*
 
 ### Why not Open WebUI's built-in whisper
 
-It runs *inside* the open-webui container, which is capped at 1 GB and already sits near 730 MB, so the only model that fits is the default `base` — and `base` is the reason dictated French comes back wrong. Measured on 113 seconds of read French ([FLEURS](https://huggingface.co/datasets/google/fleurs) `fr_fr`) across this Pi's three AI cores:
+It runs *inside* the open-webui container, where torch and the embedding model already hold about 640 MB of the `1536m` limit from boot, so the only model that fits is the default `base` — and `base` is the reason dictated French comes back wrong. On 113 seconds of read French ([FLEURS](https://huggingface.co/datasets/google/fleurs) `fr_fr`), on this Pi's three AI cores:
 
 | Engine | WER | Speed | Resident |
 |--------|-----|-------|----------|
@@ -860,9 +798,9 @@ It runs *inside* the open-webui container, which is capped at 1 GB and already s
 | **Parakeet TDT v3, int8 (in use)** | **8.7%** | **0.17× realtime** | **~1.2 GB** |
 | Parakeet TDT v3, fp32 | 4.5% | 0.30× realtime | ~2.3 GB |
 
-Whisper decodes autoregressively — a token at a time, so accuracy is bought with wall-clock. Parakeet is a TDT model whose decoder is a small joint network stepped once per frame, which is why it reaches whisper-`medium` accuracy at a twentieth of the cost. In practice a dictated sentence comes back in well under a second, punctuated and capitalised.
+Parakeet comes close to whisper-`medium` accuracy at a twentieth of the cost: a dictated sentence comes back in well under a second, punctuated and capitalised.
 
-**It has no language setting at all**, and that is the other half of the fix. Parakeet was trained on 25 European languages and picks one acoustically, so dictating in English tomorrow needs no switch flipped — where whisper *auto-detects*, and its failure mode on a short French clip is to decide the audio is English and transliterate it. Open WebUI still sends a `language` field; the facade accepts and ignores it.
+**It has no language setting at all.** Parakeet was trained on 25 European languages and picks one acoustically, so switching the language you dictate in needs no setting — where whisper *auto-detects*, and its failure mode on a short French clip is to decide the audio is English and transliterate it. Open WebUI still sends a `language` field; the facade accepts and ignores it.
 
 ### More accuracy, at twice the memory
 
@@ -876,16 +814,6 @@ Then set `PARAKEET_QUANTIZATION=` (empty) on the service in `compose/compose-ai.
 
 ### Long recordings are chunked
 
-Long uploads are transcribed in 20-second windows. That is not only about memory — a single 120-second pass took the container past 2 GB and got it killed — but about a cliff in the ONNX export, which stops transcribing part of a long call. Against 57 seconds of continuous French with a 163-word reference:
-
-| Window | Words returned | WER |
-|--------|----------------|-----|
-| 10 s | 157 | 20.2% |
-| **20 s** | **162** | **15.3%** |
-| 30 s | 160 | 16.6% |
-| 60 s | 75 | 73.0% |
-
-At 60 seconds half the audio simply goes missing, so the window has to stay well under it. Boundaries are then nudged onto the quietest nearby frame rather than falling wherever 20 seconds lands, because a window that opens mid-word is the one that comes back in the wrong language — on a deliberately badly-cut sample that alone took the transcript from 33.7% to 19.5% WER. Dictation reaches none of this: it is one window. Tune with `PARAKEET_CHUNK_SECONDS` if you feed it long recordings.
+Long uploads are transcribed in 20-second windows. That is not only about memory — a single 120-second pass takes the container past 2 GB — but about a cliff in the ONNX export, which stops transcribing part of a long call: on continuous French, 20 s windows scored 15.3% WER, 10 s 20.2%, 30 s 16.6%, and at 60 s half the words went missing (73%). Boundaries are nudged onto the quietest nearby frame rather than falling wherever 20 seconds lands, because a window that opens mid-word is the one that comes back in the wrong language. Dictation reaches none of this: it is one window. Tune with `PARAKEET_CHUNK_SECONDS` if you feed it long recordings, keeping it well under 60.
 
 To go back to Open WebUI's built-in whisper, set the STT engine to Whisper (Local) in **Admin Settings → Audio** — nothing re-imposes Parakeet.
-

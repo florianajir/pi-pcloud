@@ -39,10 +39,6 @@ systemctl status pi-pcloud-wan-allowlist.timer
 sudo ./scripts/wan-allowlist-sync.sh   # runs the same check now; silent means nothing to change
 ```
 
-**The browser downloads a 9-byte `Forbidden` file instead of showing the 403.** Same refusal, and the
-`autodetect` middleware is not reaching it. Check it is still **last** on the `websecure` entrypoint
-chain ([Security](SECURITY.md#the-middleware-chain)) — anywhere else it stops wrapping `lan`.
-
 Traefik's access log records the address it actually saw, which is the one the allowlist judged — read it rather than guessing:
 
 ```bash
@@ -56,6 +52,12 @@ curl -k -o /dev/null -w '%{http_code}\n' -H "Host: vault.<HOST_NAME>" https://12
 curl -k -o /dev/null -w '%{http_code}\n' https://vault.<HOST_NAME>/                        # 403 = allowlist
 ```
 
+A split verdict means the client resolved the public address instead of the Pi-hole one and hairpinned back with the WAN source. This is stack-wide, not per-service: every router carries `lan`, so check a second hostname before suspecting one container. Browser DNS-over-HTTPS ("Secure DNS") is a common trigger, since it silently bypasses Pi-hole even on the LAN — see [DNS](#dns).
+
+**The browser downloads a 9-byte `Forbidden` file instead of showing the 403.** Same refusal, and the
+`autodetect` middleware is not reaching it. Check it is still **last** on the `websecure` entrypoint
+chain ([Security](SECURITY.md#the-middleware-chain)) — anywhere else it stops wrapping `lan`.
+
 **IPv4 works and IPv6 gives 403.** The `"ClientHost"` is a global IPv6 address the allowlist does not cover. `HOST_LAN_SUBNET6` admits your LAN's prefix and the same timer maintains it; empty is the normal cause. Compare the two families:
 
 ```bash
@@ -67,8 +69,6 @@ curl -6 -sk -o /dev/null -w 'v6=%{http_code}\n' --resolve "homepage.<HOST_NAME>:
 ```
 
 The reverse split — IPv6 timing out from **outside** while IPv4 works — is the router's IPv6 firewall, not the stack: publishing AAAA does not open inbound `443`.
-
-A split verdict means the client resolved the public address instead of the Pi-hole one and hairpinned back with the WAN source. This is stack-wide, not per-service: every router carries `lan`, so check a second hostname before suspecting one container. Browser DNS-over-HTTPS ("Secure DNS") is a common trigger, since it silently bypasses Pi-hole even on the LAN — see [DNS](#dns).
 
 **A service returns a generic 404 from Traefik.** Its router is gone. For qBittorrent, Prowlarr, Kapowarr and Stremio the usual cause is **gluetun being unhealthy** — they share its network namespace, so when it drops, all of their Traefik routes vanish at once rather than erroring individually. `docker compose ps gluetun` and `docker compose logs gluetun`.
 
@@ -107,7 +107,7 @@ The Uptime Kuma `dns resolution` monitor covers this whole chain continuously �
 
 **A link or a redirect leads nowhere.** Sponsored search results, newsletter links and affiliate links route through ad infrastructure, so the block lists catch them and the click dies on a blank page instead of just losing an ad.
 
-To find the real culprit, check the Pi-hole query log for the click — **the blocked domain is often not the one you typed**. A status of *blocked (CNAME)* means an alias is at fault: `g.live.com` was blocked because it points at `g.msn.com`.
+To find the real culprit, check the Pi-hole query log for the click — **the blocked domain is often not the one you typed**. A status of *blocked (CNAME)* means an alias is at fault: `g.live.com` is blocked because it points at `g.msn.com`.
 
 Add the domain to the `ALLOW_LISTS` in `scripts/pihole-bootstrap.sh`, not only in the web UI, or the next rebuild loses it.
 
@@ -121,35 +121,23 @@ Add the domain to the `ALLOW_LISTS` in `scripts/pihole-bootstrap.sh`, not only i
 
 **Connections relay instead of going direct.** Forward `41641/udp` (WireGuard) and `3478/udp` (STUN) on your router. Without them traffic still works, but rides the embedded DERP relay.
 
-**The embedded DERP region is never used.** Fixed — but only after `headscale-pre-start.sh` has re-rendered `config/headscale/config.yaml`, which it does on every `make update`. The template used to set `derp.server.ipv4: headscale`, a container name where Headscale wants a public IP address, and it copies that value straight into the DERP map every client receives. So every node in the tailnet carried a region whose only node dialled a host that resolves nowhere:
-
-```
-tailscale debug derp 999
-  Error connecting to node "headscale.<HOST_NAME>" @ "headscale:443"
-  over IPv4: dial tcp4: lookup headscale: no such host
-```
-
-Both `ipv4` and `ipv6` are now omitted, which leaves the node with its `HostName` alone for clients to resolve, and that name survives a WAN address change where a literal would not. Confirm with `docker exec pi-tailscale tailscale netcheck`: the embedded region should appear in the latency list, and on the Pi itself it is the nearest one by three orders of magnitude. Because the region is now every node's nearest, relaying to the Pi depends on Traefik and Headscale answering on `443` — when both are down, clients fall back to the public regions in `derp.urls`, one reconnect later.
+**Checking the embedded DERP relay.** The embedded region (999) is advertised by its `HostName` alone: `config/headscale/config.yaml.template` sets no `derp.server.ipv4` or `ipv6`, because Headscale copies them into the DERP map every client receives and they must be public addresses, while a hostname survives a WAN address change. Confirm the region is usable with `docker exec pi-tailscale tailscale netcheck`: it should appear in the latency list, and on the Pi itself it is the nearest one. Relaying through the Pi depends on Traefik and Headscale answering on `443` — when both are down, clients fall back to the public regions in `derp.urls`, one reconnect later.
 
 **`netcheck.runProbe: named node "999" has no v6 address`, every few minutes.** Expected, and unrelated to the region working. `pi-tailscale` carries `extra_hosts: ["headscale.<HOST_NAME>:<HOST_LAN_IP>"]`, so inside that container the name resolves from `/etc/hosts` to one IPv4 address and the v6 probe finds nothing to dial. Other clients only see an `AAAA` for it when `IPV6_PUBLIC_RECORDS` is set — see [Configuration → Network](CONFIGURATION.md#network). Relaying is unaffected: the region is reached over IPv4.
 
-**`netcheck` reports `<HOST_LAN_IP>` as the Pi's own IPv4.** Also expected, and new since the region started working: the embedded relay's STUN server sits on the Pi's own LAN, so it reflects the LAN address back. The public endpoint is not lost — `magicsock: endpoints changed` lists the LAN address *and* the WAN one, so this is one more candidate path, not one fewer. `scripts/wan-allowlist-sync.sh` is unaffected because it runs the **host** `tailscale` CLI, which has no local `tailscaled` socket and so netchecks against the public DERP map; do not "helpfully" change it to `docker exec pi-tailscale`.
+**`netcheck` reports `<HOST_LAN_IP>` as the Pi's own IPv4.** Also expected: the embedded relay's STUN server sits on the Pi's own LAN, so it reflects the LAN address back. The public endpoint is not lost — `magicsock: endpoints changed` lists the LAN address *and* the WAN one, so this is one more candidate path, not one fewer. `scripts/wan-allowlist-sync.sh` is unaffected because it runs the **host** `tailscale` CLI, which netchecks against the public DERP map.
 
-**`tailscale debug derp 999` says the relay is fine. It cannot tell you that.**
-The probe generates a throwaway key (`fakePrivKey := key.NewNode()` in
-`ipn/localapi/debugderp.go`) and only calls `Connect()`, which returns as soon as
-the HTTP upgrade completes and the server key comes back — before the server
-drops a client that failed `verify_clients`. Surfacing that rejection is an open
-TODO in tailscale's own source, so the command reports "Successfully established
-a DERP connection" against a relay that is correctly refusing it. Useful for
-reachability and STUN, worthless for authorization.
+**`tailscale debug derp 999` says the relay is fine. It cannot tell you that.** The probe
+connects with a throwaway key and returns as soon as the server's key comes back — before
+the server drops a client that fails `verify_clients` — so it reports "Successfully
+established a DERP connection" against a relay that is correctly refusing it. Use it for
+reachability and STUN, not for authorization.
 
 To test authorization, use a real node key on a sustained connection: enrol a
 throwaway node, confirm `magicsock: derp-999 connected; connGen=1` in its log,
 `headscale nodes delete` it, then force a reconnect with `tailscale debug
 break-derp-conns`. A closed relay answers `derp.Recv: EOF` on every retry and the
-client raises the `no-derp-connection` health warning. One daemon, one region,
-one variable.
+client raises the `no-derp-connection` health warning.
 
 **A node shows offline while the device is connected.** "Last seen" lags by design — check `tailscale status` on the device itself before trusting the list.
 
@@ -179,27 +167,28 @@ resolve a title per stream request. None of it is in Backrest — every byte is 
 ## Books and audiobooks
 
 **Shelfmark finds nothing on Direct Download.** Check the mirror list first
-(**Settings → Mirrors**): the stack seeds one, `https://annas-archive.gl`, and mirror
-availability moves. `annas-archive.is` resolves and loads but does not work as a source.
+(**Settings → Mirrors**). The stack seeds one mirror — `AA_MIRROR_URL` at the top of
+`scripts/shelfmark-settings-bootstrap.sh` — and only into an empty list, so when mirror
+availability moves, replace it in the UI. A mirror domain that resolves and loads does
+not necessarily work as a source — check Shelfmark's README before adding one.
 A search that returns empty while the log shows it still running is usually the
 challenge solve, not the mirror — a cold one takes a couple of minutes.
 
 **A mirror keeps challenging, or direct downloads fail while search still works.**
-Those are the two halves that go through the VPN. Shelfmark's bypasser and its direct
-downloads both egress via gluetun's HTTP proxy (`plugins/network.json`,
-`http://gluetun.docker:8888`), while the Prowlarr API, the OIDC token exchange and the
-metadata providers stay direct — so a gluetun outage costs you direct downloads, not
-search or login. Check gluetun first (`docker compose ps gluetun`).
+Those are the two halves that go through the VPN: Shelfmark's bypasser and its direct
+downloads egress via gluetun's HTTP proxy, while search, login and metadata stay direct
+([Architecture → Shelfmark](ARCHITECTURE.md#shelfmark)). Check gluetun first
+(`docker compose ps gluetun`). FlareSolverr is not in this path: it belongs to Prowlarr
+and cannot solve the DDoS-Guard challenge the direct-download mirror puts up, which is
+why Shelfmark carries its own browser.
 
 To take direct downloads off the tunnel and accept that they leave on the residential IP
 (torrents are unaffected — they go through qBittorrent, which is inside gluetun):
-**changing `PROXY_MODE` under Settings → Network does not stick**, because the proxy is
-reconciled on every stack start by `scripts/shelfmark-settings-bootstrap.sh`, which owns
-that value. Blank `GLUETUN_HTTP_PROXY` at the top of that script, or drop gluetun from
+**changing `PROXY_MODE` under Settings → Network does not stick**, because
+`scripts/shelfmark-settings-bootstrap.sh` reconciles the proxy on every stack start.
+Blank `GLUETUN_HTTP_PROXY` at the top of that script, or drop gluetun from
 `COMPOSE_PROFILES` — the script then unwinds the setting itself and says so in the start
-log. FlareSolverr is not in this path at all: it belongs to Prowlarr, and cannot solve
-the DDoS-Guard challenge Anna's Archive puts up, which is why Shelfmark carries its own
-browser.
+log.
 
 **Books do not appear in Kavita.** Shelfmark files into `download/books/`, which Kavita
 scans as its **Books** library; its own in-progress grabs live in `download/shelfmark/`
@@ -211,11 +200,11 @@ those are Audiobookshelf's library, and are also browsable through Nextcloud.
 silent.
 
 *It is a loose file at the library root.* Kavita takes the series name from the
-containing folder and `GetFoldersTillRoot` stops below the scan root, so a file
-placed directly in `download/books/` has no folder to name a series after and is
-skipped without an error. Give each book its own subfolder. If the file belongs
-to a torrent, move it with qBittorrent's `renameFile` API rather than `mv`, so
-the torrent follows it instead of breaking.
+containing folder, below the scan root, so a file placed directly in
+`download/books/` has no folder to name a series after and is skipped without an
+error. Give each book its own subfolder. If the file belongs to a torrent, move it
+with qBittorrent's `renameFile` API rather than `mv`, so the torrent follows it
+instead of breaking.
 
 *The EPUB declares version 3.0 but ships no nav document.* The log says
 `Epub3NavException: NAV item not found in EPUB manifest`, followed by `Unable to
@@ -228,25 +217,20 @@ bytes invalidates the torrent — and keep `mimetype` as the first, uncompressed
 zip entry or the result is no longer a valid EPUB.
 
 **Audiobookshelf's page never finishes loading — the spinner turns forever.** Its
-assets are 404ing. The image leaves `ROUTER_BASE_PATH` unset, and *unset does not
-mean no subfolder*: both the server and the Nuxt client read it as
-`?? '/audiobookshelf'`, and the published image has that default **baked into every
-asset URL** at build time. Setting the variable to the empty string makes the server
-stop serving that prefix while the client keeps asking for it, so every
-`/audiobookshelf/_nuxt/*.js` returns 404 and the app never boots. Leave it unset.
-Confirm with `docker logs pi-audiobookshelf | head -2`, which prints the effective
-value, and compare what the page asks for against what answers:
+assets are 404ing because `ROUTER_BASE_PATH` was set to the empty string. Unset does
+not mean no subfolder: the published image bakes `/audiobookshelf` into every asset
+URL, and an empty value makes the server stop serving that prefix while the client
+keeps asking for it. Leave it unset, as `compose/compose-media.yaml` does. Confirm with
+`docker logs pi-audiobookshelf | head -2`, which prints the effective value, and
+compare what the page asks for against what answers:
 
 ```bash
-curl -sk https://audiobooks.<domain>/ | grep -oE 'src="[^"]*"'
-curl -sko /dev/null -w '%{http_code}\n' https://audiobooks.<domain>/audiobookshelf/_nuxt/<file>.js
+curl -sk https://audiobooks.<HOST_NAME>/ | grep -oE 'src="[^"]*"'
+curl -sko /dev/null -w '%{http_code}\n' https://audiobooks.<HOST_NAME>/audiobookshelf/_nuxt/<file>.js
 ```
 
-The app is *meant* to live under `/audiobookshelf`; the server rewriting prefix-less
-URLs onto it is a convenience on top, which is why the root URL, the healthcheck and
-the Homepage widget all work without the prefix. A hand-built
-`?callback=…/login` test therefore proves nothing about SSO — the real login page
-sends `/audiobookshelf/login`, which passes the check the bare path fails.
+The root URL, the healthcheck and the Homepage widget work without the prefix only
+because the server rewrites prefix-less URLs onto it.
 
 **Signing in to Audiobookshelf through SSO lands on a second, non-admin account.** The
 root account is created by `scripts/audiobookshelf-bootstrap.sh` and is matched to your
@@ -257,9 +241,9 @@ deliberately not used: Audiobookshelf reads them as a role and denies anyone who
 contain none of `admin`/`user`/`guest`, which in this stack is every regular user.
 
 **Audiobookshelf offers no password field, or `POST /login` answers 500.** Expected:
-local logins are disabled once the bootstrap holds an API key, and the `/login` route is
-wired to a passport strategy that no longer exists — hence a 500 rather than a 401.
-`/status` reports what is actually active, without authenticating:
+local logins are disabled once the bootstrap holds an API key, and the `/login` route
+then answers 500 rather than 401. `/status` reports what is actually active, without
+authenticating:
 
 ```bash
 docker run --rm --network frontend curlimages/curl:8.12.1 -sS http://pi-audiobookshelf/status | jq .authMethods
@@ -286,83 +270,71 @@ says so and changes nothing rather than guessing. Recover in this order:
    ```
 
    The next bootstrap run turns `local` back off, so fix the OIDC side first.
-3. **Both are gone.** `restart pi-audiobookshelf` — on start-up Audiobookshelf drops
-   `openid` from the active methods if any of the OIDC settings is *empty*, and then
-   falls back to `local`. That is the only automatic way back, and it is why clearing one
-   field is enough. Settings that are complete but wrong do not trip it, so the last
-   resort is editing `authActiveAuthMethods` in the JSON of the single `server-settings`
-   row in `absdatabase.sqlite`'s `settings` table, with the container stopped.
+3. **Both are gone.** `docker restart pi-audiobookshelf` — on start-up Audiobookshelf
+   drops `openid` from the active methods if any of the OIDC settings is *empty*, and
+   then falls back to `local`. That is the only automatic way back, and it is why
+   clearing one field is enough. Settings that are complete but wrong do not trip it, so
+   the last resort is editing `authActiveAuthMethods` in the JSON of the single
+   `server-settings` row in `absdatabase.sqlite`'s `settings` table, with the container
+   stopped.
 
-**Shelfmark downloads an audiobook and nothing appears.** `download/audiobooks/` is the
-one download folder with no writer inside a container to create it, so on stacks built
-before `scripts/audiobookshelf-pre-start.sh` existed the Docker daemon created it as
-`root:root` and Shelfmark (uid 1000) could not file anything there. That hook repairs
-the ownership, but only when it runs as root — `sudo sh scripts/audiobookshelf-pre-start.sh`
-if `make update` ran unprivileged and the start log warned about it.
+**Shelfmark downloads an audiobook and nothing appears.** `download/audiobooks/` is
+owned by `root:root`, so Shelfmark (uid 1000) cannot file anything there. It is the one
+download folder with no writer inside a container to create it; `scripts/audiobookshelf-pre-start.sh`
+hands a root-owned one back to uid 1000, but only when it runs as root — run
+`sudo sh scripts/audiobookshelf-pre-start.sh` if the start log warned that it could not.
 
 **One audiobook shows up as dozens of one-track books.** Audiobookshelf calls a book
 either a *subfolder* of the library or a *single loose file* at its root. It never
 groups root-level files with each other — not even ones sharing an `album` tag — so a
 multi-file release dropped flat into `download/audiobooks/` becomes one book per track.
-Shelfmark's `FILE_ORGANIZATION_AUDIOBOOK` is now `organize` in `compose/compose-media.yaml`, which
-applies `{Author}/{Title}/{Title}` and produces the folder Audiobookshelf expects; its
-default, `rename`, renames single-file grabs and leaves multi-file ones flat, which is
-what caused this. To repair an existing one, move the tracks into a subfolder on the
-host — `mv` within `download/` preserves the hardlinks, so the torrent keeps seeding —
-then rescan and clear the stale entries, which the scan marks missing rather than
-deleting:
+Shelfmark's own grabs avoid this: `FILE_ORGANIZATION_AUDIOBOOK=organize` in
+`compose/compose-media.yaml` applies `{Author}/{Title}/{Title}`, where Shelfmark's
+default, `rename`, leaves multi-file grabs flat. To repair one, move the tracks into a
+subfolder on the host — `mv` within `download/` preserves the hardlinks, so the torrent
+keeps seeding — then rescan and clear the stale entries, which the scan marks missing
+rather than deleting:
 
 ```sh
 KEY=$(cat "$DATA_LOCATION/audiobookshelf/config/pi-web-api-key")
-LIB=$(docker run --rm --network frontend curlimages/curl -s -H "Authorization: Bearer $KEY" \
+LIB=$(docker run --rm --network frontend curlimages/curl:8.12.1 -s -H "Authorization: Bearer $KEY" \
   http://pi-audiobookshelf/audiobookshelf/api/libraries | jq -r '.libraries[0].id')
-docker run --rm --network frontend curlimages/curl -s -X POST -H "Authorization: Bearer $KEY" \
+docker run --rm --network frontend curlimages/curl:8.12.1 -s -X POST -H "Authorization: Bearer $KEY" \
   "http://pi-audiobookshelf/audiobookshelf/api/libraries/$LIB/scan?force=1"
-docker run --rm --network frontend curlimages/curl -s -X DELETE -H "Authorization: Bearer $KEY" \
+docker run --rm --network frontend curlimages/curl:8.12.1 -s -X DELETE -H "Authorization: Bearer $KEY" \
   "http://pi-audiobookshelf/audiobookshelf/api/libraries/$LIB/issues"
 ```
 
 **A torrent added by hand never reaches any reader.** An uncategorised torrent saves to
 the `download/` root, which nothing indexes. Pick the category for the destination
-instead — `books`, `manga`, `comics` or `audiobooks`; `scripts/qbittorrent-bootstrap.sh`
-owns the list and its save paths. The `shelfmark` and `shelfmark-audiobooks` categories
-are *not* destinations: they are Shelfmark's staging area, and Shelfmark only
-post-processes torrents belonging to one of its own tasks, so a manual add left there
-downloads and then sits forever.
+instead — `books`, `manga`, `comics`, `magazines` or `audiobooks`;
+`scripts/qbittorrent-bootstrap.sh` owns the list and its save paths. The `shelfmark` and
+`shelfmark-audiobooks` categories are *not* destinations: they are Shelfmark's staging
+area, and Shelfmark only post-processes torrents belonging to one of its own tasks, so a
+manual add left there downloads and then sits forever.
 
-**Shelfmark finds no audiobook for a title a tracker definitely carries.** Shelfmark
-queries Prowlarr with one category per content type: `[7000]` for anything text, `[3030]`
-for an audiobook (`release_sources/prowlarr/source.py`). 7000 is a *parent*, so it
-expands over the whole Books range and text searches are broad. 3030 is a leaf, and that
-narrowness fails in two independent ways.
+**Shelfmark finds no audiobook for a title an indexer definitely carries.** Shelfmark
+queries Prowlarr with `7000` for anything text and `3030` for an audiobook. 7000 is a
+*parent* that expands over the whole Books range; 3030 is a leaf, and that narrowness
+fails in two independent ways.
 
-*The indexer is never queried.* `_indexer_supports_search_categories` skips any indexer
-whose capabilities do not declare the requested id — on this stack 5 of the 12 enabled
-ones, including **YggReborn** and **Torrent9**. `PROWLARR_AUTO_EXPAND=true` in
-`compose/compose-media.yaml` covers this: when a query variant returns nothing and no indexer errored,
-Shelfmark reruns *that variant* with no category filter, and every indexer is queried.
+*The indexer is never queried.* Shelfmark skips any indexer whose capabilities do not
+declare 3030, and several common ones do not. `PROWLARR_AUTO_EXPAND=true` in
+`compose/compose-media.yaml` covers this: when a query variant returns nothing and no
+indexer errored, Shelfmark reruns *that variant* with no category filter.
 
-*The indexer answers, but the release is tagged 7000.* The trap, because auto-expand
-cannot help: it only retries a variant that returned **zero** results, and a search that
-found ten other editions of the book returned plenty. Category comes from the tracker
-section the uploader chose, so an indexer that files most audiobooks under 3030 will
-still have some under 7000. Verified on TR4KER —
-`Homère.L'Odyssée.2019.FR.AAC.64kbps.M4B-RACHE` is `[7000, 107000]`, and a Prowlarr
-search for `Homère L'Odyssée` returns it under `categories=7000` and not at all under
-`categories=3030`, while the same indexer serves 3030 for other audiobooks.
+*The indexer answers, but the release is tagged 7000.* Category comes from the tracker
+section the uploader chose, so even an indexer that files most audiobooks under 3030 has
+some under 7000. Auto-expand cannot help, because it only retries a variant that
+returned **zero** results. Such a release *is* visible under an **ebook** search, but
+grabbing it there fails at post-processing with *"Found 1 book(s) but format not
+supported (.m4b). Enable in Settings > Formats."* Do **not** take that advice: the
+content type comes from the release's categories, so with `m4b` added to
+`SUPPORTED_FORMATS` the file is filed into `download/books/`, Kavita's Book library,
+which cannot read it. Confirm the release exists with an ebook search, then grab it the
+manual way below, with the `audiobooks` category.
 
-Such a release *is* visible in Shelfmark — under an **ebook** search, since 7000 covers
-it. But grabbing it there fails at post-processing, and the error is misleading:
-`content_type` is derived from the release's own categories
-(`_detect_content_type_from_categories`), so 7000 means "book", the `.m4b` is checked
-against `SUPPORTED_FORMATS` and rejected with *"Found 1 book(s) but format not supported
-(.m4b). Enable in Settings > Formats."* Do **not** take that advice — adding `m4b` to
-`SUPPORTED_FORMATS` makes it worse, because `is_audiobook` stays false and the file is
-then filed into `download/books/`, Kavita's Book library, which cannot read it.
-
-So for a mis-tagged release there is no Shelfmark route. Use it to confirm the release
-exists (search as an ebook), then grab it the manual way below, with the `audiobooks`
-category. Two more knobs worth knowing:
+Two more knobs worth knowing:
 
 - **Manual query** in the search UI — Shelfmark otherwise searches the *metadata
   record's* title and author, so a release named nothing like the Hardcover entry never
@@ -371,26 +343,18 @@ category. Two more knobs worth knowing:
   collapses several indexer entries for one release into a single row. Turn it off to
   see every entry, which is what surfaces filter-specific ones like freeleech.
 
-**Grabbing from Prowlarr's own UI, for any media type.** It works, but the category is
-resolved from the release's newznab id, not from what you know the file to be — Prowlarr
-sends `GetCategoryForRelease(release) ?? Settings.Category`, and the default is
-`prowlarr`, a folder no reader indexes. On the indexers here 3030, 7000, the Books
-subcategories and YggReborn's own 1071xx ids all land somewhere; a bare `3000`, `3010` or
-`8000` does not. Two caveats: 7000 is mapped to `books` regardless of what the release
-holds, so a Nyaa.si manga or a mis-tagged audiobook arrives in `download/books/`; and an
-ambiguous comic goes to `manga`, because outside YggReborn no indexer distinguishes the
-two. See ARCHITECTURE.md. Two ways through:
+**A grab from Prowlarr's own UI lands in the wrong folder, or in none.** The qBittorrent
+category comes from the release's category ids, not from what you know the file to be
+([Architecture → qBittorrent categories](ARCHITECTURE.md#qbittorrent-categories)): an
+unmapped id such as a bare `3000`, `3010` or `8000` falls back to `prowlarr`, a folder no
+reader indexes, and 7000 goes to `books` whatever the release holds, so a manga or a
+mis-tagged audiobook tagged 7000 arrives in `download/books/`. Two ways through:
 
 1. **Copy the magnet or .torrent out of Prowlarr and add it in qBittorrent**, choosing
    the category yourself. Deterministic for every media type; this is the reliable one.
-2. **Grab in Prowlarr, then fix the category in qBittorrent.** Since
-   `category_changed_tmm_enabled` is on (set by `scripts/qbittorrent-bootstrap.sh`), the
-   files *move* to the new category's save path — no Set Location needed. Verified: a
-   torrent switched from `prowlarr` to `audiobooks` relocated on its own.
-
-   The catch is that relocation needs the torrent in **Automatic Torrent Management**
-   mode. Prowlarr's grabs are (`auto_tmm=true`); Shelfmark's are not, because it passes
-   an explicit save path on add, which forces Manual mode. Flip one with
+2. **Grab in Prowlarr, then change the category in qBittorrent.** The files *move* to
+   the new category's save path, provided the torrent is in Automatic Torrent Management
+   mode — Prowlarr's grabs are, Shelfmark's are not. Flip one with
    `torrents/setAutoManagement`.
 
 Either way the file arrives as the **raw release tree**, with none of the renaming
@@ -402,20 +366,19 @@ Shelfmark's own imports get, so the destination's own parsing rules apply:
 | `books` | **A single-file torrent breaks.** A lone `.epub` at the root of `download/books/` has no folder to name a series after and Kavita skips it silently. Put it in a subfolder with qBittorrent's `renameFile` so the torrent follows. |
 | `comics`, `manga` | The folder becomes the series name — see the next entry. |
 
-**A hand-grabbed comic lands in Kavita under a scene-release name.** Expected, and
+**A hand-grabbed comic lands in Kavita under a release-group name.** Expected, and
 fixable before the scan. The Comics library is the ComicVine type, whose parser takes
-the series from the *containing folder* and never from the filename — and
-`GetFoldersTillRoot` stops below the scan root, so the deepest folder above the issues
-wins. A release tree like `Batman.2016.COMPLETE-SCENE/` becomes a series of that name,
-and any extra `Volume 01/` level makes *that* the series instead. Rename the torrent's
-folder to `Series (Year)` and the parser reads it correctly; do it through qBittorrent
-rather than with `mv`, so the torrent follows the rename and keeps seeding:
+the series from the deepest *containing folder* below the scan root, never from the
+filename. A release tree like `Some.Series.2016.COMPLETE-GROUP/` becomes a series of
+that name, and any extra `Volume 01/` level makes *that* the series instead. Rename the
+torrent's folder to `Series (Year)` and the parser reads it correctly; do it through
+qBittorrent rather than with `mv`, so the torrent follows the rename and keeps seeding:
 
 ```sh
 docker exec pi-qbittorrent curl -sS -H "Referer: http://127.0.0.1:8080" \
   --data-urlencode "hash=<hash>" \
-  --data-urlencode "oldPath=Batman.2016.COMPLETE-SCENE" \
-  --data-urlencode "newPath=Batman (2016)" \
+  --data-urlencode "oldPath=Some.Series.2016.COMPLETE-GROUP" \
+  --data-urlencode "newPath=Some Series (2016)" \
   http://127.0.0.1:8080/api/v2/torrents/renameFolder
 ```
 
@@ -443,12 +406,12 @@ docker compose logs nextcloud | grep -i mail
 
 ## Monitoring
 
-**Beszel agent not reporting.** `docker compose logs beszel-agent`. The agent opens a WebSocket *to* the hub at `beszel.<HOST_NAME>`, through Traefik, and reads container stats from the Docker socket. It is `network_mode: host`, and an `extra_hosts` entry pins `beszel.<HOST_NAME>` to `HOST_LAN_IP`, so it arrives from the host's own LAN address and is admitted by `lan@docker` — an allowlist that stopped covering the host, or a wrong `HOST_LAN_IP`, would show up here as an agent that never connects. `WebSocket connected host=…` in its log is the positive signal. If the hub shows the system offline, restarting `beszel-agent` usually reconnects it.
+**Beszel agent not reporting.** `docker compose logs beszel-agent`; `WebSocket connected host=…` in its log is the positive signal. The agent reaches the hub through Traefik from `HOST_LAN_IP` ([Monitoring → Beszel](MONITORING.md#beszel--the-hardware)), so a wrong `HOST_LAN_IP`, or a `lan` allowlist that no longer covers the host, shows up here as an agent that never connects. If the hub shows the system offline, restarting `beszel-agent` usually reconnects it.
 
-**ntfy webhook silent.** Check that `config/ntfy/ntfy.env` holds the expected topic, then test directly:
+**ntfy webhook silent.** Topics are the constants at the top of `scripts/ntfy-pre-start.sh`, written into `config/ntfy/ntfy.env`. Publish a test by hand — as `ADMIN_USER`, since anonymous access is `deny-all` (curl prompts for the password):
 
 ```bash
-curl -d "test alert" https://ntfy.<HOST_NAME>/<topic>
+curl -u "<ADMIN_USER>" -d "test alert" https://ntfy.<HOST_NAME>/monitoring
 ```
 
 **Authelia login alerts stopped.**
@@ -458,7 +421,7 @@ sudo systemctl status pi-pcloud-authelia-ntfy.service
 sudo journalctl -u pi-pcloud-authelia-ntfy.service -f
 ```
 
-A `WARNING: NTFY_AUTHELIA_PASSWORD missing` line means `ntfy-pre-start.sh` has not run since the feature was added:
+A `WARNING: NTFY_AUTHELIA_PASSWORD missing` line means `config/ntfy/ntfy.env` holds no credential for the watcher. Regenerate it and recreate ntfy:
 
 ```bash
 sh scripts/ntfy-pre-start.sh && docker compose up -d ntfy
@@ -473,11 +436,11 @@ docker exec pi-uptime-kuma grep -c SQLITE_CORRUPT /app/data/error.log
 docker exec pi-uptime-kuma sqlite3 /app/data/kuma.db "PRAGMA integrity_check(5);"
 ```
 
-**Never `VACUUM` a database that fails `integrity_check`** — it rewrites the whole file and can fail halfway. Recover from a copy instead, with a recent sqlite: the 3.40 shipped in the Kuma image aborts `.recover` with `SQL logic error`, while `alpine:latest` carries a working one.
+**Never `VACUUM` a database that fails `integrity_check`** — it rewrites the whole file and can fail halfway. Recover from a copy instead, with a recent `sqlite3` rather than the one in the Kuma image, whose `.recover` can abort with `SQL logic error`:
 
 ```bash
 docker stop pi-uptime-kuma          # clean shutdown, then copy kuma.db aside
-docker run --rm -v /path/to/backup:/bk alpine:latest sh -c \
+docker run --rm -v /path/to/backup:/bk alpine:3.24 sh -c \
   'apk add --no-cache sqlite && cd /bk && \
    sqlite3 kuma.db ".recover" | sqlite3 kuma-recovered.db && \
    sqlite3 kuma-recovered.db "PRAGMA integrity_check;"'
@@ -516,12 +479,11 @@ key itself. Two causes:
 - `401` from `/v1`. The `apiKey` policy is `strict` and the key Open WebUI holds no longer matches
   the one in `config/agentgateway/agentgateway.env`. That file's values are frozen at container
   creation, so pick a regenerated key up with `docker compose up -d agentgateway open-webui`, not
-  `restart` — and note `OPENAI_API_KEY` is PersistentConfig in Open WebUI, so an instance whose
+  `restart` — and `OPENAI_API_KEY` is PersistentConfig in Open WebUI, so an instance whose
   database already exists ignores the environment entirely and needs
-  `sh scripts/open-webui-bootstrap.sh` too. That is what corrects the stored copy: it compares the
-  key saved beside the gateway's URL with the one the gateway now accepts and overwrites it when
-  they differ.
+  `sh scripts/open-webui-bootstrap.sh` too, which overwrites the stored key when it differs from
+  the one the gateway accepts.
 
-**Replies take minutes.** Something re-enabled the built-in tools or thinking. Both cost thousands of prompt tokens per message at ~40 tok/s — see [Why the defaults look aggressive](AI.md#why-the-defaults-look-aggressive).
+**Replies take minutes.** Something re-enabled the built-in tools or thinking. Both add thousands of prompt tokens per message — see [Why the defaults look aggressive](AI.md#why-the-defaults-look-aggressive).
 
 **The assistant answers about the server without calling the tool.** Check the phrasing: singular and negated questions reliably fail to trigger a tool call where the plural, positive form works. See [Topic selection is testable](AI.md#topic-selection-is-testable-so-test-it).

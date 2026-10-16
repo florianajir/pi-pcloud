@@ -59,11 +59,12 @@ ROOT_FOLDERS = ["/comics", "/manga"]
 
 # download_folder MUST be /downloads (only path mounted identically in both Kapowarr and
 # qBittorrent) so torrents qBittorrent saves are found and imported into /comics.
-# flaresolverr_base_url lets Kapowarr solve Cloudflare on GetComics (same solver Prowlarr uses).
+# flaresolverr_base_url lets Kapowarr solve Cloudflare on its download source (same solver
+# Prowlarr uses).
 DESIRED_SETTINGS = {
     "download_folder": "/downloads",
     "flaresolverr_base_url": "http://flaresolverr:8191",
-    # GetComics often ships a .zip *wrapping* the real .cbz/.cbr. Without these two
+    # Kapowarr's source often ships a .zip *wrapping* the real .cbz/.cbr. Without these two
     # Kapowarr imports the wrapper as the issue and Kavita opens an archive of
     # archives: 0 pages, no cover. `convert` gates post-processing, and
     # `extract_issue_ranges` is what unpacks it.

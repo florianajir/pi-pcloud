@@ -79,7 +79,7 @@ help:
 	@echo "  check-env        Validate required .env variables"
 	@echo "  test             Run every suite: installer, check-env, CLI, services, memory readings, start sequence, compose invariants, routing and SARIF merge (no host changes)"
 	@echo "  smoke            Probe the running stack through Traefik: every router loaded, LAN admitted, outside refused"
-	@echo "  lint             Run every static check CI runs (shell, YAML, Python, Dockerfiles, workflows, secrets)"
+	@echo "  lint             Run every static check CI runs (shell, YAML, Python, Dockerfiles, workflows, secrets, docs)"
 	@echo "  pg-upgrade to=<image> Migrate Postgres to a new major (dump/restore, old data kept)"
 	@echo "  rotate-password       Rotate PASSWORD after a leak (LLDAP admin + Authelia only, no Postgres)"
 	@echo "  rotate-password-full  Same, plus every Postgres role and every other service using PASSWORD"

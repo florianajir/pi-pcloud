@@ -7,8 +7,8 @@ Six things watch the stack, each covering what the others cannot see:
 | **Beszel** | The hardware: CPU, RAM, swap, disk, temperature, network | ntfy + email, after 5 minutes over a threshold |
 | **Uptime Kuma** | The services, *and the request path through Traefik* | ntfy, priority by blast radius |
 | **Prometheus + Grafana** | What the services were *doing*: request rates, latencies, token use, queue depths, auth outcomes — 90 days of them | nothing. It is asked, it does not tell |
-| **Dockhand** | Container events: OOM kills, healthcheck failures | ntfy |
-| **Backrest** | Backups that fail | ntfy |
+| **Dockhand** | Container events: OOM kills | ntfy |
+| **Backrest** | Backups that fail — see [Backups & restore](BACKUP.md) | ntfy |
 | **Authelia log watcher** | Failed logins, unknown users, regulation bans, rejected OIDC grants | ntfy |
 
 Everything that alerts converges on ntfy, so a phone is still the only dashboard you need to *watch*. Grafana is the one you go and look at once a push has told you something is wrong.
@@ -34,11 +34,11 @@ To change the split, edit the topic constants at the top of `scripts/ntfy-pre-st
 
 ## Beszel — the hardware
 
-`https://beszel.<HOST_NAME>`, Authelia SSO only (password login is disabled), LAN-restricted by the Traefik `lan` middleware. The agent runs on the host network and pushes metrics over a WebSocket it opens *to* the hub at `beszel.<HOST_NAME>`, through Traefik — an `extra_hosts` entry pins that name to `HOST_LAN_IP` so the connection arrives from the host's own LAN address and clears `lan@docker` on the static part of the allowlist, not on the ISP-delegated entries. The hub stores the metrics in PocketBase and pushes alerts to ntfy and SMTP.
+`https://beszel.<HOST_NAME>`, Authelia SSO only (password login is disabled), LAN-restricted by the Traefik `lan` middleware. The agent runs on the host network and pushes metrics over a WebSocket it opens *to* the hub at `beszel.<HOST_NAME>`, through Traefik. An `extra_hosts` entry pins that name to `HOST_LAN_IP`, so the agent connects from the host's own LAN address and clears `lan@docker` on the static part of the allowlist rather than on the entries that follow the ISP lease. The hub stores the metrics in PocketBase and pushes alerts to ntfy and SMTP.
 
 `scripts/beszel-agent-bootstrap.py` runs on every start and configures the hub from `.env`: SMTP, S3 file storage and backups, the trusted proxy header, the Authelia OIDC client, the ntfy webhook, and the four resource alerts below. Nothing to click.
 
-**Alert thresholds** — these are the numbers the `anomalies` chat topic and `make doctor` reuse, deliberately, so the terminal and your phone cannot disagree:
+**Alert thresholds** — the `anomalies` chat topic and `make doctor` reuse these numbers, so the terminal and your phone cannot disagree:
 
 | Alert | Threshold | Fires after |
 |-------|-----------|-------------|
@@ -61,11 +61,9 @@ install, because the Raspberry Pi kernel is built `CONFIG_PSI=y` with
 there is no sysctl or sysfs equivalent to turn it on later. It takes effect on the
 next reboot.
 
-What it buys is a *rate* where there was only a total. Without it, the sole
-evidence of memory pressure is `/proc/vmstat`, whose counters are cumulative since
-boot: 54.5 M `pswpin` pages over 117 days of uptime says 208 GB was read back out
-of swap and nothing whatsoever about whether any of it happened this week. With
-PSI:
+PSI gives memory pressure as a *rate*. Without it, the only evidence is
+`/proc/vmstat`, whose swap counters are cumulative since boot and say nothing
+about whether any of it happened this week. With it:
 
 ```bash
 cat /proc/pressure/memory                        # host, 10s/60s/300s averages
@@ -79,24 +77,18 @@ versus judging](AI.md#reporting-versus-judging) for why swap being 100% full is
 not itself a fault on this box.
 
 `make doctor` and the `anomalies` chat topic use it as their memory verdict
-(`PSI_MEM_FULL_PCT`, 5% of `full avg300`), in place of the swap-full-*and*-RAM-tight
-pair they needed before. Because the same file exists per cgroup, the finding names
-the container doing the stalling — which no host-wide level ever could. Beszel has
-no PSI collector, so this is the one memory signal that lives in the terminal and
-the chat but not on your phone.
+(`PSI_MEM_FULL_PCT`, 5% of `full avg300`). Because the same file exists per
+cgroup, the finding names the container doing the stalling. Beszel has no PSI
+collector, so this memory signal lives in the terminal and the chat but not on
+your phone.
 
 ### Ceilings, and what PSI cannot see
 
-PSI answers *is anything stalling*, and on a healthy host the answer is no: 352
-seconds of cumulative `full` stall over a fortnight of uptime, and `0.00` in
-every per-container `memory.pressure` file. That silence is honest, and it is
-also the limit of the reading. A container that reaches its `mem_limit` a
-thousand times a day and drops page cache to stay under it never appears in it
-— reclaim that cheap stalls nobody — so the one signal that says a ceiling is
-*binding* has to come from somewhere else.
-
-`scripts/ram-usage.sh` reads it from `memory.events`, and `make doctor` prints
-the result under its own heading:
+PSI answers *is anything stalling*. A container that reaches its `mem_limit` a
+thousand times a day and drops page cache to stay under it never appears there
+— reclaim that cheap stalls nobody — so whether a ceiling is *binding* comes
+from `memory.events` instead. `scripts/ram-usage.sh` reads it, and `make doctor`
+prints the result under its own heading:
 
 ```
 🧠 Memory ceilings
@@ -123,35 +115,26 @@ container-to-service mapping, then files under `/sys/fs/cgroup`:
 | `memory.events` `max` | how many times it reached its ceiling and had to reclaim — the ceiling is binding, or it is decoration |
 | `memory.swap.current` | what that reclaim cost, for the part that came out of anonymous memory instead of cache |
 
-**A hit count is not an alarm.** flaresolverr above is Chromium holding 281 MB
-of page cache against a 768 MB ceiling: the kernel drops some, Chromium reads
-it back, nothing waits. Read the swap column beside it for the cost — 511 MB
-under open-webui is real, 47 MB under flaresolverr is not — and the OOM kills,
-which are listed separately and are always a fault.
+**A hit count is not an alarm.** flaresolverr above is Chromium's page cache
+pressing on its ceiling: the kernel drops some, Chromium reads it back, nothing
+waits. Read the swap column beside it for the cost — 511M under open-webui is
+real, 47M under flaresolverr is not — and the OOM kills, which are listed
+separately and are always a fault.
 
-Two things the report deliberately refuses to say. A peak is only worth the
-window it covers, so it is printed with the container's uptime, taken from the
-scope directory's mtime rather than from `docker inspect` (Docker's own
-`RunningFor` is the *creation* time, which a plain `docker restart` leaves
-untouched while the kernel resets the peak). And a ceiling counts as unused
-only after a day of uptime — without the floor every service restarted an hour
-ago reads as oversized.
+A peak is printed with the container's uptime, taken from the cgroup scope
+directory's mtime, because `docker restart` resets the peak without changing
+Docker's own creation time. A ceiling counts as unused only after a day of
+uptime.
 
 `scripts/ram-usage.sh snapshot` prints the same readings one line per
-container, in bytes, for anything that wants to do its own arithmetic.
-
-**What outlives the container.** `record` is `snapshot` plus a merge into
-`.ram-observed`, beside `.env` — gitignored, specific to this machine, and
-rewritten by every `make doctor`, `make services`, `make enable` and `make
-disable`. It exists because neither reading survives what it describes:
-`memory.peak` dies with the container, and a service that is switched off has
-no cgroup at all. So the peak is kept as a maximum across restarts, and what a
-service holds survives it being disabled — which is what lets `make config` put
-a number beside an unticked box ([Choosing which services
-run](CONFIGURATION.md#choosing-which-services-run)). A sample from a container
-less than an hour old may seed a row but never overwrite one: that young, it is
-holding its startup footprint. Failing to write the file is a no-op, never an
-error — it improves the numbers, it is not where they come from.
+container, in bytes. `record` adds a merge into `.ram-observed`, beside `.env` —
+gitignored, specific to this machine, and rewritten by every `make doctor`,
+`make services`, `make enable` and `make disable`. It keeps each peak as a
+maximum across restarts and what a service held after it is switched off, which
+is what lets `make config` put a number beside an unticked box ([Choosing which
+services run](CONFIGURATION.md#choosing-which-services-run)). A sample from a
+container less than an hour old may seed a row but never overwrite one. Failing
+to write the file is never an error.
 
 ## Uptime Kuma — the services
 
@@ -176,15 +159,13 @@ The group decides the check interval, the retry budget and the ntfy priority:
 
 `ntfy` sits in **Core** because it delivers every other alert. A container in `compose/*.yaml` but in no group above is monitored under **Tools & Observability**.
 
-`agentgateway` is the one service where this container monitor is the *only* check. Its image is distroless — `/app/agentgateway`, `ld.so` and a CA bundle, no shell and no HTTP client — so `compose/compose-ai.yaml` can declare no healthcheck for it, and Docker reports it `running` rather than `healthy`.
+`agentgateway` is the one service where this container monitor is the *only* check: its image is distroless, with no shell and no HTTP client, so `compose/compose-ai.yaml` declares no healthcheck for it and Docker reports it `running` rather than `healthy`.
 
 **Where the notification is attached matters as much as the priority.** A Kuma group is a worst-of-children aggregate whose down message lists the failing children. Groups marked *the group only* have silent children, so a gluetun outage sends one `Child monitors down: qbittorrent, prowlarr, …` push instead of six. Groups marked *each monitor* alert individually, for the tiers where the exact failing component matters.
 
-**Internet holds everything whose health is a function of the uplink rather than of the Pi**, so a WAN cut is one push instead of one per casualty. On 2026-10-14 a 13-minute cut sent eleven: unbound and ddns-updater from Core, gluetun and the VPN IP from Remote Access, each down and each back up, plus Dockhand's copies. Now the `internet` probe trips first — it has no retry budget, where the containers behind it have 3 × 30 s — so the group goes down as `Child monitors down: internet`; the rest fall in behind it without a new push, and the single recovery push comes once all of them are back. The probe is a DNS query for `a.root-servers.net` sent straight to `1.1.1.1`, `9.9.9.9` and `8.8.8.8`. Kuma hands the three to one resolver that falls through to the next on a timeout, so the check fails only when no operator answers — about 70 s of silence from all three — and one provider's outage does not read as no internet. The name sits in every resolver's cache from root priming, so the answer needs no authoritative server either.
+**Internet holds everything whose health is a function of the uplink rather than of the Pi**, so a WAN cut is one push instead of one per casualty. The `internet` probe has no retry budget, where the containers behind it have 3 × 30 s, so it trips first and the group goes down as `Child monitors down: internet`; the rest fall in behind it without a new push, and one recovery push comes once all of them are back. The probe asks `1.1.1.1`, `9.9.9.9` and `8.8.8.8` in turn for `a.root-servers.net`, so it fails only when none of the three answers — about 70 s of silence — and one provider's outage does not read as no internet.
 
-Unbound stays in Core because its healthcheck no longer needs the uplink: it asks for `localhost`, one of unbound's built-in local zones, which proves the daemon serves without recursing. The old check (`cloudflare.com`) failed on every WAN cut, and Pi-hole waits on unbound being healthy (`depends_on: service_healthy`), so a `docker compose up` run while the uplink was down — the stack's own start, or `make update` — could not get past it. Recursion is checked by `dns resolution`, which moved to Internet because Pi-hole serves stale answers for an hour (`dns.cache.optimizer`) and so fails on any cut longer than that.
-
-Two components page lower than they used to, at 4 instead of 5, when they break on their own: `dns resolution` (Pi-hole up, unbound up, but recursion failing — a DNSSEC anchor problem, say) and `ddns-updater`. The first leaves the household with the same internet it has during a WAN cut, which is exactly what this group decides not to wake anyone for. The second breaks nothing until the public address changes, and the address did not change through the 2026-10-14 cut.
+Unbound stays in Core because its healthcheck asks for `localhost`, one of its built-in local zones, and so does not need the uplink — Pi-hole waits on unbound being healthy, and a check that recursed would block `docker compose up` during a WAN cut. Recursion is checked by `dns resolution`, which sits in Internet because Pi-hole serves stale answers for an hour (`dns.cache.optimizer`) and so fails on any cut longer than that. That placement means `dns resolution` and `ddns-updater` page at 4 even when they break on their own.
 
 All four ntfy notifications publish to the same `monitoring` topic and differ only by priority, which is what drives do-not-disturb on the phone. Ongoing outages repeat after ~30 minutes (`resendInterval`) for the groups that alert per monitor; Internet and the low tier never repeat — an uplink nobody can fix at 3 a.m. has no reason to page again before morning.
 
@@ -205,7 +186,7 @@ Docker monitors only prove a container is running. These cover what they cannot 
 
 Authelia-protected routers answer `302` towards the portal, which counts as healthy: these checks validate the routing chain, not the protected app — the app's own docker monitor covers that.
 
-**`backup freshness` is the one that fills a real hole** rather than doubling a container check. Backrest's hook fires on the runs that happen: a failed backup pushes to ntfy, but a plan that never started sends nothing at all, and the `backrest` monitor beside it stays green throughout. The monitor reads `http://pi-system-tools:8000/health/backups`, where system-tools reports the age of the last finished run out of Backrest's operation log, and matches `status == ok` — which holds only while that age is inside `BACKUP_MAX_AGE_HOURS` (default 30: the daily 04:00 schedule plus six hours of slack). The other statuses each name their own reason: `stale`, `failed`, `unknown` (the log could not be read).
+**`backup freshness` is the one that fills a real hole** rather than doubling a container check. A failed backup pushes to ntfy through Backrest's hook, but a plan that never started sends nothing at all, and the `backrest` monitor beside it stays green throughout. The monitor reads `http://pi-system-tools:8000/health/backups`, where system-tools reports the age of the last finished run out of Backrest's operation log, and matches `status == ok` — which holds only while that age is inside `BACKUP_MAX_AGE_HOURS` (default 30: the daily 04:00 schedule plus six hours of slack). The other statuses each name their own reason: `stale`, `failed`, `unknown` (the log could not be read).
 
 Two consequences: a fresh install is legitimately **down** here until its first backup completes, and if `system-tools` itself is down this goes down with it — its own container monitor, in **Tools & Observability**, is what tells the two apart. The threshold lives in `config/system-tools/app.py`, so a plan on a different schedule needs `BACKUP_MAX_AGE_HOURS` set on the `system-tools` service.
 
@@ -220,8 +201,6 @@ The `uptimekuma` widget reads the public **`homepage` status page**, which lists
 Kuma cannot report its own failure: a wedged Kuma does not alert, it goes quiet, and quiet reads as all green. `pi-pcloud-kuma-watchdog.timer` covers that from the host. Every five minutes it runs `scripts/uptime-kuma-watchdog.sh`, which pushes once when Docker reports `pi-uptime-kuma` unhealthy, restarting, or still `starting` on two runs in a row, and once when it is healthy again — priority 4, as Kuma's own ntfy user, to the `monitoring` topic its alerts use. An absent or stopped container stays silent, because that is the stack being down or updated rather than Kuma failing, and the unit is skipped outright while the `uptime-kuma` profile is off.
 
 Expect about ten minutes from failure to push: the image's healthcheck needs five failures a minute apart before Docker calls it unhealthy, and the timer adds up to five more. A crash loop never gets that far — each restart resets the 180 s start period, and the `restarting` state lasts only Docker's backoff, which drops back to 100 ms once the container has run for 10 s — so it is caught as `starting` seen five minutes apart instead. Markers in `/var/lib/pi-pcloud-kuma-watchdog` keep one outage to one push; a publish that fails leaves no marker and fails the unit, so the next run tries again. The units are installed by `make install` and re-applied by `make update`.
-
-This used to be Dockhand's job, through its `container_unhealthy` event — see [Dockhand container events](#dockhand-container-events) for why that went.
 
 ### Known blind spot
 
@@ -243,15 +222,15 @@ Beszel, Uptime Kuma and Prometheus answer three different questions, and each is
 | Horizon | aggregated, grows slowly | 90 days, heartbeats aggregated after 24 h | 90 days, capped at 8 GiB |
 | Pushes to ntfy | yes | yes | **no** |
 
-The split is deliberate and there is no plan to merge it. Beszel already covers the host, so **cAdvisor and node_exporter are not in the stack** — they would be a second, disagreeing source for numbers a phone alert already carries. And Prometheus deliberately has **no Alertmanager**: ntfy plus Uptime Kuma already deliver every alert this box has, and a second alerting path would mean two places to silence something at 3 a.m.
+The split is deliberate. Beszel already covers the host, so **cAdvisor and node_exporter are not in the stack** — they would be a second, disagreeing source for numbers a phone alert already carries. And Prometheus has **no Alertmanager**: ntfy plus Uptime Kuma already deliver every alert this box has, and a second alerting path would mean two places to silence something at 3 a.m.
 
-What Prometheus adds is the axis the other two have no concept of: *time and quantity*. Uptime Kuma can tell you Immich was up all night; only Prometheus can tell you its thumbnail queue sat at 4 000 for six hours, which is why the Pi felt slow.
+What Prometheus adds is the axis the other two have no concept of: *time and quantity*. Uptime Kuma can tell you Immich was up all night; only Prometheus can tell you its thumbnail queue sat at 4 000 for six hours.
 
 ### Prometheus has no URL, on purpose
 
 There is no `prometheus.<HOST_NAME>`. The service carries no Traefik labels, no router, no `expose` and no OIDC client — Grafana is the only UI and the only reader.
 
-That is one decision, not an oversight. Prometheus's query API is unauthenticated and it has no concept of a user, so publishing it would mean inventing an access-control story (a router, a middleware, an Authelia rule, a client) for a page whose entire content is already on a Grafana dashboard that *does* have one. The access control is instead that only containers on `frontend` and `ai` can open `:9090` — Prometheus needs both to reach its targets — and the only one that does is Grafana, over `frontend`. Grafana itself is deliberately **not** on `ai`: it dials nothing but `prometheus:9090`, and the browser-facing half of this pair has no business reaching the segment where system-tools holds the Docker socket.
+Prometheus's query API is unauthenticated and has no concept of a user, and everything it holds is already on a Grafana dashboard that *does* have access control. Instead, only containers on `frontend` and `ai` can open `:9090` — Prometheus needs both to reach its targets — and the only reader is Grafana, over `frontend`. Grafana is deliberately **not** on `ai`: it dials nothing but `prometheus:9090`, and has no business reaching the segment where system-tools holds the Docker socket.
 
 When you do need its own pages — the targets list is the one thing Grafana cannot show you — go in through the container:
 
@@ -263,11 +242,11 @@ docker exec pi-prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=up
 
 ### Grafana
 
-`https://grafana.<HOST_NAME>`, LAN-only + Authelia forward-auth + Authelia OIDC, `admin` group and 2FA on both gates. Local login is off — and so is HTTP basic auth, which is the one that matters: Grafana's API accepts basic auth from the built-in admin *regardless* of `disable_login_form`, so turning off the form alone would have left `admin` usable by anything on `frontend` that dialled `:3000`. With `GF_AUTH_BASIC_ENABLED=false` the account is inert, which is why no `PASSWORD` is injected into the container.
+`https://grafana.<HOST_NAME>`, LAN-only + Authelia forward-auth + Authelia OIDC, `admin` group and 2FA on both gates. Local login is off — and so is HTTP basic auth, which is the one that matters: Grafana's API accepts basic auth from the built-in admin *regardless* of `disable_login_form`, so disabling the form alone would leave `admin` usable by anything on `frontend` that dials `:3000`. With `GF_AUTH_BASIC_ENABLED=false` the account is inert, which is why no `PASSWORD` is injected into the container.
 
 **There is no sign-in page to click through.** `GF_AUTH_GENERIC_OAUTH_AUTO_LOGIN=true` turns `/login` into a 307 straight at the OIDC flow, because with the form disabled that page's only control is a "Sign in with Authelia" button — and the forward-auth hop in front has already established that same session, so the click proves nothing. Homepage carries `HOMEPAGE_OIDC_AUTO_LOGIN=true` for the identical reason; see [Security](SECURITY.md#per-service-protection).
 
-That flag has one consequence worth stating, because it is silent when wrong: **it makes signing out a no-op unless the return URL opts back out of it.** Grafana's signout sends the browser to Authelia's portal logout, which returns it to `rd` — and a bare `/login` would be auto-redirected straight back into a fresh session. `GF_AUTH_SIGNOUT_REDIRECT_URL` therefore ends in `%2Flogin%3FdisableAutoLogin`, the same trick Homepage pins with `?autologin=0`.
+**That flag makes signing out a no-op unless the return URL opts back out of it.** Grafana's signout goes through Authelia's portal logout back to `rd`, and a bare `/login` would be auto-redirected straight into a fresh session. `GF_AUTH_SIGNOUT_REDIRECT_URL` therefore ends in `%2Flogin%3FdisableAutoLogin`, the same trick Homepage pins with `?autologin=0`.
 
 If OIDC ever breaks and locks you out, the escape hatch is a query parameter, two commands and a restart:
 
@@ -282,7 +261,7 @@ docker exec pi-grafana grafana cli admin reset-admin-password '<new password>'
 
 Step 1 is not optional once auto-login is on: without it every visit to `/login` is a 307 into the flow that is broken, including the one you make to use the password you just reset.
 
-**The datasource and the dashboard are provisioned from files** — `config/grafana/provisioning/` and `config/grafana/dashboards/pi-pcloud.json` — mounted read-only, with `allowUiUpdates: false`. So Grafana's SQLite database holds nothing but sessions and per-user preferences, which is exactly why **it is absent from Backrest**: losing it costs a re-login, and the dashboard comes back from Git. `allowUiUpdates: false` means Grafana refuses the save outright ("Cannot save provisioned dashboard") rather than letting an edit sit there until a restart quietly drops it. Change `pi-pcloud.json` instead — panel-by-panel edits are still possible in the browser for *trying* something, they just cannot be persisted.
+**The datasource and the dashboard are provisioned from files** — `config/grafana/provisioning/` and `config/grafana/dashboards/pi-pcloud.json` — mounted read-only, with `allowUiUpdates: false`. So Grafana's SQLite database holds nothing but sessions and per-user preferences, which is why **it is absent from Backrest**: losing it costs a re-login, and the dashboard comes back from Git. `allowUiUpdates: false` means Grafana refuses the save outright ("Cannot save provisioned dashboard") rather than letting an edit sit there until a restart quietly drops it. Change `pi-pcloud.json` instead — panel-by-panel edits are still possible in the browser for *trying* something, they just cannot be persisted.
 
 ### The dashboard
 
@@ -299,20 +278,20 @@ One dashboard, four rows, sized to a single screen:
 
 Three things are worth knowing the shape of before you read a panel wrong:
 
-- **The Immich queue panel matches on `__name__`.** Immich puts the queue name in the metric *name*, not in a label (`immich.queues.<queue>.active`), so there is no `queue` label to group by until `label_replace` invents one. That is upstream's shape, not a workaround for ours.
-- **The counting panels count per graph interval, not per second.** On a household stack Authelia logins, n8n executions and ntfy publications are a handful of events a day, and `rate()` would round them to a flat zero. Those three panels therefore carry a 5-minute **minimum interval**, and it is load-bearing rather than cosmetic: without it Grafana derives `$__interval` from the panel width, floored at the datasource's 30 s `timeInterval`, and `increase()` over a 30 s window that holds a single 30 s-apart sample returns *nothing at all* — a wide panel on a wide screen renders "No data" while the counter is moving.
+- **The Immich queue panel matches on `__name__`.** Immich puts the queue name in the metric *name*, not in a label (`immich.queues.<queue>.active`), so there is no `queue` label to group by until `label_replace` invents one.
+- **The counting panels count per graph interval, not per second.** Authelia logins, n8n executions and ntfy publications are a handful of events a day, which `rate()` would round to a flat zero. Those three panels carry a 5-minute **minimum interval**, and it is load-bearing: without it a wide panel's interval drops to the datasource's 30 s `timeInterval`, `increase()` over a window holding a single sample returns nothing, and the panel renders "No data" while the counter is moving.
 - **The ban panel counts refused attempts, not bans.** `authelia_authn{banned="true"}` is incremented once per attempt *made while banned*, so one ban a client keeps hammering shows as a large number. Read it as pressure, not as a count of bans.
 
 ### What is scraped, and why nothing needed an exporter
 
-Every target already serves `/metrics` natively or does so behind a single flag. **Not one exporter sidecar was added**, and that constraint is what shaped the list:
+Every target serves `/metrics` natively or does so behind a single flag. **No exporter sidecar runs**, and that constraint is what shapes the list:
 
-| Job | Endpoint | What turned it on |
-|-----|----------|-------------------|
+| Job | Endpoint | What turns it on |
+|-----|----------|------------------|
 | `traefik` | `traefik:8080/metrics` | `--metrics.prometheus=true` in `compose/compose-core.yaml`. It lands on the implicit `traefik` entrypoint, beside `api@internal` — *not* on `websecure`, where `/metrics` is a 404. `--metrics.prometheus.addRoutersLabels=true` beside it is what makes the rate readable per site; router labels are off by default |
 | `authelia` | `authelia:9959/metrics` | `telemetry.metrics` in `config/authelia/configuration.yml.template`, with the address spelled out rather than defaulted. Its own listener, so `auth.<HOST_NAME>/metrics` stays a 404 |
-| `headscale` | `headscale:9090/metrics` | nothing — `metrics_listen_addr` was already set and the port already exposed |
-| `agentgateway` | `agentgateway:15020/metrics` | nothing — the stats listener is on by default; only the `expose` is new |
+| `headscale` | `headscale:9090/metrics` | `metrics_listen_addr` in `config/headscale/config.yaml.template`, and the port exposed |
+| `agentgateway` | `agentgateway:15020/metrics` | nothing — the stats listener is on by default; the service only `expose`s it |
 | `llama-cpp` | `llama-cpp:8080/metrics` | `LLAMA_ARG_ENDPOINT_METRICS=1` |
 | `n8n` | `n8n:5678/metrics` | `N8N_METRICS=true` |
 | `immich-api` | `immich-server:8081/metrics` | `IMMICH_TELEMETRY_INCLUDE=all` |
@@ -326,9 +305,9 @@ Targets are **static**, not discovered. `docker_sd_configs` would mean mounting 
 
 Three of those flags widen a surface, and it is worth being explicit about which:
 
-- **n8n has no separate telemetry listener.** `/metrics` is served on the port Traefik routes and n8n does not gate it, so `n8n.<HOST_NAME>/metrics` is now readable by anything past the `lan` allowlist. The contents are Node process counters and execution totals; every `N8N_METRICS_INCLUDE_*` option is deliberately left off, so no workflow or node *names* are in there.
+- **n8n has no separate telemetry listener.** `/metrics` is served on the port Traefik routes and n8n does not gate it, so `n8n.<HOST_NAME>/metrics` is readable by anything past the `lan` allowlist. The contents are Node process counters and execution totals; every `N8N_METRICS_INCLUDE_*` option is deliberately left off, so no workflow or node *names* are in there.
 - **Traefik's `/metrics` sits on the same `:8080` as `api@internal`**, and the `internalapi-allow` middleware that restricts the latter to Homepage's address does **not** cover it — the metrics handler is an entrypoint-level handler, not a router. Anything on `frontend` can read router names and request counts. That port is never published to the LAN, and the payload is names and counters, not rules or credentials. `--metrics.prometheus.manualrouting=true` is the lever if that ever stops being acceptable: it removes the automatic handler and exposes a `prometheus@internal` service you route (and gate) yourself.
-- **ntfy uses `NTFY_METRICS_LISTEN_HTTP`, not `NTFY_ENABLE_METRICS`.** The second one adds `/metrics` to ntfy's *public* port; the first opens a separate listener and leaves `ntfy.<HOST_NAME>/metrics` answering the web app, as before.
+- **ntfy uses `NTFY_METRICS_LISTEN_HTTP`, not `NTFY_ENABLE_METRICS`.** The second one adds `/metrics` to ntfy's *public* port; the first opens a separate listener and leaves `ntfy.<HOST_NAME>/metrics` answering the web app.
 
 Everything else (`authelia`, `headscale`, `agentgateway`, `immich`) exports on a dedicated port that has no router in front of it.
 
@@ -344,9 +323,9 @@ config:
         user: 'apiKey.user'
 ```
 
-That puts a `user` label — `open-webui`, `trilium` or `agent`, the metadata on the API key that made the call — on every `gen_ai_*` series and on the HTTP ones beside them, so token use and latency are attributable per caller rather than being one undifferentiated total. Cardinality is bounded by the number of keys. Verified against a running gateway, not inferred.
+That puts a `user` label — `open-webui`, `trilium` or `agent`, the metadata on the API key that made the call — on every `gen_ai_*` series and on the HTTP ones beside them, so token use and latency are attributable per caller rather than being one undifferentiated total. Cardinality is bounded by the number of keys.
 
-**The spend panel is empty for everything `config.yaml` declares, although a cost catalog exists.** agentgateway only emits `agentgateway_gen_ai_client_cost_usd_total` when its catalog resolves a price for the model. agentgateway ships a built-in catalog, but it looks prices up by provider, and every model in `config.yaml` goes through a `custom` provider, which no entry matches — visible as `agentgateway_cost_catalog_lookups_total{status="Missing", gen_ai_system="custom"}`. With `providerOverride: groq` on the `/groq/v1` route's provider the same lookup resolves (`status="Exact"`, measured); OpenRouter is not in the catalog at all, and the local model is free. Why that override is not set is under [What is not scraped](#what-is-not-scraped) below. Only those `custom` providers were measured: a native one added through the UI (OpenAI, Anthropic, Gemini, …) is looked up under its own provider name, so the panel is not guaranteed to stay empty once one exists.
+**The spend panel is empty for every model `config.yaml` declares, although a cost catalog exists.** agentgateway only emits `agentgateway_gen_ai_client_cost_usd_total` when its built-in catalog resolves a price for the model, and it looks prices up by provider: every model in `config.yaml` goes through a `custom` provider, which no entry matches — visible as `agentgateway_cost_catalog_lookups_total{status="Missing", gen_ai_system="custom"}`. With `providerOverride: groq` on the `/groq/v1` route's provider the same lookup resolves (`status="Exact"`); OpenRouter is not in the catalog at all, and the local model is free. Why that override is not set is under [What is not scraped](#what-is-not-scraped) below. A native provider added through the UI (OpenAI, Anthropic, Gemini, …) is looked up under its own provider name, so the panel may fill once one exists.
 
 ### What is not scraped
 
@@ -359,11 +338,11 @@ Four services in the stack expose no metrics of their own and would each need a 
 | Pi-hole | `pihole_exporter` | The v6 API already answers block rates, and the Homepage widget reads it |
 | Nextcloud | `nextcloud-exporter` | Its serverinfo API needs a token, and the Homepage widget already surfaces what it reports |
 
-Also deliberately absent, and in scope only for a later, separate change:
+Also deliberately absent:
 
-- **Prices for the path routes.** `providerOverride: groq` would light up the spend panel from the built-in catalog, and a `config.modelCatalog` overlay could price what that catalog lacks. Both are left out: the first reports list prices a free-tier account never pays, and the second would be hand-maintained with no source of truth in this repository.
+- **Prices for the path routes.** `providerOverride: groq` would light up the spend panel from the built-in catalog, and a `config.modelCatalog` overlay could price what that catalog lacks. Both are left out: the first would report list prices rather than what the account actually pays, and the second would be hand-maintained with no source of truth in this repository.
 - **Loki, or logs of any kind.** Logs go to journald, and `journalctl -t pi-<service>` is the interface.
-- **OTLP tracing.** agentgateway already emits OpenTelemetry GenAI semconv natively, so a trace backend is a real option — but it is a separate decision with its own storage budget, not a rider on this one.
+- **OTLP tracing.** agentgateway already emits OpenTelemetry GenAI semconv natively, so a trace backend is a real option — but a separate decision, with its own storage budget.
 
 ### Retention, and what it costs
 
@@ -393,17 +372,16 @@ The watcher runs on the host as a systemd unit — no extra container — starte
 
 Login messages carry the username, the real client IP (`remote_ip`, forwarded by Traefik), the auth method, the endpoint hit and the Authelia timestamp; bans also carry the expiry. Authelia logs its "Unsuccessful …" line with an *empty* username when the account does not exist, so those alerts come from the paired "username input" line instead — the alert always names the attempted username.
 
-**Why the OIDC row matters.** A client left holding a refresh token Authelia no longer accepts cannot sync, and nothing else in the stack notices: the container stays healthy, its Uptime Kuma monitor stays green, and the only trace is a 400 on `/api/oidc/token` repeating every few minutes. This alert is what turns that into minutes rather than days. It carries the client IP, the endpoint and the reason. The RFC 6749 boilerplate that `invalid_grant` opens with is stripped so the specific cause leads — `The refresh token has not been found`, say; other error classes keep their own preamble, as does a message that is nothing but the preamble. The reason is read up to the quote closing `msg`, not up to a named field: Authelia's logger sorts fields alphabetically, so anchoring on `method=` would break the day a field sorting earlier appears. There is no username: Authelia resolves no subject for a grant it rejected.
+**Why the OIDC row matters.** A client left holding a refresh token Authelia no longer accepts cannot sync, and nothing else in the stack notices: the container stays healthy, its Uptime Kuma monitor stays green, and the only trace is a 400 on `/api/oidc/token` repeating every few minutes. This alert carries the client IP, the endpoint and the reason, with the RFC 6749 boilerplate that opens `invalid_grant` stripped so the specific cause leads — `The refresh token has not been found`, say. There is no username: Authelia resolves no subject for a grant it rejected.
 
-**Noise control.** Identical `(event kind, user, IP)` events are collapsed inside a window, so a browser retry loop or a slow brute-force yields one alert plus the ban alert rather than a stream. Suppressed events go to the journal, not to ntfy.
+**Noise control.** Identical events are collapsed inside a window, so a browser retry loop or a slow brute-force yields one alert plus the ban alert rather than a stream. Suppressed events go to the journal, not to ntfy.
 
-The two families keep **separate** suppression slots and separate windows: login events collapse over 60 s, rejected OIDC grants over an hour, because a client stuck on a dead token retries for as long as it stays open — days, not minutes. Sharing one slot would let any login failure landing mid-loop flush the wider window and re-notify.
+- Login events and rejected OIDC grants keep **separate** windows: 60 s for logins, an hour for grants, because a client stuck on a dead token retries for as long as it stays open — days, not minutes.
+- The login key is `(event kind, user, IP)`. The OIDC key **adds the reason**: a rejected grant has no username and one stable container IP per client, so without it a new failure from the same client — a rotated secret, say — would be swallowed by the old one's window. Bans keep their detail *out* of the key, since it is an expiry that moves on every attempt.
+- Each family remembers the **last 32 keys**, so two clients stuck in refresh loops do not alternate and re-notify on every retry.
+- **A failed publish is not remembered**, so the next occurrence tries again. It also starts a 60 s hold-off, so a hanging ntfy does not cost every matching line a full curl timeout; alerting resumes on its own once ntfy is back.
 
-**The OIDC key includes the reason**, unlike the login key. A rejected grant has no username and one stable container IP per client, so on `(kind, user, IP)` alone the key would collapse to a single slot per client: a secret rotated an hour into a dead-refresh-token loop would produce a different, actionable failure that nobody hears about. Bans deliberately keep their detail *out* of the key — it is an expiry that moves on every attempt.
-
-Each family remembers the **last 32 keys**, not one. A single slot is not enough once more than one source is failing — and every OIDC client has its own container IP, so two stuck refresh loops would alternate, every key would look new, and every retry would notify: precisely the storm the hour-wide window exists to prevent.
-
-**A failed publish is not remembered**, so the next occurrence tries again rather than the window silencing a fault ntfy never delivered. A hanging ntfy would then cost every matching line a full curl timeout, so a failed publish also starts a 60 s hold-off — attempts stay bounded and alerting resumes on its own once ntfy is back. Override any of it:
+Override any of it:
 
 ```bash
 sudo systemctl edit pi-pcloud-authelia-ntfy.service
@@ -419,125 +397,11 @@ sudo systemctl edit pi-pcloud-authelia-ntfy.service
 
 `scripts/dockhand-oidc-bootstrap.sh` creates an Apprise channel named **Dockhand ntfy**, bound to the local Docker environment, with credentials from `config/ntfy/ntfy.env` (`ntfy://dockhand:<password>@ntfy/<topic>`).
 
-One event type is configured, deliberately: `container_oom` (a container hit an out-of-memory condition), which Uptime Kuma cannot see. Everything else would duplicate it — `container_unhealthy` included, which was dropped after it sent its own push per container on the first failed probe, outside Kuma's retry budget and grouping. The one container it covered that Kuma does not is Kuma itself, which [the watchdog](#who-watches-uptime-kuma) now watches.
+One event type is configured, deliberately: `container_oom` (a container hit an out-of-memory condition), which Uptime Kuma cannot see. Everything else would duplicate Kuma. `container_unhealthy` in particular pushes per container on the first failed probe, outside Kuma's retry budget and grouping; the one container it would cover that Kuma does not is Kuma itself, which [the watchdog](#who-watches-uptime-kuma) watches.
 
-## Backup strategy
+## Backups
 
-### Backrest (restic) — the one that matters
-
-Two plans. `s3-backup` carries everything off-site; `usb-env` is a small local one covering `.env` alone, described under [The `.env` file, twice](#the-env-file-twice).
-
-`s3-backup` is defined in `config/backrest/config.json.template`:
-
-| | |
-|---|---|
-| **Runs** | Nightly at 04:00 |
-| **Backs up** | `/userdata/` — Immich, Nextcloud (data, config, themes), LLDAP, Vaultwarden, Uptime Kuma, Authelia config and secrets, Beszel, Open WebUI, and the small unrecoverable state: Headscale (node keys, ACLs), Headplane, n8n, ntfy ACLs, Kavita, Pi-hole, Traefik's ACME certificates, qBittorrent, Prowlarr, Kapowarr, Shelfmark, Audiobookshelf, FreshRSS, Trilium, changedetection.io (watch list, settings and history snapshots), Forgejo (the bare repositories and LFS objects — the one mount here that is not a second copy of something, since a branch pushed only to this forge exists nowhere else), Tuwunel (uploaded files, and the RocksDB backup described below), OpenClaw (the assistant's workspaces, sessions and the Matrix crypto state that keeps its device the one family clients trust) |
-| **Excludes** | Immich thumbnails, encoded video and model cache; Nextcloud previews and thumbnails; Open WebUI's model cache; Kavita's cache and its own backups; Pi-hole's query log, list cache and `gravity.db`; Prowlarr's log database; Shelfmark's cover cache; Audiobookshelf's `/metadata` (covers and cached art, which are not mounted at all); FreshRSS's article cache, favicons and per-user log; Forgejo's issue index, persistent queues, file sessions, generated repository archives, `tmp/` and log directory; Trilium's own rotating database copies (`backup/`), its `tmp/` and any anonymized debug copy — `sqlite-backup.sh` already takes a consistent one; OpenClaw's installed plugin (`npm/`), its sync git directories (`sync/`), its knowledge-base export and `tmp/` — the bootstrap and `openclaw-sync` rebuild all of it; every SQLite `-wal`/`-shm`; the stale pre-PostgreSQL `.db` stubs; `*.log` and rotations — all regenerable or replaced by a consistent copy. One exception is re-included after that last pattern: `/userdata/tuwunel-backups/**`, whose RocksDB write-ahead logs are named `*.log` and are listed in the backup's own manifest |
-| **Databases** | Dumped by pre-snapshot hooks: `nextcloud` and `vaultwarden` (fatal on error), `authelia`, `lldap`, `open-webui`, `immich`, `freshrss`, `forgejo`. SQLite services get consistent copies from `scripts/sqlite-backup.sh`. Tuwunel's RocksDB is never read live: `tuwunel-backup.timer` sends it `SIGUSR2` at 03:45, which runs `server backup-database` into the `tuwunel_backups` volume (two kept, unchanged files shared between them), and that is what the 04:00 snapshot takes |
-| **Retention** | 7 daily, 4 weekly, 4 monthly |
-| **Maintenance** | Prune Sundays at 03:00 (25% unused); monthly integrity check that also re-reads 5% of the pack data; stale locks released before every run |
-| **Destination** | Your S3 bucket, restic-encrypted and deduplicated |
-| **On failure** | Pushes to the ntfy `monitoring` topic |
-
-`usb-env` adds a second, local repository on the data disk holding nothing but the `.env` history: daily at 02:00, 30/12/12 retention, prune Sundays at 02:30, monthly full integrity check. It exists so the data disk can restore `.env` without the S3 password — see below.
-
-Configure them with the `S3_*` and `BACKREST_*` variables — see [Configuration](CONFIGURATION.md#backrest-restic-backups).
-
-### Beszel PocketBase snapshots
-
-A second, independent layer for the monitoring history alone: SQLite snapshots on `BESZEL_BACKUP_CRON` (default 03:00), keeping `BESZEL_BACKUP_MAX_KEEP` (default 7), restorable from the Beszel admin UI.
-
-### Consistent copies of the live SQLite databases
-
-The plan mounts each service's data read-only, so restic would otherwise read a `.db` and its `-wal` at different instants while the service is mid-write and store a pair that disagrees. `scripts/sqlite-backup.sh` runs as a pre-snapshot hook and writes a proper `sqlite3 .backup` of each one — kavita, n8n, ntfy, headscale, headplane, beszel, uptime-kuma, prowlarr, kapowarr, shelfmark, audiobookshelf — into `/userdata/sqlite-backups/`. About 33 MB, and **it is the copy to restore from**.
-
-The `-wal` and `-shm` companions are excluded: they are worthless without a consistent read, and they were the single noisiest thing in the snapshot (~17 MB of churn a night). The main `.db` files are deliberately kept as a fallback for the day the hook fails — a main file read without its WAL is an older state, not a torn one.
-
-Pi-hole's `gravity.db` is excluded outright. 670k of its rows are block-list domains `pihole -g` re-downloads and only ~67 are configuration, so the hook dumps those tables to `sqlite-backups/pihole-gravity-config.sql` instead — 8 KB rather than 39 MB. Restore it with `sqlite3 gravity.db < pihole-gravity-config.sql`, then `pihole -g`.
-
-Services on PostgreSQL (nextcloud, authelia, lldap, open-webui, immich, vaultwarden) are covered by `scripts/db-backup.sh` instead and are deliberately absent from that list. Their leftover SQLite files — `lldap/users.db`, `nextcloud-data/owncloud.db`, `open-webui-data/webui.db`, last written before those services moved to PostgreSQL — are excluded too, because restoring one would be actively misleading.
-
-Restore those dumps **as the `postgres` superuser**, not as the service role: `config/postgres/init-databases.sh` grants each schema's default privileges as `postgres`, so the `ALTER DEFAULT PRIVILEGES` lines the dump carries are refused with `permission denied to change default privileges` when the service role replays its own dump. The dumps also open with a `\restrict` line, which only `psql` 17.6 and newer understands — use the client inside the Backrest container (`config/backrest/Dockerfile` pins it to the server major), not whatever `psql` the host happens to have.
-
-### Tuwunel's RocksDB
-
-The chat database is the one store here that is neither dumped nor copied by a hook: restic reading a live RocksDB file by file would capture SST files a compaction is deleting underneath it, and what that restores is not a database. Tuwunel takes the backup itself instead. `tuwunel-backup.timer`, installed by `make install-system`, sends `SIGUSR2` to `pi-tuwunel` at 03:45, and `TUWUNEL_ADMIN_SIGNAL_EXECUTE` turns that into `server backup-database` — a RocksDB BackupEngine backup into the `tuwunel_backups` volume, flushed first, keeping two and sharing unchanged files between them. The 04:00 snapshot takes that volume and `tuwunel_media` (the uploads); the live `tuwunel_data` is not mounted into backrest at all. The timer's `ExecCondition` skips it, rather than failing it, when the `tuwunel` profile is off.
-
-To restore, stop the server and run the binary once with `--restore-backup` against the same volumes — verified at v1.9.3 by wiping the live database and signing back in afterwards:
-
-```bash
-docker compose stop tuwunel
-docker compose run --rm --no-deps tuwunel --restore-backup --maintenance --execute "server shutdown"
-docker compose up -d tuwunel
-```
-
-`--restore-backup=<id>` picks another backup than the newest (`!admin server list-backups` in the admin room lists them). After an off-site restore, put `/userdata/tuwunel-backups` back into the `tuwunel_backups` volume and `/userdata/tuwunel-media` into `tuwunel_media` first. Restore replaces the files in `tuwunel_data`, so keep a copy of that volume if the one you are replacing may still be wanted.
-
-### Three eyes on the same question
-
-Backups fail in two different ways, and one of them is silent:
-
-- **Backrest → ntfy** pushes when a run *fails*.
-- **Uptime Kuma `backup freshness`** alerts when a run never *started*.
-- **`make doctor`** (and the `backups` chat topic) reads Backrest's operation log on demand.
-
-Test a restore occasionally. A backup you have never restored is a hypothesis.
-
-### The `.env` file, twice
-
-`.env` is copied to `/userdata/pi-web-env/.env` by `scripts/backrest-env-snapshot.sh` as a pre-snapshot hook. A copy, not a bind mount of `./.env`: mounting a single *file* pins its inode, and `services.sh` and `rotate-password.sh` both replace `.env` rather than rewriting it, so the container would have gone on snapshotting the pre-edit file forever.
-
-That copy goes into **two** repositories, because one of them cannot restore itself:
-
-| | `s3` | `usb` |
-|---|---|---|
-| Plan | `s3-backup`, 04:00 | `usb-env`, 02:00 |
-| Contents | the whole `/userdata/` tree | `/userdata/pi-web-env` only |
-| Where | off-site S3 bucket | `${DATA_LOCATION}/backrest/repos/env` — the data disk |
-| Retention | 7 daily / 4 weekly / 4 monthly | 30 daily / 12 weekly / 12 monthly |
-| Password | `BACKREST_S3_REPO_PASSWORD`, **inside the `.env` it backs up** | `repos/env-repo-password`, next to the repository |
-
-The `s3` repository survives the house burning down but cannot hand `.env` back on its own: opening it requires `BACKREST_S3_REPO_PASSWORD`, and that value lives inside the file you would be trying to restore. The `usb` repository closes that loop for the far likelier failure — the root filesystem is gone, the data disk is fine — by keeping its password in cleartext on the same disk, in `env-repo-password` and again in the human-readable `env-RESTORE.txt`.
-
-That cleartext password is deliberate. The disk already holds every service's live data plus a cleartext `.env` under `backrest/env-snapshot/`, so a password kept elsewhere would buy no secrecy while making the repository unreadable in the exact scenario it exists for. Set `BACKREST_LOCAL_REPO_PASSWORD` in `.env` to override it and take that trade-off back.
-
-Both files are (re)written by `scripts/backrest-pre-start.sh`, which also adds the repository and its plan to an existing `config.json` if they are missing — so this is picked up by a plain `make restart` (or the next `make update`), not only by a fresh install.
-
-To restore from the data disk alone, on any machine with restic:
-
-```bash
-export RESTIC_PASSWORD="$(cat /mnt/usbdrive/backrest/repos/env-repo-password)"
-restic -r /mnt/usbdrive/backrest/repos/env snapshots
-restic -r /mnt/usbdrive/backrest/repos/env restore latest --target /tmp/env-restore
-# the file lands at /tmp/env-restore/userdata/pi-web-env/.env
-```
-
-The `usb-env` plan treats a failed `.env` copy as fatal (`ON_ERROR_FATAL`), unlike the `s3-backup` plan which ignores it. A plan whose entire contents is one file must alert rather than record a snapshot of yesterday's copy as if it were today's.
-
-#### The off-site half needs a key that is not on this machine
-
-Losing both the Pi and the data disk — fire, theft — leaves only `s3`, and opening it takes five values that exist nowhere else: the URI, the region, both S3 keys and the repository password. All five live on the root filesystem, in `.env` and `config/backrest/config.json`. That is the disk a fire takes, and without them the bucket is 240 GiB of unreadable ciphertext.
-
-Five values rather than the whole `.env`, because `.env` is *inside* the repository those five open. That is the useful part: `.env` changes on every rotation, while these five change almost never — which turns "sync a large mutable secret off-site" into "keep a few near-static strings on paper".
-
-```bash
-make recovery-kit
-```
-
-It reads them from `config/backrest/config.json` rather than `.env` — the file Backrest actually feeds to restic, so there is no second source to drift from it — and prints nothing until it has opened the live repository with them from a throwaway container with nothing mounted. A kit that has never been tested is a guess. Output goes to a `mktemp` file, never to stdout, so a terminal transcript never carries the values.
-
-You get two sheets to cut apart and store in **two different places**: sheet A the S3 access, sheet B the repository password. Neither reads the backup alone — but sheet A *can delete* it, since the key has `DeleteObject` and the bucket has no versioning, so the split protects confidentiality, not availability. Store both carefully, and never in Vaultwarden, which is itself restored *from* this repository. The pairing code is regenerated on every run, so after a rotation reprint and replace **both** halves.
-
-### The API holds the keys
-
-Backrest's API returns the restic repository password and the S3 access keys to any *authenticated* caller, so that login is worth exactly as much as the archive. Two things guard it.
-
-The image entrypoint (`config/backrest/auth-entrypoint.sh`) turns `BACKREST_AUTH_USER` / `BACKREST_AUTH_PASSWORD` into a bcrypt user in `config.json` on every start. The password is **not** `PASSWORD`: `scripts/backrest-pre-start.sh` generates a per-service one into `config/backrest/backrest.env`, because eight containers carry `PASSWORD` in their environment and a leak from any of them would otherwise reach every snapshot. Homepage's widget reads a copy from `config/homepage/secrets/backrest_password`. If the credential is missing and `config.json` defines no login, the entrypoint **refuses to start** rather than come up unprotected — one missed snapshot instead of an open archive.
-
-`pi-backrest` is also off `frontend`, on the dedicated `backup` network that only Traefik and Homepage join, so nothing else can open `:9898` in the first place — see [Networking](NETWORKING.md#network-isolation).
-
-The S3 key itself is still unrestricted, and the bucket has no versioning or object lock: whoever holds that key can delete every snapshot. Restricting it is a Scaleway-console change — see [Configuration](CONFIGURATION.md#backrest-restic-backups).
+Backrest's plans, the database hooks, the recovery kit and the full restore procedure are in [Backups & restore](BACKUP.md).
 
 ## Logs
 

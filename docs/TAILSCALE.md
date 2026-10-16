@@ -8,7 +8,7 @@ Headscale is a self-hosted Tailscale control plane. You get the official Tailsca
 | **headplane** | `https://headscale.<HOST_NAME>/admin` | Admin web UI — LAN-only, `admin` group, 2FA. Bare `https://headscale.<HOST_NAME>/` redirects here |
 | **tailscale** | The Pi's own node, on the host network | WireGuard on `41641/udp` |
 
-The Pi's node starts with `--advertise-exit-node --advertise-routes=${HOST_LAN_SUBNET} --ssh`, so exit-node use, LAN access and Tailscale SSH need nothing extra on the Pi — only approval and per-client enabling. `scripts/headscale-init.sh` runs on stack start: it creates the Headscale user, registers the Pi with a short-lived preauth key, and provisions Headplane's API key.
+The Pi's node starts with `--advertise-exit-node --advertise-routes=${HOST_LAN_SUBNET} --ssh`, so exit-node use, LAN access and Tailscale SSH need nothing extra on the Pi — only per-client enabling. `scripts/headscale-init.sh` runs on stack start: it creates the Headscale user, registers the Pi with a short-lived preauth key tagged `tag:router`, and provisions Headplane's API key. The policy's `autoApprovers` approve that tag's LAN and exit routes.
 
 ## Connecting a device
 
@@ -44,7 +44,7 @@ Revoke reusable keys if they leak — they allow registration with no interactiv
 - **Every service, by name, with valid TLS.** `https://nextcloud.<HOST_NAME>` works from a hotel Wi-Fi exactly as it does at home.
 - **Ad blocking everywhere.** All DNS goes to `100.64.0.1` — the Pi's tailnet IP — through the tunnel, so Pi-hole filters the device wherever it is. The client must accept DNS for this (`tailscale up --accept-dns=true`, or "Use Tailscale DNS" in the app — the default).
 - **MagicDNS names** under `tailnet.<HOST_NAME>`.
-- **The Pi as an exit node or LAN gateway.** It already advertises both; approve the routes once in Headplane (the Pi's node → routes), then per client:
+- **The Pi as an exit node or LAN gateway.** It already advertises both and the policy approves them; per client:
 
   ```bash
   tailscale set --exit-node <pi-tailnet-ip>   # route ALL traffic through home
@@ -55,20 +55,20 @@ Details of the DNS side: [Networking → DNS on the VPN](NETWORKING.md#dns-on-th
 
 ### The IPv6 half of the exit node
 
-`tailscaled` advertises `0.0.0.0/0` **and** `::/0`, but on this host it only ever installed the IPv4 netfilter chains — `iptables-legacy` carries `ts-input`, `ts-forward` and `ts-postrouting` while `ip6tables` carried none. Nothing complains: `tailscale status` looks right, the Pi's own IPv6 works, and a client using the exit node still reaches every v4 site. Only the AAAA-capable ones stall, because their packets leave the uplink with the client's `fd7a:115c:a1e0::/48` source intact and the first upstream router drops them. An `ip6tables -S` dump is the only place it shows.
+`tailscaled` advertises `0.0.0.0/0` **and** `::/0`, but in this setup it installs its netfilter chains (`ts-input`, `ts-forward`, `ts-postrouting`) for IPv4 only. Nothing complains — `tailscale status` looks right and a client using the exit node reaches every IPv4 site — but IPv6-capable sites stall, because the client's packets leave the uplink with their `fd7a:115c:a1e0::/48` source and are dropped upstream.
 
-`scripts/tailscale-post-start.sh` (a post-start hook, so it runs on every boot and every `make update`) mirrors the four v4 rules into the same backend `tailscaled` chose, with the address family translated and the WireGuard port read back off the v4 rule. It compares before it writes, so a run that finds the chains already in step changes nothing.
+`scripts/tailscale-post-start.sh` (a post-start hook, so it runs on every boot and every `make update`) mirrors the four IPv4 rules into the same backend `tailscaled` chose (`-legacy` or `-nft`), with the address family translated and the WireGuard port read off the IPv4 rule. It compares before it writes, so a run that finds the chains in step changes nothing. To check:
 
 ```bash
 sudo ip6tables-legacy -t filter -S ts-forward   # should mirror the -S of the v4 chain
 sudo ip6tables-legacy -t nat    -S ts-postrouting
 ```
 
-The mirror is a hardcoded copy of what `tailscaled` v1.102.3 installs. A version that starts managing IPv6 itself will not be left alone — its rules will differ and get overwritten — so re-check that script whenever the `tailscale/tailscale` image is bumped.
+The mirror is a hardcoded copy of the IPv4 rules, so a `tailscaled` that starts managing IPv6 itself would be overwritten rather than left alone: re-check the script whenever the `tailscale/tailscale` image is bumped.
 
 ## Managing users and devices
 
-Headplane at `https://headscale.<HOST_NAME>/admin` covers day-to-day work: viewing nodes, expiring keys, approving routes, editing ACLs. The CLI equivalents:
+Headplane at `https://headscale.<HOST_NAME>/admin` covers day-to-day work: viewing nodes, expiring keys, approving routes. The CLI equivalents:
 
 ```bash
 docker compose exec headscale headscale users list
@@ -77,7 +77,7 @@ docker compose exec headscale headscale nodes delete --identifier <node_id>
 make headscale-reset       # wipe ALL nodes, preauth keys and IP allocations — destructive
 ```
 
-ACLs use Headscale's HuJSON policy format, loaded from `config/headscale/policy.hujson` (`policy.mode: file`). The shipped policy is permissive; edit the file or use Headplane's ACL editor, then restart Headscale to restrict traffic between devices. Syntax: the [Headscale docs](https://headscale.net/).
+ACLs use Headscale's HuJSON policy format, loaded from `config/headscale/policy.hujson` (`policy.mode: file`). That file is rendered from `config/headscale/policy.hujson.template` by `scripts/headscale-pre-start.sh` on every start, so edits to it are overwritten: restrict traffic between devices in the template, then run `make update`. The shipped policy accepts all traffic. Syntax: the [Headscale docs](https://headscale.net/).
 
 ---
 
