@@ -154,7 +154,7 @@ services:
     <<: *service-defaults
     container_name: pi-immich
     profiles: ["immich-server", "all"]
-    image: ghcr.io/immich-app/immich-server:v3.3.1
+    image: ghcr.io/immich-app/immich-server:v3.3.3
     volumes:
       - ${DATA_LOCATION:-./data}/immich:/data
       - ${DATA_LOCATION:-./data}/authelia-config/immich-oauth-config.yaml:/immich-oauth-config.yaml:ro
@@ -576,7 +576,7 @@ services:
 
   element:
     <<: *service-defaults
-    image: ghcr.io/element-hq/element-web:v1.12.31@sha256:041550f9000bf31ab96a622e35c47d604a0e7c343da4e3c8f69f00638cd5adbe
+    image: ghcr.io/element-hq/element-web:v1.12.32@sha256:f8700633d4336258af7a05b53865a4f479e0d628cf2d9ca83d28b5939314d4ce
     container_name: pi-element
     # Started with tuwunel too: a homeserver with no web client is not the chat
     # anyone enabled.
@@ -625,7 +625,7 @@ services:
 
   n8n:
     <<: *service-defaults
-    image: n8nio/n8n:2.43.4
+    image: n8nio/n8n:2.43.6
     container_name: pi-n8n
     profiles: ["n8n", "n8n-runners", "all"]
     expose:
@@ -691,7 +691,7 @@ services:
 
   n8n-runners:
     <<: *service-defaults
-    image: n8nio/runners:2.43.4
+    image: n8nio/runners:2.43.6
     container_name: pi-n8n-runners
     profiles: ["n8n-runners", "all"]
     labels:
@@ -718,7 +718,7 @@ services:
 
   ntfy:
     <<: *service-defaults
-    image: binwiederhier/ntfy:v2.30.0
+    image: binwiederhier/ntfy:v2.31.0
     container_name: pi-ntfy
     command: serve
     networks:
