@@ -76,6 +76,7 @@ STUB
 cat >"$WORK/bin/make" <<'STUB'
 #!/bin/sh
 echo "make $* at $(git rev-parse HEAD)" >>"$CALLS"
+[ -z "${FAIL_CHECK_ENV:-}" ]
 STUB
 
 cat >"$WORK/bin/sleep" <<'STUB'
@@ -129,6 +130,10 @@ fresh_clone() {
     APP="$WORK/app$clones"
     git clone -q "$ORIGIN" "$APP"
     git -C "$APP" reset -q --hard "$BEFORE"
+}
+
+base_file() {
+    printf '%s/%s' "$APP" "$(git -C "$APP" rev-parse --git-path pi-pcloud-update-base)"
 }
 
 # Usage: run_update <update.sh argument, or ""> [NAME=value ...]
@@ -203,8 +208,10 @@ run_update "" UNIT_ACTIVE=1 CHANGED_ANSWER=kavita FAIL_RECREATE=1
 [ "$rc" -ne 0 ] && failed=yes || failed=no
 ok "a container that cannot be created fails the update" "$failed" yes
 lacks "  without claiming success" "$out" "✅"
-contains "  and prints the way back to the previous commit" "$out" \
+contains "  and says the new version may already run" "$out" "Host files and containers may already run"
+contains "  and prints the full way back to the previous commit" "$out" \
     "git reset --hard $BEFORE && make install-system && docker compose build && make restart"
+contains "  or to run it again" "$out" "run \`make update\` again: it resumes from"
 
 # --- image pulls -------------------------------------------------------------------
 
@@ -228,8 +235,66 @@ run_update "" UNIT_ACTIVE=1
 [ "$rc" -ne 0 ] && failed=yes || failed=no
 ok "a failed git pull fails the update" "$failed" yes
 contains "  and says so" "$out" "❌ Update failed."
-lacks "  with no way back to print, since nothing moved" "$out" "To go back"
+lacks "  with no way back to print, since nothing moved" "$out" "go back"
 ok "  and nothing after it ran" "$calls" ""
+ok "  and no start commit recorded for a resume" "$([ -e "$(base_file)" ] && echo recorded)" ""
+
+# --- running it again after a failure ------------------------------------------------
+#
+# The second run finds the pull already done. Without the recorded start it
+# would diff HEAD against HEAD and recreate nothing the first pull changed.
+
+fresh_clone
+run_update "" UNIT_ACTIVE=1 FAIL_CHECK_ENV=1
+[ "$rc" -ne 0 ] && failed=yes || failed=no
+ok "a check-env failure after the pull fails the update" "$failed" yes
+contains "  says nothing was applied" "$out" "Nothing was applied yet."
+contains "  and that running it again resumes" "$out" \
+    "run \`make update\` again: it resumes from $(git -C "$APP" rev-parse --short "$BEFORE")"
+contains "  with a way back that is only a reset" "$out" "↩ Or go back: git reset --hard $BEFORE"
+lacks "  and no restart" "$out" "make restart"
+ok "  and records where it started and how far it got" "$(cat "$(base_file)" 2>/dev/null)" "$BEFORE none"
+
+run_update "" UNIT_ACTIVE=1
+ok "running it again completes" "$rc" 0
+contains "  says it resumes" "$out" "resuming the update that failed"
+contains "  and still applies what the first pull changed" "$calls" "changed-services.sh $BEFORE HEAD"
+ok "  then forgets the start commit" "$([ -e "$(base_file)" ] && echo recorded)" ""
+
+fresh_clone
+run_update "" UNIT_ACTIVE=1 FAIL_BUILD=1
+contains "a failed image build says the running stack is untouched" "$out" \
+    "Nothing was applied to the running stack"
+contains "  and goes back with a rebuild, not a restart" "$out" \
+    "↩ Or go back: git reset --hard $BEFORE && docker compose build"
+lacks "  without a restart" "$out" "make restart"
+
+# A rerun that fails again before reaching as far as the first one still
+# reports what the first one applied.
+fresh_clone
+run_update "" UNIT_ACTIVE=1 CHANGED_ANSWER=kavita FAIL_RECREATE=1
+git -C "$APP" remote set-url origin "$WORK/no-such-origin"
+run_update "" UNIT_ACTIVE=1
+contains "a rerun whose pull fails keeps the first run's stage" "$out" \
+    "Host files and containers may already run"
+contains "  and its full way back" "$out" "make install-system && docker compose build && make restart"
+ok "  and keeps the record" "$(cat "$(base_file)" 2>/dev/null)" "$BEFORE host"
+
+# A record with no stage (a truncated write) assumes the worst.
+fresh_clone
+git -C "$APP" pull -q --ff-only
+printf '%s\n' "$BEFORE" >"$(base_file)"
+run_update "" UNIT_ACTIVE=1 FAIL_CHECK_ENV=1
+contains "a record without a stage counts as the worst" "$out" "Host files and containers may already run"
+
+# A start commit that is not behind HEAD any more - the checkout was reset
+# further back since - describes nothing here, and is ignored.
+fresh_clone
+printf '%s\n' "$AFTER" >"$(base_file)"
+run_update "" UNIT_ACTIVE=1
+ok "a start commit ahead of HEAD is ignored" "$rc" 0
+lacks "  with no resume announced" "$out" "resuming"
+contains "  and the range taken from HEAD as usual" "$calls" "changed-services.sh $BEFORE HEAD"
 
 # --- images only ---------------------------------------------------------------------
 
