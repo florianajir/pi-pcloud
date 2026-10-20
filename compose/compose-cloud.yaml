@@ -45,7 +45,7 @@ x-healthcheck-fast: &healthcheck-fast
 services:
   nextcloud:
     <<: *service-defaults
-    image: nextcloud:35.0.1-apache
+    image: nextcloud:35.0.2-apache
     container_name: pi-nextcloud
     profiles: ["nextcloud", "all"]
     environment:
