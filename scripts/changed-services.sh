@@ -24,7 +24,7 @@
 #   <service>    recreate exactly this one (already filtered to enabled ones)
 # and nothing at all when no running container has to be told about the change.
 #
-# Host-only, never mounted into a container, so sourcing lib.sh is fine here.
+# Host-only, never run inside a container, so sourcing lib.sh is fine here.
 
 set -eu
 

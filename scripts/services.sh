@@ -32,8 +32,8 @@
 # always passed to `docker compose up` explicitly so it never depends on
 # which .env compose happens to read.
 #
-# Host-only: this script is never mounted into containers, so sourcing
-# lib.sh is fine here (scripts that backrest mounts must not source it).
+# Host-only: this script never runs inside a container, so sourcing lib.sh is
+# fine here (backrest's snapshot hooks, which run inside it, must not source it).
 
 set -eu
 

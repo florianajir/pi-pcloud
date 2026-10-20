@@ -208,6 +208,17 @@ catches "a memswap_limit that silently disables swap" RESOURCE '{"services": {"s
   "image": "x:1", "mem_limit": "512m", "memswap_limit": "512m"
 }}}'
 
+# PER_INVOCATION recreates nothing, which is only true through a directory bind:
+# the path the checker compares is resolved, so the fixture's must be too.
+scripts_dir="$(cd "$REPO_DIR" && pwd -P)/scripts"
+catches "a PER_INVOCATION hook bound file by file" "RECREATE .*binds scripts/db-backup.sh file" \
+    "{\"services\": {\"backrest\": {\"image\": \"x:1\", \"volumes\": [
+  {\"type\": \"bind\", \"source\": \"$scripts_dir/db-backup.sh\", \"target\": \"/hooks/db-backup.sh\"}
+]}}}"
+
+catches "PER_INVOCATION hooks with no scripts/ directory bind" "RECREATE .*lists PER_INVOCATION" \
+    '{"services": {"backrest": {"image": "x:1"}}}'
+
 # LAYOUT reads the repository, not the render, so it takes a broken copy of the
 # repository rather than a broken JSON document: one anchor edited in one domain
 # file, which is exactly the drift the duplicated preamble invites.
