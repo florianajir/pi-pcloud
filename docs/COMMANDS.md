@@ -57,13 +57,13 @@ The command is a symlink to `scripts/pi-pcloud` inside the checkout, so `git pul
 
 ## What `make update` actually does
 
-In order: `git pull`, validate `.env` against the required-variable list (so a variable added upstream is caught before anything is applied), pull and rebuild the images, re-apply host files, apply in place, prune.
+It runs `scripts/update.sh`. In order: `git pull`, validate `.env` against the required-variable list (so a variable added upstream is caught before anything is applied), pull and rebuild the images, re-apply host files, apply in place, prune.
 
 **Images are refreshed while the stack runs.** It pulls only what `COMPOSE_PROFILES` selects, rebuilds the images built from `config/*/Dockerfile` against their updated bases, and finishes with `docker image prune -f` — dangling layers only. Expect several minutes on a Pi when base images have moved.
 
 **A failed pull is retried twice**, 20 s then 40 s later — in `make update-images` too — since a registry can rate-limit Compose's parallel pulls, and what the failed attempt fetched is already local. A third failure stops the update before anything is rebuilt or applied.
 
-**Host files are re-applied** through `make install-system`, because a pull can change what this repository copies outside itself: the systemd units, the sysctl drop-in, the swap size, the kernel command line, the shell completions. The `pi-pcloud` command needs no refresh — it is a symlink into the checkout.
+**Host files are re-applied** through `make install-system` (`scripts/install-system.sh`), because a pull can change what this repository copies outside itself: the systemd units, the sysctl drop-in, the swap size, the kernel command line, the shell completions. The `pi-pcloud` command needs no refresh — it is a symlink into the checkout.
 
 **It usually does not restart the stack.** The apply step is `scripts/stack-up.sh` — also `pi-pcloud.service`'s `ExecStart`, so an update re-runs exactly what boot runs: the pre-start hooks that render configuration, `docker compose up -d --remove-orphans`, then the bootstraps. `up -d` recreates only the containers whose image or spec changed; the rest are never touched.
 
@@ -79,7 +79,7 @@ These cases take the whole stack down:
 
 **It waits, and names what did not come up.** After the `up`, `stack-up.sh` polls `compose ps -a` until every container is running and healthy, or 300 s pass, then names the ones that are not; a container already `exited` is named straight away rather than waited for. It is a warning, never a failure: under systemd a failed `ExecStart` is followed by `ExecStop` — `docker compose down` — so one flaky service would take the whole stack down at boot.
 
-**Nothing here is atomic.** A failure after `git pull` leaves the checkout on the new commit, with the images pulled and the host files applied. There is no rollback; the failure message prints the way back — `git reset --hard <the previous commit> && make update`.
+**Nothing here is atomic.** A failure after `git pull` leaves the checkout on the new commit, and — depending on how far it got — the images pulled and rebuilt and the host files applied. There is no rollback; the failure message prints the way back, written for the worst case — `git reset --hard <the previous commit> && make install-system && docker compose build && make restart`: the previous host files, the previous locally built images, and a full restart so every container reads the previous configuration. Not `make update`, whose pull would move forward again.
 
 ### `make update-images`, the light one
 
