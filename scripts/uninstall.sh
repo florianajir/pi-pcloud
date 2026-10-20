@@ -1,11 +1,7 @@
 #!/bin/sh
 # `make uninstall`: remove the stack, its state and everything it installed on
-# the host, after an explicit "yes". The media libraries and .env are kept.
-#
-#   uninstall.sh           keep the media libraries
-#   uninstall.sh --purge   delete them too, after a second confirmation
-#
-# Both answers are asked before anything is removed.
+# the host, after an explicit "yes". The media libraries and .env are kept:
+# nothing a person put into the stack is deleted by it.
 #
 # Host-only, never mounted into a container, so sourcing lib.sh is fine here.
 
@@ -18,12 +14,7 @@ unset PROJECT_DIR ENV_FILE
 # shellcheck source=scripts/lib.sh disable=SC1091
 . "$(dirname "$0")/lib.sh"
 
-PURGE=0
-case "$*" in
-    "") ;;
-    --purge) PURGE=1 ;;
-    *) die "usage: $(basename "$0") [--purge]" ;;
-esac
+[ "$#" -eq 0 ] || die "takes no arguments (got: $*)"
 
 # What the services keep under DATA_LOCATION, split by who filled it: the stack
 # wrote the state and goes with it, a person filled the media libraries.
@@ -46,23 +37,8 @@ removable_root() {
 # root while the Postgres cluster, which follows it too, is gone.
 DATA_ROOT="$(removable_root "$(resolve_data_location_path)")" || DATA_ROOT=""
 
-if [ "$PURGE" -eq 1 ] && [ -z "$DATA_ROOT" ]; then
-    die "could not resolve the data root, so --purge cannot say what it would delete; nothing was removed"
-fi
-
-# Usage: ask <prompt> <expected answer>
-ask() {
-    local answer=""
-    printf '%s' "$1"
-    read -r answer || answer=""
-    if [ "$answer" != "$2" ]; then
-        echo "Aborted"
-        exit 1
-    fi
-}
-
 confirm() {
-    local dir="" file="" root="${DATA_ROOT:-<DATA_LOCATION>}"
+    local answer="" dir="" file="" root="${DATA_ROOT:-<DATA_LOCATION>}"
     echo "🗑️  Uninstalling pi-pcloud..."
     echo
     echo "⚠️  WARNING: This will remove:"
@@ -77,19 +53,14 @@ confirm() {
     done
     echo "   - The systemd units, sysctl drop-in, /etc/hosts record and pi-pcloud command"
     echo
-    if [ "$PURGE" -eq 0 ]; then
-        echo "   Kept: .env and the media libraries ($MEDIA_DIRS under $root)."
-        echo
+    echo "   Kept: .env and the media libraries ($MEDIA_DIRS under $root)."
+    echo
+    printf "Are you sure? Type 'yes' to confirm: "
+    read -r answer || answer=""
+    if [ "$answer" != "yes" ]; then
+        echo "Aborted"
+        exit 1
     fi
-    ask "Are you sure? Type 'yes' to confirm: " yes
-    [ "$PURGE" -eq 1 ] || return 0
-    echo
-    echo "🔥 --purge also deletes the media libraries:"
-    for dir in $MEDIA_DIRS; do
-        echo "   - $DATA_ROOT/$dir"
-    done
-    echo
-    ask "Type 'purge' to delete them as well: " purge
     echo
 }
 
@@ -133,11 +104,11 @@ remove_state() {
     done
 }
 
-remove_media() {
+report_kept_media() {
     local dir=""
-    echo "🔥 Removing the media libraries..."
+    echo "ℹ️  Media libraries kept - delete them by hand if you no longer want them:"
     for dir in $MEDIA_DIRS; do
-        $SUDO rm -rf "$DATA_ROOT/$dir"
+        echo "   - ${DATA_ROOT:-<DATA_LOCATION>}/$dir"
     done
 }
 
@@ -149,11 +120,7 @@ cd "$PROJECT_DIR"
 set +e
 run_script install-system.sh --remove
 remove_state
-[ "$PURGE" -eq 0 ] || remove_media
 echo "✅ Uninstall complete"
 echo
-if [ "$PURGE" -eq 0 ]; then
-    echo "ℹ️  Media libraries kept under ${DATA_ROOT:-<DATA_LOCATION>}: $MEDIA_DIRS"
-    echo "   \`make -C $PROJECT_DIR uninstall -- --purge\` deletes them too."
-fi
+report_kept_media
 echo "ℹ️  Note: .env file preserved. Remove manually if needed."

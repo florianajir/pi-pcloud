@@ -205,14 +205,6 @@ uninstall() {
         sh "$APP/scripts/uninstall.sh" 2>&1)" || rc=$?
 }
 
-# Usage: purge <answer>...  - one answer per prompt, in order
-purge() {
-    reset_records
-    rc=0
-    out="$(printf '%s\n' "$@" | env -u PROJECT_DIR -u ENV_FILE \
-        sh "$APP/scripts/uninstall.sh" --purge 2>&1)" || rc=$?
-}
-
 # Whole-line match: data/nextcloud-config contains data/nextcloud.
 removed() {
     if grep -qxF "$1" "$REMOVED"; then echo yes; else echo no; fi
@@ -253,7 +245,7 @@ ok "the state directories go" "$(removed "$APP/./data/lldap")" yes
 ok "  Nextcloud's config.php with them" "$(removed "$APP/./data/nextcloud-config")" yes
 contains "  the versioned Postgres cluster too" "$(cat "$REMOVED")" "$APP/./data/postgres18"
 ok "the media libraries stay" "$(media_removed "$APP/./data")" ""
-contains "  and the end of the run says where" "$out" "Media libraries kept under $APP/./data"
+contains "  and the end of the run lists them by path" "$out" "   - $APP/./data/immich"
 ok "nothing is removed outside the checkout's data and the host files" "$(removed_outside)" ""
 ok "the generated config goes" "$([ -e "$APP/config/headscale/config.yaml" ] || echo gone)" gone
 ok ".env stays" "$([ -f "$APP/.env" ] && echo kept)" kept
@@ -284,42 +276,14 @@ contains "a root that resolves to / is refused" "$out" "could not resolve the Po
 ok "  rather than expanded into /postgres*" \
     "$(removed_outside)" ""
 
-# --- uninstall --purge ------------------------------------------------------------------
-
-write_env
-
-purge yes purge
-ok "--purge with both answers uninstalls" "$rc" 0
-ok "  and deletes every media library" "$(media_removed "$APP/./data")" "$MEDIA_DIRS"
-ok "  along with the state" "$(removed "$APP/./data/lldap")" yes
-contains "  after listing them by their real path" "$out" "   - $APP/./data/immich"
-
-purge yes no
-[ "$rc" -ne 0 ] && failed=yes || failed=no
-ok "--purge without the second answer aborts" "$failed" yes
-ok "  before anything runs, the state included" "$(cat "$CALLS")" ""
-
-purge yes
-contains "--purge with no second answer at all aborts" "$out" "Aborted"
-ok "  before anything runs" "$(cat "$CALLS")" ""
-
-purge purge yes
-contains "the answers are not interchangeable" "$out" "Aborted"
-
-write_env
-printf 'DATA_LOCATION=/\n' >>"$APP/.env"
-purge yes purge
-[ "$rc" -ne 0 ] && failed=yes || failed=no
-ok "--purge refuses a data root it cannot resolve" "$failed" yes
-ok "  before asking or removing anything" "$(cat "$CALLS")" ""
-lacks "  so no prompt is shown" "$out" "Type 'yes'"
+# --- uninstall: no option deletes the media ------------------------------------------
 
 write_env
 reset_records
 rc=0
-out="$(printf 'yes\npurge\n' | env -u PROJECT_DIR -u ENV_FILE sh "$APP/scripts/uninstall.sh" purge 2>&1)" || rc=$?
+out="$(printf 'yes\n' | env -u PROJECT_DIR -u ENV_FILE sh "$APP/scripts/uninstall.sh" --purge 2>&1)" || rc=$?
 [ "$rc" -ne 0 ] && failed=yes || failed=no
-ok "a bare purge, without the dashes, is refused" "$failed" yes
+ok "an argument, --purge included, is refused" "$failed" yes
 ok "  before anything runs" "$(cat "$CALLS")" ""
 
 printf 'install-system-test.sh: %d passed, %d failed\n' "$pass" "$fail"

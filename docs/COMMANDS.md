@@ -8,7 +8,7 @@ pi-pcloud enable stremio     # same as `make enable stremio`
 pi-pcloud                    # the command list
 ```
 
-It is a thin dispatcher onto the Makefile — same output, same exit code, same arguments. Both forms take the service name positionally; `make` also accepts `s=<service>`. An argument starting with a dash needs `--` before it under `make`, which would otherwise read it as one of its own options — `make uninstall -- --purge`; `pi-pcloud uninstall --purge` adds the `--` itself. Tab completion covers the commands and, after `enable` / `disable`, the service names, in bash and zsh; open a new shell after installing.
+It is a thin dispatcher onto the Makefile — same output, same exit code, same arguments. Both forms take the service name positionally; `make` also accepts `s=<service>`. Tab completion covers the commands and, after `enable` / `disable`, the service names, in bash and zsh; open a new shell after installing.
 
 The command is a symlink to `scripts/pi-pcloud` inside the checkout, so `git pull` updates it. Point `PI_PCLOUD_DIR` at another checkout to change which one it drives.
 
@@ -25,8 +25,7 @@ The command is a symlink to `scripts/pi-pcloud` inside the checkout, so `git pul
 | `make update-images` | Images only: pull, rebuild, recreate just the containers whose image moved |
 | `make install-system` | Re-apply only what lives outside the repo: sysctl, swap size, kernel command line, `/etc/hosts`, systemd units, the `pi-pcloud` command and its completions |
 | `make pg-upgrade to=<image>` | Move the shared Postgres cluster to a new major (dump/restore). One step of a procedure — read [Postgres upgrades](POSTGRES-UPGRADE.md) first |
-| `make uninstall` | After a typed `yes`: remove the stack, its volumes, the state directories under `DATA_LOCATION` (`nextcloud-config`, `nextcloud-themes`, `n8n`, `lldap`, `authelia-config`), the Postgres cluster wherever `POSTGRES_DATA_LOCATION` puts it, the generated configs, and everything `make install-system` put on the host. `.env` and the media libraries — `nextcloud`, `immich`, `comics`, `manga`, `download` — are kept on disk, but the Nextcloud and Immich databases go with the cluster, so a reinstall does not list them until they are re-imported. Every other service directory under `DATA_LOCATION` is left in place, `--purge` included. **Destructive** |
-| `make uninstall -- --purge` | The same, and the media libraries too, after a second confirmation that lists them by path and asks you to type `purge`. Both answers are asked before anything is removed. **Destroys your files and photos** |
+| `make uninstall` | After a typed `yes`: remove the stack, its volumes, the state directories under `DATA_LOCATION` (`nextcloud-config`, `nextcloud-themes`, `n8n`, `lldap`, `authelia-config`), the Postgres cluster wherever `POSTGRES_DATA_LOCATION` puts it, the generated configs, and everything `make install-system` put on the host. `.env` and the media libraries — `nextcloud`, `immich`, `comics`, `manga`, `download` — are never deleted: the end of the run lists them by path, for you to remove by hand if you no longer want them. The Nextcloud and Immich databases do go with the cluster, so a reinstall does not list those files until they are re-imported. Every other service directory under `DATA_LOCATION` is left in place too. **Destructive** |
 
 ### Day to day
 

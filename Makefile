@@ -15,13 +15,11 @@ SUDO         := $(if $(filter 0,$(shell id -u)),,sudo)
 # A second word on the command line is an argument, not a target: `make enable
 # stremio` reads better than `make enable s=stremio`, and the pi-pcloud command
 # can then pass its own arguments straight through. The stub rule keeps make
-# from trying to build that word as a goal; s=<service> still works. A word
-# starting with a dash needs `--` before it, or make reads it as one of its own
-# options: `make uninstall -- --purge`. pi-pcloud adds the `--` itself.
-ifneq (,$(filter enable disable headscale-register uninstall,$(firstword $(MAKECMDGOALS))))
+# from trying to build that word as a goal; s=<service> still works.
+ifneq (,$(filter enable disable headscale-register,$(firstword $(MAKECMDGOALS))))
 GOAL_ARG := $(word 2,$(MAKECMDGOALS))
 # Refused while parsing: a third word has no rule, and make would only say so
-# after the first goal's recipe - an uninstall included - had already run.
+# after the first goal's recipe had already run.
 ifneq (,$(word 3,$(MAKECMDGOALS)))
 $(error $(firstword $(MAKECMDGOALS)) takes one argument, got: $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS)))
 endif
@@ -58,8 +56,8 @@ install: check-env install-system ## Install & enable systemd unit, start stack 
 install-system: ## Re-apply the host files only (sysctl, swap, kernel command line, /etc/hosts, units, command)
 	@sh scripts/install-system.sh
 
-uninstall: ## [--purge] | Remove the stack, its state and every host file, keeping media; --purge deletes media too (asks first)
-	@sh scripts/uninstall.sh "$(GOAL_ARG)"
+uninstall: ## Remove the stack, its state and every host file; the media libraries are kept (asks first)
+	@sh scripts/uninstall.sh
 
 start: ## Start stack
 	@echo "🚀 Starting pi-pcloud stack..."
