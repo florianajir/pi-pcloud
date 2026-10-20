@@ -58,9 +58,11 @@ project_dir() {
 DIR="$(project_dir)" || die "could not find the pi-pcloud checkout — set PI_PCLOUD_DIR=/path/to/pi-pcloud"
 [ -f "$DIR/Makefile" ] || die "$DIR is not a pi-pcloud checkout (no Makefile)"
 
-# Every command name comes from the Makefile, so this list cannot go stale.
+# The commands `make help` lists - every target carrying a `## ` description -
+# read from the Makefile, so this list cannot go stale and completion never
+# offers an internal target.
 list_commands() {
-    grep -oE '^[a-z][a-z0-9-]*:' "$DIR/Makefile" | tr -d ':' | sort -u
+    grep -E '^[a-z][a-z0-9-]*:.*## ' "$DIR/Makefile" | cut -d: -f1 | sort -u
 }
 
 # Service names for `enable`/`disable`, read straight out of compose.yaml

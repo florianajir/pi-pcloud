@@ -24,6 +24,9 @@ ok() {
     fi
 }
 
+# Kept for the help cases, which need the Makefile actually parsed.
+REAL_MAKE="$(command -v make)"
+
 # A make that reports what it was asked to do, and answers the dispatcher's
 # `make -n <target>` probe from a fixed list of known targets.
 mkdir -p "$WORK/bin"
@@ -83,6 +86,25 @@ esac
 case "$(cli --list-services | tr '\n' ' ')" in
     *stremio*) ok "services come from compose.yaml" yes yes ;;
     *) ok "services come from compose.yaml" "$(cli --list-services | tr '\n' ' ')" yes ;;
+esac
+case " $(cli --list-commands | tr '\n' ' ') " in
+    *" print-required-vars "*) ok "an internal target is not offered" offered "not offered" ;;
+    *) ok "an internal target is not offered" yes yes ;;
+esac
+
+# --- help covers every command ----------------------------------------------
+
+# `make help` is generated from the `## ` comment on each target, so a target
+# without one is a command help leaves out. print-required-vars is the one
+# exception: install.sh reads it, nobody types it.
+undocumented="$(grep -E '^[a-z][a-z0-9-]*:' "$REPO_DIR/Makefile" | grep -v '## ' |
+    cut -d: -f1 | grep -vx print-required-vars | tr '\n' ' ' || true)"
+ok "every command has a help line" "$undocumented" ""
+
+help="$("$REAL_MAKE" --no-print-directory -s -C "$REPO_DIR" help)"
+case "$help" in
+    *"rotate-secret TARGET=<name>  "*"check-secrets "*) ok "help lists commands with their arguments" yes yes ;;
+    *) ok "help lists commands with their arguments" "$help" "rotate-secret TARGET=<name> ... check-secrets" ;;
 esac
 
 # --- finding the checkout ---------------------------------------------------

@@ -17,7 +17,7 @@ Read the source, then the doc — not the other way around.
 |-----|---------------|
 | `README.md` | `compose/*.yaml` service list, `Makefile` targets |
 | `docs/README.md` | the set of files actually in `docs/` |
-| `docs/COMMANDS.md` | `Makefile` (targets, args, what each recipe actually runs), `scripts/update.sh`, `scripts/install-system.sh` |
+| `docs/COMMANDS.md` | `Makefile` (targets, args, what each recipe actually runs), `scripts/update.sh`, `scripts/install-system.sh`, `scripts/uninstall.sh` |
 | `docs/ARCHITECTURE.md` | `compose/*.yaml` (services) and `compose.yaml` (networks, volumes vs bind mounts), `${DATA_LOCATION}` layout |
 | `docs/INSTALLATION.md` | `.env.dist`, `Makefile` `REQUIRED_ENV_VARS` + `install` recipe, first-run bootstrap scripts |
 | `docs/CONFIGURATION.md` | `.env.dist`, compose `environment:` defaults (`${VAR:-default}`), the scripts a variable claims to drive |
