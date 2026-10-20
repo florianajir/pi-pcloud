@@ -253,7 +253,7 @@ contains "  and that running it again resumes" "$out" \
     "run \`make update\` again: it resumes from $(git -C "$APP" rev-parse --short "$BEFORE")"
 contains "  with a way back that is only a reset" "$out" "↩ Or go back: git reset --hard $BEFORE"
 lacks "  and no restart" "$out" "make restart"
-ok "  and records where it started" "$(cat "$(base_file)" 2>/dev/null)" "$BEFORE"
+ok "  and records where it started and how far it got" "$(cat "$(base_file)" 2>/dev/null)" "$BEFORE none"
 
 run_update "" UNIT_ACTIVE=1
 ok "running it again completes" "$rc" 0
@@ -268,6 +268,24 @@ contains "a failed image build says the running stack is untouched" "$out" \
 contains "  and goes back with a rebuild, not a restart" "$out" \
     "↩ Or go back: git reset --hard $BEFORE && docker compose build"
 lacks "  without a restart" "$out" "make restart"
+
+# A rerun that fails again before reaching as far as the first one still
+# reports what the first one applied.
+fresh_clone
+run_update "" UNIT_ACTIVE=1 CHANGED_ANSWER=kavita FAIL_RECREATE=1
+git -C "$APP" remote set-url origin "$WORK/no-such-origin"
+run_update "" UNIT_ACTIVE=1
+contains "a rerun whose pull fails keeps the first run's stage" "$out" \
+    "Host files and containers may already run"
+contains "  and its full way back" "$out" "make install-system && docker compose build && make restart"
+ok "  and keeps the record" "$(cat "$(base_file)" 2>/dev/null)" "$BEFORE host"
+
+# A record with no stage (a truncated write) assumes the worst.
+fresh_clone
+git -C "$APP" pull -q --ff-only
+printf '%s\n' "$BEFORE" >"$(base_file)"
+run_update "" UNIT_ACTIVE=1 FAIL_CHECK_ENV=1
+contains "a record without a stage counts as the worst" "$out" "Host files and containers may already run"
 
 # A start commit that is not behind HEAD any more - the checkout was reset
 # further back since - describes nothing here, and is ignored.

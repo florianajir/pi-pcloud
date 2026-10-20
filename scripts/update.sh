@@ -21,6 +21,7 @@ WATCH_UNIT=pi-pcloud-authelia-ntfy.service
 # containers may run the new version.
 UPDATE_BASE=""
 STAGE=none
+UPDATE_RECORD=""
 
 # Through make: the required-variable list lives in the Makefile, where
 # install.sh reads it too.
@@ -94,58 +95,68 @@ reclaim_space() {
     docker image prune -f | tail -n1
 }
 
-# Where a failed update leaves the commit it started from. The next run finds
-# the pull already done, so its own range would be empty and nothing the first
-# pull changed would be recreated; it reads this instead. Under .git: never
-# tracked, and kept until an update completes.
-update_base_file() {
-    git rev-parse --git-path pi-pcloud-update-base
+# An update that moved the checkout keeps its start commit and stage here until
+# it completes. The next run finds the pull already done, so its own range would
+# be empty and nothing the first pull changed would be recreated; it reads this
+# instead. Written at every step rather than from the failure trap, which a
+# hangup, an OOM kill or a power cut never runs. Under .git: never tracked.
+record_progress() {
+    [ "$UPDATE_BASE" != "$(git rev-parse HEAD)" ] || return 0
+    { printf '%s %s\n' "$UPDATE_BASE" "$STAGE" >"$UPDATE_RECORD"; } 2>/dev/null || return 1
+    fix_ownership "$UPDATE_RECORD"
 }
 
-# HEAD, or the start of an earlier update that failed past its pull - as long as
-# that commit is still behind HEAD. One that is not (the checkout was reset
-# further back since) describes nothing here any more.
-resolve_update_base() {
-    local head="" stored=""
+# A resumed run starts at the stage the failed one reached, so stages only move
+# forward from there.
+enter_stage() {
+    [ "$STAGE" = host ] || STAGE="$1"
+    record_progress || true
+}
+
+# Picks up an earlier update that failed past its pull, as long as its start
+# commit is still behind HEAD. One that is not (the checkout was reset since)
+# describes nothing here any more. A record without a stage counts as the worst.
+resume_failed_update() {
+    local head="" stored="" stored_stage=""
     head="$(git rev-parse HEAD)"
-    stored="$(cat "$(update_base_file)" 2>/dev/null || true)"
+    UPDATE_BASE="$head"
+    [ -f "$UPDATE_RECORD" ] || return 0
+    read -r stored stored_stage <"$UPDATE_RECORD" || true
     if [ -n "$stored" ] && [ "$stored" != "$head" ] &&
         git merge-base --is-ancestor "$stored" "$head" 2>/dev/null; then
-        printf '%s' "$stored"
-    else
-        printf '%s' "$head"
+        UPDATE_BASE="$stored"
+        STAGE="${stored_stage:-host}"
+        echo "  ↻ resuming the update that failed after pulling from $(git rev-parse --short "$UPDATE_BASE")"
     fi
-}
-
-remember_update_base() {
-    printf '%s\n' "$UPDATE_BASE" >"$(update_base_file)" 2>/dev/null || return 1
-    fix_ownership "$(update_base_file)"
 }
 
 # Nothing reverts a half-applied update. Running it again is the usual way out,
 # and resumes from UPDATE_BASE; going back costs only what the failed run had
 # already touched - never `make update`, whose pull would move forward again.
 explain_failure() {
-    local base=""
+    local base="" applied="" way_back=""
     echo "❌ Update failed."
     [ "$(git rev-parse HEAD)" != "$UPDATE_BASE" ] || return 0
     base="$(git rev-parse --short "$UPDATE_BASE")"
-    echo "   This checkout is on $(git rev-parse --short HEAD); the update started from $base."
     case "$STAGE" in
-        none) echo "   Nothing was applied yet." ;;
-        images) echo "   Nothing was applied to the running stack; locally built images may be rebuilt." ;;
-        *) echo "   Host files and containers may already run the new version." ;;
+        none)
+            applied="Nothing was applied yet."
+            way_back="git reset --hard $UPDATE_BASE" ;;
+        images)
+            applied="Nothing was applied to the running stack; locally built images may be rebuilt."
+            way_back="git reset --hard $UPDATE_BASE && docker compose build" ;;
+        *)
+            applied="Host files and containers may already run the new version."
+            way_back="git reset --hard $UPDATE_BASE && make install-system && docker compose build && make restart" ;;
     esac
-    if remember_update_base; then
+    echo "   This checkout is on $(git rev-parse --short HEAD); the update started from $base."
+    echo "   $applied"
+    if record_progress; then
         echo "   ↻ Fix the cause above and run \`make update\` again: it resumes from $base."
     else
-        echo "   ⚠ Could not record $base for the next run: after fixing the cause, run \`make restart\`."
+        echo "   ⚠ Could not record $base for the next run: after fixing the cause, run \`make update\`, then \`make restart\`."
     fi
-    case "$STAGE" in
-        none) echo "   ↩ Or go back: git reset --hard $UPDATE_BASE" ;;
-        images) echo "   ↩ Or go back: git reset --hard $UPDATE_BASE && docker compose build" ;;
-        *) echo "   ↩ Or go back: git reset --hard $UPDATE_BASE && make install-system && docker compose build && make restart" ;;
-    esac
+    echo "   ↩ Or go back: $way_back"
 }
 
 update_from_repository() {
@@ -153,21 +164,20 @@ update_from_repository() {
     echo "🔄 Updating pi-pcloud..."
     branch="$(git rev-parse --abbrev-ref HEAD)"
     [ "$branch" = main ] || echo "  ⚠ on branch $branch, not main"
-    UPDATE_BASE="$(resolve_update_base)"
-    if [ "$UPDATE_BASE" != "$(git rev-parse HEAD)" ]; then
-        echo "  ↻ resuming the update that failed after pulling from $(git rev-parse --short "$UPDATE_BASE")"
-    fi
+    UPDATE_RECORD="$(git rev-parse --git-path pi-pcloud-update-base)"
+    resume_failed_update
     trap explain_failure EXIT
     # dash skips the EXIT trap when a signal kills it: a Ctrl-C during the long
     # image pull would otherwise leave the moved checkout with no way back.
     trap 'exit 1' INT TERM
     echo "📥 Repository..."
     git pull --ff-only
+    record_progress || true
     check_env
     echo "📦 Images (the stack keeps running)..."
-    STAGE=images
+    enter_stage images
     refresh_images
-    STAGE=host
+    enter_stage host
     run_script install-system.sh
     # The watcher runs on the host, outside compose, so nothing above picks up a
     # change to its script. try-restart leaves it alone when it is not running.
@@ -175,7 +185,7 @@ update_from_repository() {
     apply_pulled_changes
     reclaim_space
     trap - EXIT
-    rm -f "$(update_base_file)"
+    rm -f "$UPDATE_RECORD"
     echo "✅ Update complete"
 }
 
