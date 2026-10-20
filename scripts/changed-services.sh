@@ -75,7 +75,9 @@ SHARED_START_PATH='lib.sh pilib.py run-hooks.sh run-if-enabled.sh stack-up.sh'
 # on the host as pi-pcloud-authelia-ntfy.service, which `make update` restarts
 # itself two lines before calling this. Without the entry, the prefix rule reads
 # it as Authelia's and recreates the identity provider for a host watcher.
-# uptime-kuma-watchdog.sh is the same case, run fresh by its timer each time.
+# uptime-kuma-watchdog.sh is the same case, run fresh by its timer each time,
+# and so is headscale-nodes.sh: the operator's command for headscale's CLI, run
+# on demand, which the prefix rule would otherwise read as headscale's config.
 #
 # changed-services.sh is this file. By the time it answers, the pull that
 # rewrote it has already happened and the new version is the one running.
@@ -84,11 +86,12 @@ SHARED_START_PATH='lib.sh pilib.py run-hooks.sh run-if-enabled.sh stack-up.sh'
 # fall to the ALL fallback below, which is correct but wasteful, and they are
 # common. Keeping it honest is tests/compose-invariants.py's job - it fails the
 # build on any scripts/ file that is neither owned by a service nor named here.
-HOST_ONLY='api-keys.sh authelia-ntfy-watch.sh changed-services.sh
-configure-kernel-params.sh configure-swap.sh install-system.sh lint.sh
-pg-major-upgrade.sh pi-pcloud ram-usage.sh recovery-kit.sh rotate-password.sh
-rotate-secret.sh sarif-merge.py services.sh services-picker.py uninstall.sh
-update.sh wan-allowlist-sync.sh openclaw-sync.py uptime-kuma-watchdog.sh'
+HOST_ONLY='api-keys.sh authelia-ntfy-watch.sh changed-services.sh check-env.sh
+check-secrets.sh configure-kernel-params.sh configure-swap.sh doctor.sh
+headscale-nodes.sh install-system.sh lint.sh pg-major-upgrade.sh pi-pcloud
+preflight.sh ram-usage.sh recovery-kit.sh rotate-password.sh rotate-secret.sh
+sarif-merge.py services.sh services-picker.py uninstall.sh update.sh
+wan-allowlist-sync.sh openclaw-sync.py uptime-kuma-watchdog.sh'
 
 # config/ files a container reads only while it initialises for the first time,
 # spelled as the path under config/. config/postgres/init-databases.sh is

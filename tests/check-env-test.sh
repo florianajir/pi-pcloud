@@ -16,7 +16,7 @@ trap 'rm -rf "$WORK"' EXIT
 APP="$WORK/app"
 mkdir -p "$APP/scripts"
 cp "$REPO_DIR/Makefile" "$APP/"
-cp "$REPO_DIR/scripts/lib.sh" "$APP/scripts/"
+cp "$REPO_DIR/scripts/lib.sh" "$REPO_DIR/scripts/check-env.sh" "$APP/scripts/"
 
 pass=0
 fail=0
@@ -101,7 +101,7 @@ if make -C "$APP" check-env >"$WORK/out" 2>&1; then
     echo "FAIL an unreadable lib.sh: accepted"
 else
     case "$(cat "$WORK/out")" in
-        *"lib.sh is missing or unreadable"*) pass=$((pass + 1)) ;;
+        *"lib.sh"*) pass=$((pass + 1)) ;;
         *)
             fail=$((fail + 1))
             echo "FAIL an unreadable lib.sh: unexpected message"

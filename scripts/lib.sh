@@ -41,14 +41,14 @@ fi
 # leading/trailing whitespace is trimmed — while these scripts read .env
 # verbatim (read_env_value_from_file below), so any of those would hand the
 # services and the scripts two different values. install.sh refuses them at
-# the prompt and the Makefile's check-env re-checks the file; both call this
+# the prompt and scripts/check-env.sh re-checks the file; both call this
 # function so the two cannot drift. A mid-value backslash is fine (Compose
 # passes it through verbatim), only a trailing one escapes the newline.
 # Newlines can only arrive from a pre-exported value; ENV_LF is a literal
 # newline because $(...) strips trailing ones.
 ENV_LF='
 '
-# shellcheck disable=SC2034 # read by install.sh and the Makefile's check-env
+# shellcheck disable=SC2034 # read by install.sh and scripts/check-env.sh
 ENV_VALUE_RULES="must not contain '\$', a newline or ' #', must not end with '\\', and must not start or end with a quote or whitespace (Docker Compose's .env parser mangles these)"
 
 # shellcheck disable=SC1003 # '\' is a literal backslash pattern, not an escaped quote
