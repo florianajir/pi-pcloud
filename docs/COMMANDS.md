@@ -79,7 +79,10 @@ These cases take the whole stack down:
 
 **It waits, and names what did not come up.** After the `up`, `stack-up.sh` polls `compose ps -a` until every container is running and healthy, or 300 s pass, then names the ones that are not; a container already `exited` is named straight away rather than waited for. It is a warning, never a failure: under systemd a failed `ExecStart` is followed by `ExecStop` — `docker compose down` — so one flaky service would take the whole stack down at boot.
 
-**Nothing here is atomic.** A failure after `git pull` leaves the checkout on the new commit, and — depending on how far it got — the images pulled and rebuilt and the host files applied. There is no rollback; the failure message prints the way back, written for the worst case — `git reset --hard <the previous commit> && make install-system && docker compose build && make restart`: the previous host files, the previous locally built images, and a full restart so every container reads the previous configuration. Not `make update`, whose pull would move forward again.
+**Nothing here is atomic.** A failure after `git pull` leaves the checkout on the new commit, and — depending on how far it got — the images pulled and rebuilt and the host files applied. There is no rollback. The failure message says how far it got and offers two ways out:
+
+- **Fix the cause and run `make update` again** — the usual one, after a `.env` variable added upstream, say. The failed run records the commit it started from under `.git/`, and the next run resumes from it: its own pull finds nothing new, so without it nothing the first pull changed would be recreated. The record is dropped once an update completes, and ignored if the checkout has since been reset behind it.
+- **Go back**, with only what the failed run touched: `git reset --hard <the previous commit>` when it stopped before the images, plus `docker compose build` when it stopped while building them, plus `make install-system` and `make restart` once host files and containers may run the new version. Not `make update`, whose pull would move forward again.
 
 ### `make update-images`, the light one
 
