@@ -1,13 +1,9 @@
-.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-apply update-images status logs doctor preflight check-env print-required-vars test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit api-keys
+.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env print-required-vars test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit api-keys
 
 REQUIRED_ENV_VARS := HOST_NAME TIMEZONE EMAIL ADMIN_USER PASSWORD HOST_LAN_IP CLOUDFLARE_DNS_API_TOKEN CLOUDFLARE_ZONE_ID
 
 MAKEFLAGS += --no-print-directory
 
-PROJECT_PATH := $(shell pwd)
-# Immediate assignment: make expands it while reading this file, before any
-# recipe runs — so `update` can diff it against HEAD after its own `git pull`.
-HEAD_BEFORE_PULL := $(shell git rev-parse HEAD 2>/dev/null)
 UNIT         := pi-pcloud.service
 WATCH_UNIT   := pi-pcloud-authelia-ntfy.service
 WAN_UNIT     := pi-pcloud-wan-allowlist.service
@@ -30,8 +26,7 @@ LIB_SH = if [ ! -r scripts/lib.sh ]; then \
          export PROJECT_DIR ENV_FILE SCRIPT_NAME; \
          . scripts/lib.sh >/dev/null 2>&1
 
-# The pi-pcloud command and its completions. /usr/local/bin is on PATH for both
-# users and sudo; the completion directories are Debian's own.
+# What scripts/install-system.sh installs outside the repository, for uninstall.
 BIN_LINK        := /usr/local/bin/pi-pcloud
 BASH_COMPLETION := /usr/share/bash-completion/completions/pi-pcloud
 ZSH_COMPLETION  := /usr/share/zsh/vendor-completions/_pi-pcloud
@@ -77,7 +72,7 @@ help:
 	@echo "  headscale-register <key> Register a headscale node"
 	@echo "  headscale-reset  Reset all Headscale nodes, preauth keys, and IP allocations"
 	@echo "  check-env        Validate required .env variables"
-	@echo "  test             Run every suite: installer, check-env, CLI, services, memory readings, start sequence, compose invariants, routing and SARIF merge (no host changes)"
+	@echo "  test             Run every suite: installer, check-env, CLI, services, memory readings, start sequence, update sequence, compose invariants, routing and SARIF merge (no host changes)"
 	@echo "  smoke            Probe the running stack through Traefik: every router loaded, LAN admitted, outside refused"
 	@echo "  lint             Run every static check CI runs (shell, YAML, Python, Dockerfiles, workflows, secrets, docs)"
 	@echo "  pg-upgrade to=<image> Migrate Postgres to a new major (dump/restore, old data kept)"
@@ -123,6 +118,7 @@ test:
 	@sh tests/ram-usage-test.sh
 	@sh tests/stack-up-test.sh
 	@sh tests/changed-services-test.sh
+	@sh tests/update-test.sh
 	@sh tests/uptime-kuma-watchdog-test.sh
 	@sh tests/compose-test.sh
 	@sh tests/trilium-api-contract.sh
@@ -168,75 +164,8 @@ install: check-env install-system
 	fi
 	@echo "✅ Installation complete"
 
-# Everything this repository installs outside itself: sysctl, the /etc/hosts
-# records, the systemd units (rendered with this checkout's path) and the
-# pi-pcloud command. Split out of `install` so `update` can re-apply it after
-# a pull: these are copies, so a unit or a completion changed upstream would
-# otherwise sit stale on the host until the next install. Every step is
-# idempotent. The command itself is a symlink into the checkout and needs no
-# refresh, unlike the completions beside it.
 install-system:
-	@echo "📦 Installing system files..."
-	@echo "🧰 Applying host sysctl settings..."
-	$(SUDO) cp config/sysctl.d/pi-pcloud.conf /etc/sysctl.d/99-pi-pcloud.conf
-	$(SUDO) $(SYSCTL) --system >/dev/null
-	@echo "💽 Sizing host swap..."
-	@# Best-effort: a host that cannot take a bigger swap file is not a failed
-	@# install. The script says why and leaves the size to the next reboot.
-	@./scripts/configure-swap.sh || echo "  ⚠ swap sizing skipped"
-	@echo "🐧 Applying kernel command-line parameters..."
-	@# Also best-effort, and never blocking: everything here is a diagnostic or
-	@# a performance setting that a reboot picks up, not a prerequisite.
-	@./scripts/configure-kernel-params.sh || echo "  ⚠ kernel parameters skipped"
-	@echo "🌐 Adding local DNS overrides to /etc/hosts..."
-	@# Read through lib.sh, like check-env above: a third copy of the .env
-	@# reader here would drift from the one install.sh and the scripts use.
-	@$(LIB_SH); \
-	command -v read_env_value_from_file >/dev/null 2>&1 || { echo "❌ scripts/lib.sh did not define read_env_value_from_file"; exit 1; }; \
-	HOST_NAME_VAL=$$(read_env_value_from_file .env HOST_NAME); \
-	HOST_LAN_IP_VAL=$$(read_env_value_from_file .env HOST_LAN_IP); \
-	if [ -n "$$HOST_NAME_VAL" ] && [ -n "$$HOST_LAN_IP_VAL" ]; then \
-		$(SUDO) sed -i "/# pi-pcloud local overrides/,/# end pi-pcloud local overrides/d" /etc/hosts; \
-		printf "# pi-pcloud local overrides\n%s\theadscale.%s\n# end pi-pcloud local overrides\n" "$$HOST_LAN_IP_VAL" "$$HOST_NAME_VAL" | $(SUDO) tee -a /etc/hosts >/dev/null; \
-		echo "  ✔ headscale.$$HOST_NAME_VAL -> $$HOST_LAN_IP_VAL"; \
-	else \
-		echo "  ⚠ HOST_NAME or HOST_LAN_IP not set, skipping"; \
-	fi
-	@# Rendered through mktemp rather than a predictable /tmp path: any other
-	@# local account could pre-create /tmp/<unit> as a symlink it controls and
-	@# have its own ExecStart installed as a root unit by the sudo below.
-	@# mktemp also keeps the destination untouched if the render fails.
-	@set -e; \
-	rendered=$$(mktemp); \
-	trap 'rm -f "$$rendered"' EXIT INT TERM; \
-	$(LIB_SH); \
-	LAN_PARENT_VAL=$$(unquote_env_value "$$(read_env_value_from_file .env HOST_LAN_PARENT)"); \
-	LAN_PARENT_VAL=$${LAN_PARENT_VAL:-eth0}; \
-	for unit in $(UNIT) $(WATCH_UNIT) $(WAN_UNIT) nextcloud-cron.service tuwunel-backup.service openclaw-sync.service pi-pcloud-kuma-watchdog.service; do \
-		sed -e 's|__PROJECT_PATH__|$(PROJECT_PATH)|g' \
-		    -e "s|__HOST_LAN_PARENT__|$$(sed_escape "$$LAN_PARENT_VAL")|g" \
-		    "config/systemd/system/$$unit" > "$$rendered"; \
-		$(SUDO) install -m 644 -o root -g root "$$rendered" "/etc/systemd/system/$$unit"; \
-	done
-	$(SUDO) cp config/systemd/system/nextcloud-cron.timer /etc/systemd/system/
-	$(SUDO) cp config/systemd/system/pi-pcloud-wan-allowlist.timer /etc/systemd/system/
-	$(SUDO) cp config/systemd/system/tuwunel-backup.timer /etc/systemd/system/
-	$(SUDO) cp config/systemd/system/openclaw-sync.timer /etc/systemd/system/
-	$(SUDO) cp config/systemd/system/pi-pcloud-kuma-watchdog.timer /etc/systemd/system/
-	$(SUDO) systemctl daemon-reload
-	$(SUDO) systemctl enable $(UNIT) $(WATCH_UNIT)
-# --now on the timers: `enable` alone arms them for the next boot only, so a
-# fresh install waits until then for the first run.
-	$(SUDO) systemctl enable --now nextcloud-cron.timer pi-pcloud-wan-allowlist.timer tuwunel-backup.timer openclaw-sync.timer pi-pcloud-kuma-watchdog.timer
-	@echo "✅ Systemd units installed"
-	@echo "🔗 Installing the pi-pcloud command..."
-# A symlink, not a copy: the command follows this checkout, so a git pull
-# updates it and there is no rendered duplicate to drift.
-	$(SUDO) ln -sfn $(PROJECT_PATH)/scripts/pi-pcloud $(BIN_LINK)
-	$(SUDO) mkdir -p $(dir $(BASH_COMPLETION)) $(dir $(ZSH_COMPLETION))
-	$(SUDO) cp config/completion/pi-pcloud.bash $(BASH_COMPLETION)
-	$(SUDO) cp config/completion/_pi-pcloud $(ZSH_COMPLETION)
-	@echo "✅ pi-pcloud available on PATH (new shells get completion)"
+	@sh scripts/install-system.sh
 
 uninstall:
 	@echo "🗑️  Uninstalling pi-pcloud..."
@@ -335,137 +264,11 @@ stop:
 
 restart: stop start
 
-# Apply in place: `up -d` recreates only the containers whose image or spec
-# moved, so one new image no longer costs a full-stack restart. Through systemd
-# when the unit is inactive, so the stack never runs behind an `inactive` unit;
-# directly otherwise, since `start` on an already-active oneshot is a no-op.
-# Root either way: the hooks write root-owned config, and headscale's leaves
-# orphan API keys when run as a user.
-define apply_stack
-if $(SUDO) systemctl is-active --quiet $(UNIT); then \
-	$(SUDO) sh scripts/stack-up.sh; \
-else \
-	$(SUDO) systemctl start $(UNIT); \
-fi
-endef
-
-# Compose pulls every image at once, and GHCR (lscr.io included) answers that
-# burst with `toomanyrequests ... allowed: 44000/minute` for a dozen images at a
-# time. Its retry-after is under a millisecond, and every image the failed
-# attempt did fetch is local by the next one, so a retry asks for far less.
-# Same three attempts as CI's pull step.
-define pull_images
-for attempt in 1 2 3; do \
-	$(COMPOSE) pull --ignore-buildable && break; \
-	[ "$$attempt" -lt 3 ] || { echo "❌ Image pull failed after 3 attempts"; exit 1; }; \
-	echo "  ⚠ pull attempt $$attempt/3 failed; retrying in $$((attempt * 20))s..."; \
-	sleep $$((attempt * 20)); \
-done
-endef
-
-# A wrapper around update-apply so a failure can say how to get back. Every step
-# after `git pull` runs against a repository that has already moved, and nothing
-# reverts it - the images are pulled, the host files applied, the containers
-# recreated, and a broken one of those leaves the checkout on the new commit
-# with no hint that `git reset --hard` is the way out.
-#
-# HEAD_BEFORE_PULL is passed down explicitly: the sub-make parses *after* the
-# pull has run, where the $(shell git rev-parse HEAD) that computes it already
-# reads the new commit.
 update:
-	@$(MAKE) update-apply HEAD_BEFORE_PULL=$(HEAD_BEFORE_PULL) || { \
-		echo "❌ Update failed."; \
-		if [ -n "$(HEAD_BEFORE_PULL)" ] && [ "$$(git rev-parse HEAD)" != "$(HEAD_BEFORE_PULL)" ]; then \
-			echo "   The pull already moved this checkout to $$(git rev-parse --short HEAD)."; \
-			echo "   ↩ To go back: git reset --hard $(HEAD_BEFORE_PULL) && make update"; \
-		fi; \
-		exit 1; \
-	}
+	@sh scripts/update.sh
 
-# Images are refreshed while the stack runs, so nothing is interrupted until
-# compose swaps the containers that actually have a new image. `pull` covers
-# what COMPOSE_PROFILES selects and skips the images built here, which
-# `build --pull` rebuilds against their updated bases. The final prune only
-# touches dangling layers, never one a container still references.
-update-apply:
-	@echo "🔄 Updating pi-pcloud..."
-	@branch=$$(git rev-parse --abbrev-ref HEAD); 	if [ "$$branch" != "main" ]; then echo "  ⚠ on branch $$branch, not main"; fi
-	@echo "📥 Repository..."
-	@git pull --ff-only
-	$(MAKE) check-env
-	@echo "📦 Images (the stack keeps running)..."
-	@$(pull_images)
-	@echo "🔨 Locally built images..."
-	@$(COMPOSE) build --pull
-	$(MAKE) install-system
-# The watcher runs on the host, outside compose, so nothing above picks up a
-# change to its script. try-restart leaves it alone when it is not running.
-	@$(SUDO) systemctl try-restart $(WATCH_UNIT)
-# `up -d` compares a container's image and spec, not the contents of the files
-# bind-mounted into it, so a config the pull rewrote would sit on disk unread.
-# That is the one case where the old down/up did necessary work - but it did it
-# for the whole stack, and more than half of all pulls touch config/ or
-# scripts/. changed-services.sh names the services that actually read what
-# changed; only a path it cannot attribute still costs a full restart.
-# (A config edited by hand is still `make restart`; the diff cannot see it.)
-#
-# The targeted recreate runs after $(apply_stack), because the pre-start hooks
-# inside it are what render the new config, and stack-up.sh deliberately takes
-# no arguments so boot and update cannot ask for different starts. Its
-# bootstraps therefore run against the containers about to be replaced - they
-# are idempotent and configure through each service's own API, so what they
-# write survives the recreate.
-#
-# That also puts the recreate *after* stack-up.sh's health wait, so the wait
-# below is what keeps the success line honest: without it an update whose whole
-# point was a new config prints ✅ over a container still crash-looping on it.
-# `--wait` is safe on this side - unlike inside stack-up.sh, nothing here is a
-# systemd ExecStart whose failure would be followed by `compose down`.
-#
-# Recreate and wait are two calls because one `--wait` invocation returns the
-# same status for a container compose could not create at all and one that is
-# merely slow. The first is a failed update and stops here; the second is a
-# warning, since a slow healthcheck is not a broken update. The second call
-# recreates nothing - the spec has not moved - it only waits.
-#
-# `|| exit 1` on $(apply_stack): it is no longer the recipe's last command, and
-# without it a stack-up.sh that died took the ✅ below with it, silently.
-#
-# `systemctl restart`, not `$(MAKE) restart`: make runs any recipe line
-# mentioning $(MAKE) even under `--dry-run`.
-	@targets=$$(if [ -n "$(HEAD_BEFORE_PULL)" ]; then \
-		/bin/sh scripts/changed-services.sh $(HEAD_BEFORE_PULL) HEAD || echo ALL; \
-	else echo ALL; fi); \
-	if [ "$$targets" = ALL ]; then \
-		echo "🔁 The pull changed something no single service owns; restarting the stack..."; \
-		$(SUDO) systemctl restart $(UNIT); \
-	else \
-		echo "🚀 Applying changes (only what moved is recreated)..."; \
-		$(apply_stack) || exit 1; \
-		if [ -n "$$targets" ]; then \
-			echo "🔁 Re-reading changed config:" $$targets; \
-			$(SUDO) $(COMPOSE) up -d --no-deps --force-recreate $$targets || exit 1; \
-			$(SUDO) $(COMPOSE) up -d --no-deps --wait --wait-timeout 180 $$targets \
-				|| echo "  ⚠ recreated, but not healthy within 180s:" $$targets; \
-		fi; \
-	fi
-	@echo "🧹 Reclaiming space from the replaced images..."
-	@docker image prune -f | tail -n1
-	@echo "✅ Update complete"
-
-# `make update` minus everything that needs the repository to have moved: no
-# pull, no host files. For when only the pinned images are stale.
 update-images:
-	@echo "📦 Updating images (the stack keeps running)..."
-	$(MAKE) check-env
-	@$(pull_images)
-	@echo "🔨 Locally built images..."
-	@$(COMPOSE) build --pull
-	@echo "🚀 Recreating the containers whose image moved..."
-	@$(apply_stack)
-	@echo "🧹 Reclaiming space from the replaced images..."
-	@docker image prune -f | tail -n1
-	@echo "✅ Images up to date"
+	@sh scripts/update.sh --images
 
 status:
 	@echo "📊 Status"

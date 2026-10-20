@@ -76,9 +76,9 @@ SHARED_START_PATH='lib.sh pilib.py run-hooks.sh run-if-enabled.sh stack-up.sh'
 # to backrest rather than exempt them.
 PER_INVOCATION='db-backup.sh sqlite-backup.sh'
 
-# Host-side tooling: operator commands, CI helpers, and the two install-system
-# steps. None is mounted into a container, none renders a file a container
-# reads, so their contents changing obliges no recreate at all.
+# Host-side tooling: operator commands, CI helpers, and install-system.sh with
+# its two steps. None is mounted into a container, none renders a file a
+# container reads, so their contents changing obliges no recreate at all.
 #
 # rotate-password.sh and rotate-secret.sh do rewrite secrets containers read -
 # but only when *run*, and they restart what they touch themselves. Editing
@@ -99,10 +99,10 @@ PER_INVOCATION='db-backup.sh sqlite-backup.sh'
 # common. Keeping it honest is tests/compose-invariants.py's job - it fails the
 # build on any scripts/ file that is neither owned by a service nor named here.
 HOST_ONLY='api-keys.sh authelia-ntfy-watch.sh changed-services.sh
-configure-kernel-params.sh configure-swap.sh lint.sh pg-major-upgrade.sh
-pi-pcloud ram-usage.sh recovery-kit.sh rotate-password.sh rotate-secret.sh
-sarif-merge.py services.sh services-picker.py wan-allowlist-sync.sh
-openclaw-sync.py uptime-kuma-watchdog.sh'
+configure-kernel-params.sh configure-swap.sh install-system.sh lint.sh
+pg-major-upgrade.sh pi-pcloud ram-usage.sh recovery-kit.sh rotate-password.sh
+rotate-secret.sh sarif-merge.py services.sh services-picker.py update.sh
+wan-allowlist-sync.sh openclaw-sync.py uptime-kuma-watchdog.sh'
 
 # config/ files a container reads only while it initialises for the first time,
 # spelled as the path under config/. config/postgres/init-databases.sh is
