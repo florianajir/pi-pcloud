@@ -2,11 +2,14 @@
 # `make preflight`, after check-env: can this host run the stack at all -
 # Docker reachable, memory limits enforced, IPv6 in the kernel.
 #
-# Host-only, never mounted into a container.
+# Host-only, never mounted into a container, so sourcing lib.sh is fine here.
 
 set -eu
 
-[ "$#" -eq 0 ] || { echo "preflight.sh: takes no arguments (got: $*)" >&2; exit 1; }
+# shellcheck source=scripts/lib.sh disable=SC1091
+. "$(dirname "$0")/lib.sh"
+
+[ "$#" -eq 0 ] || die "takes no arguments (got: $*)"
 
 PROBE_IMAGE='busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0'
 

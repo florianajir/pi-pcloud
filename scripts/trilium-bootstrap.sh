@@ -211,7 +211,7 @@ mint_etapi_token() {
 refresh_agentgateway() {
     container_is_running "pi-agentgateway" || return 0
 
-    sh "$SCRIPT_DIR/agentgateway-pre-start.sh" >/dev/null 2>&1 \
+    run_script agentgateway-pre-start.sh >/dev/null 2>&1 \
         || { log "WARNING: could not re-render agentgateway's environment"; return 0; }
     # up -d, not restart: env_file values are frozen at container creation.
     # --no-deps, as every other targeted recreate here: without it compose also

@@ -453,7 +453,7 @@ rotate_freshrss() {
 # --- ntfy: regenerate the admin user hash and reload it ---
 
 rotate_ntfy() {
-    if sh "$PROJECT_DIR/scripts/ntfy-pre-start.sh" >/dev/null 2>&1; then
+    if run_script ntfy-pre-start.sh >/dev/null 2>&1; then
         note "✔ Regenerated ntfy admin credentials"
     else
         note "✘ FAILED to regenerate ntfy admin credentials"
@@ -511,7 +511,7 @@ rotate_shelfmark() {
         note "✘ SKIPPED Shelfmark (pi-shelfmark not running)"
         return 0
     fi
-    if ! sh "$PROJECT_DIR/scripts/shelfmark-pre-start.sh" >/dev/null 2>&1; then
+    if ! run_script shelfmark-pre-start.sh >/dev/null 2>&1; then
         note "✘ FAILED to re-render config/shelfmark/shelfmark.env"
         return 0
     fi
@@ -531,7 +531,7 @@ rotate_aiostreams() {
         note "✘ SKIPPED AIOStreams (pi-aiostreams not running)"
         return 0
     fi
-    if ! sh "$PROJECT_DIR/scripts/aiostreams-pre-start.sh" >/dev/null 2>&1; then
+    if ! run_script aiostreams-pre-start.sh >/dev/null 2>&1; then
         note "✘ FAILED to re-render config/aiostreams/aiostreams.env"
         return 0
     fi
