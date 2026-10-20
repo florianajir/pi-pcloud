@@ -154,6 +154,6 @@ echo "✅ Uninstall complete"
 echo
 if [ "$PURGE" -eq 0 ]; then
     echo "ℹ️  Media libraries kept under ${DATA_ROOT:-<DATA_LOCATION>}: $MEDIA_DIRS"
-    echo "   \`make uninstall -- --purge\`, run from this directory, deletes them too."
+    echo "   \`make -C $PROJECT_DIR uninstall -- --purge\` deletes them too."
 fi
 echo "ℹ️  Note: .env file preserved. Remove manually if needed."

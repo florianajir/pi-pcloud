@@ -118,6 +118,9 @@ ok "make uninstall -- --purge reaches the script" \
 ok "  and a plain make uninstall passes nothing" \
     "$("$REAL_MAKE" -n -s -C "$REPO_DIR" uninstall | grep uninstall.sh)" \
     'sh scripts/uninstall.sh ""'
+ok "  and a second argument is refused before any recipe runs" \
+    "$("$REAL_MAKE" -n -s -C "$REPO_DIR" uninstall -- --purge extra 2>/dev/null | grep -c uninstall.sh)" \
+    0
 
 # --- finding the checkout ---------------------------------------------------
 

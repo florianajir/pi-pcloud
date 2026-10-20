@@ -20,6 +20,11 @@ SUDO         := $(if $(filter 0,$(shell id -u)),,sudo)
 # options: `make uninstall -- --purge`. pi-pcloud adds the `--` itself.
 ifneq (,$(filter enable disable headscale-register uninstall,$(firstword $(MAKECMDGOALS))))
 GOAL_ARG := $(word 2,$(MAKECMDGOALS))
+# Refused while parsing: a third word has no rule, and make would only say so
+# after the first goal's recipe - an uninstall included - had already run.
+ifneq (,$(word 3,$(MAKECMDGOALS)))
+$(error $(firstword $(MAKECMDGOALS)) takes one argument, got: $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS)))
+endif
 ifneq (,$(GOAL_ARG))
 $(eval $(GOAL_ARG):;@:)
 endif
