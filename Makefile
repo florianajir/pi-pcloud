@@ -6,7 +6,6 @@ MAKEFLAGS += --no-print-directory
 
 UNIT         := pi-pcloud.service
 WATCH_UNIT   := pi-pcloud-authelia-ntfy.service
-WAN_UNIT     := pi-pcloud-wan-allowlist.service
 COMPOSE      := docker compose
 
 # Sourcing scripts/lib.sh from a recipe, guarded so a broken lib.sh under the
@@ -26,17 +25,9 @@ LIB_SH = if [ ! -r scripts/lib.sh ]; then \
          export PROJECT_DIR ENV_FILE SCRIPT_NAME; \
          . scripts/lib.sh >/dev/null 2>&1
 
-# What scripts/install-system.sh installs outside the repository, for uninstall.
-BIN_LINK        := /usr/local/bin/pi-pcloud
-BASH_COMPLETION := /usr/share/bash-completion/completions/pi-pcloud
-ZSH_COMPLETION  := /usr/share/zsh/vendor-completions/_pi-pcloud
 # Empty when make already runs as root: root-only images often ship without a
 # sudo binary at all (install.sh applies the same rule to its own commands).
 SUDO         := $(if $(filter 0,$(shell id -u)),,sudo)
-# Resolved by path, not by name: sysctl lives in /usr/sbin, which a root shell
-# entered with `su` (no dash) does not have on its PATH — and $(SUDO) is empty
-# there, so sudo's secure_path no longer covers it either.
-SYSCTL       := $(firstword $(wildcard /usr/sbin/sysctl /sbin/sysctl) sysctl)
 
 # A second word on the command line is an argument, not a target: `make enable
 # stremio` reads better than `make enable s=stremio`, and the pi-pcloud command
@@ -55,7 +46,7 @@ help:
 	@echo "Commands:"
 	@echo "  install          Install & enable systemd unit, start stack and initialize"
 	@echo "  install-system   Re-apply the host files only (sysctl, /etc/hosts, units, command)"
-	@echo "  uninstall        Stop stack, remove all data/volumes and uninstall systemd units"
+	@echo "  uninstall        Stop stack, remove all data/volumes and every host file (asks first)"
 	@echo "  start            Start stack"
 	@echo "  stop             Stop stack"
 	@echo "  restart          Restart stack"
@@ -72,7 +63,7 @@ help:
 	@echo "  headscale-register <key> Register a headscale node"
 	@echo "  headscale-reset  Reset all Headscale nodes, preauth keys, and IP allocations"
 	@echo "  check-env        Validate required .env variables"
-	@echo "  test             Run every suite: installer, check-env, CLI, services, memory readings, start sequence, update sequence, compose invariants, routing and SARIF merge (no host changes)"
+	@echo "  test             Run every suite: installer, check-env, CLI, services, memory readings, start sequence, update sequence, host files, compose invariants, routing and SARIF merge (no host changes)"
 	@echo "  smoke            Probe the running stack through Traefik: every router loaded, LAN admitted, outside refused"
 	@echo "  lint             Run every static check CI runs (shell, YAML, Python, Dockerfiles, workflows, secrets, docs)"
 	@echo "  pg-upgrade to=<image> Migrate Postgres to a new major (dump/restore, old data kept)"
@@ -119,6 +110,7 @@ test:
 	@sh tests/stack-up-test.sh
 	@sh tests/changed-services-test.sh
 	@sh tests/update-test.sh
+	@sh tests/install-system-test.sh
 	@sh tests/uptime-kuma-watchdog-test.sh
 	@sh tests/compose-test.sh
 	@sh tests/trilium-api-contract.sh
@@ -168,88 +160,7 @@ install-system:
 	@sh scripts/install-system.sh
 
 uninstall:
-	@echo "🗑️  Uninstalling pi-pcloud..."
-	@echo ""
-	@echo "⚠️  WARNING: This will remove ALL data including:"
-	@echo "   - Docker volumes (pi-hole, headscale, etc.)"
-	@echo "   - Bind-mount data dirs: ./data/nextcloud, ./data/postgres*, ./data/n8n, ./data/immich"
-	@echo "   - The Postgres cluster, wherever POSTGRES_DATA_LOCATION puts it"
-	@echo "   - Generated config: ./data/authelia-config/configuration.yml"
-	@echo "   - Generated config: ./config/headplane/config.yaml" 
-	@echo "   - Generated config: ./config/headscale/config.yaml"
-	@echo "   - Generated config: ./config/headscale/policy.hujson"
-	@echo "   - Generated config: ./config/ntfy/ntfy.env"
-	@echo "   - Generated config: ./config/beszel-agent/agent.env"
-	@echo "   - Systemd service units"
-	@echo ""
-	@printf "Are you sure? Type 'yes' to confirm: "; read -r confirm && [ "$$confirm" = "yes" ] || (echo "Aborted"; exit 1)
-	@echo ""
-	@echo "🛑 Stopping services..."
-	-$(SUDO) systemctl stop pi-pcloud-wan-allowlist.timer pi-pcloud-kuma-watchdog.timer 2>/dev/null || true
-	-$(SUDO) systemctl stop $(WATCH_UNIT) 2>/dev/null || true
-	-$(SUDO) systemctl stop $(UNIT) 2>/dev/null || true
-	@echo "🐳 Removing containers and volumes..."
-	-$(COMPOSE) down -v --remove-orphans 2>/dev/null || true
-	@echo "🧹 Removing bind-mount data directories..."
-# postgres* and not postgres: from 18 the cluster directory carries the major
-# (./data/postgres18), so the bare name leaves the whole cluster behind. A
-# reinstall then finds a non-empty PGDATA, never runs init-databases.sh, and
-# every service fails to authenticate against roles still holding the old
-# PASSWORD. The glob also takes any leftover pg-major-upgrade.sh dump directory.
-	-$(SUDO) rm -rf ./data/nextcloud ./data/postgres* ./data/n8n ./data/immich ./data/lldap ./data/authelia-config
-# POSTGRES_DATA_LOCATION can put the cluster on another disk entirely, which the
-# ./data glob above would then miss - and a surviving PGDATA is exactly the
-# failure that comment describes. Resolved through lib.sh so this cannot drift
-# from what compose/compose-core.yaml mounts; skipped, loudly, if it resolves to nothing or
-# to "/" rather than expanding into `rm -rf /postgres*`.
-	-@$(LIB_SH); \
-	command -v resolve_postgres_data_location_path >/dev/null 2>&1 \
-		|| { echo "  ⚠ scripts/lib.sh did not define resolve_postgres_data_location_path; remove the Postgres cluster by hand"; exit 0; }; \
-	pgroot="$$(resolve_postgres_data_location_path)"; \
-	case "$$pgroot" in \
-		"" | "/") echo "  ⚠ could not resolve the Postgres data root; remove the cluster by hand"; exit 0 ;; \
-		*) echo "  · Postgres cluster at $$pgroot"; $(SUDO) rm -rf "$$pgroot"/postgres* ;; \
-	esac
-	@echo "🧹 Removing generated config files..."
-	-rm -f ./config/headplane/config.yaml
-	-rm -f ./config/headscale/config.yaml
-	-rm -f ./config/headscale/policy.hujson
-	-rm -f ./config/ntfy/ntfy.env
-	-rm -f ./config/beszel-agent/agent.env
-	@echo "🧰 Removing host sysctl settings..."
-	-$(SUDO) rm -f /etc/sysctl.d/99-pi-pcloud.conf
-	-$(SUDO) $(SYSCTL) --system >/dev/null
-	@echo "💽 Restoring original swap config..."
-	@if [ -f /etc/dphys-swapfile.pi-pcloud.bak ]; then \
-		$(SUDO) mv /etc/dphys-swapfile.pi-pcloud.bak /etc/dphys-swapfile; \
-		echo "  ✔ /etc/dphys-swapfile restored (applies on next reboot)"; \
-	else \
-		echo "  ℹ no backup found, leaving /etc/dphys-swapfile as is"; \
-	fi
-	@echo "🐧 Removing kernel command-line parameters..."
-	-@./scripts/configure-kernel-params.sh remove || echo "  ⚠ kernel parameters left as they are"
-	@echo "🌐 Removing local DNS overrides from /etc/hosts..."
-	-$(SUDO) sed -i "/# pi-pcloud local overrides/,/# end pi-pcloud local overrides/d" /etc/hosts
-	@echo "🧹 Removing the pi-pcloud command..."
-	-$(SUDO) rm -f $(BIN_LINK) $(BASH_COMPLETION) $(ZSH_COMPLETION)
-	@echo "🧹 Removing systemd units..."
-	-$(SUDO) systemctl disable $(UNIT) $(WATCH_UNIT) nextcloud-cron.timer pi-pcloud-wan-allowlist.timer tuwunel-backup.timer openclaw-sync.timer pi-pcloud-kuma-watchdog.timer 2>/dev/null || true
-	-$(SUDO) rm -f /etc/systemd/system/$(UNIT)
-	-$(SUDO) rm -f /etc/systemd/system/$(WATCH_UNIT)
-	-$(SUDO) rm -f /etc/systemd/system/$(WAN_UNIT)
-	-$(SUDO) rm -f /etc/systemd/system/pi-pcloud-wan-allowlist.timer
-	-$(SUDO) rm -f /etc/systemd/system/nextcloud-cron.service
-	-$(SUDO) rm -f /etc/systemd/system/nextcloud-cron.timer
-	-$(SUDO) rm -f /etc/systemd/system/tuwunel-backup.service
-	-$(SUDO) rm -f /etc/systemd/system/tuwunel-backup.timer
-	-$(SUDO) rm -f /etc/systemd/system/openclaw-sync.service
-	-$(SUDO) rm -f /etc/systemd/system/openclaw-sync.timer
-	-$(SUDO) rm -f /etc/systemd/system/pi-pcloud-kuma-watchdog.service
-	-$(SUDO) rm -f /etc/systemd/system/pi-pcloud-kuma-watchdog.timer
-	-$(SUDO) systemctl daemon-reload
-	@echo "✅ Uninstall complete"
-	@echo ""
-	@echo "ℹ️  Note: .env file preserved. Remove manually if needed."
+	@sh scripts/uninstall.sh
 
 start:
 	@echo "🚀 Starting pi-pcloud stack..."

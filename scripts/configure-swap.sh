@@ -13,6 +13,8 @@
 # Idempotent: re-runs are a no-op once the file and the live swap both match.
 # Best-effort by design - a host that cannot take a bigger swap file should not
 # fail `make install`.
+#
+# `configure-swap.sh remove` puts the original file back, for uninstall.
 
 set -eu
 
@@ -133,7 +135,23 @@ restart_is_safe() {
     return 1
 }
 
+# The live swap keeps its size until the next reboot: shrinking it now would
+# mean the same swapoff spike restart_is_safe guards against.
+restore_original_conf() {
+    if [ ! -f "$DPHYS_CONF.pi-pcloud.bak" ]; then
+        log "No $DPHYS_CONF.pi-pcloud.bak; leaving $DPHYS_CONF as it is"
+        return 0
+    fi
+    $SUDO mv "$DPHYS_CONF.pi-pcloud.bak" "$DPHYS_CONF"
+    log "Restored $DPHYS_CONF (applies on next reboot)"
+}
+
 main() {
+    if [ "${1:-}" = "remove" ]; then
+        restore_original_conf
+        return 0
+    fi
+
     if [ ! -f "$DPHYS_CONF" ]; then
         log "No $DPHYS_CONF (dphys-swapfile not installed); skipping swap sizing"
         return 0

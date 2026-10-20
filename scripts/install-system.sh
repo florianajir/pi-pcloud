@@ -6,14 +6,15 @@
 # completion changed upstream would otherwise sit stale on the host until the
 # next install. Every step is idempotent.
 #
+# `install-system.sh --remove` takes all of it back out, for `make uninstall`,
+# from the same lists - so nothing installed here can be forgotten there.
+#
 # Host-only, never mounted into a container, so sourcing lib.sh is fine here.
 
 set -eu
 
 # shellcheck source=scripts/lib.sh disable=SC1091
 . "$(dirname "$0")/lib.sh"
-
-[ "$#" -eq 0 ] || die "takes no arguments (got: $*)"
 
 UNITS_DIR="$PROJECT_DIR/config/systemd/system"
 RENDERED_UNITS='pi-pcloud.service pi-pcloud-authelia-ntfy.service
@@ -28,6 +29,9 @@ openclaw-sync.timer pi-pcloud-kuma-watchdog.timer'
 BIN_LINK=/usr/local/bin/pi-pcloud
 BASH_COMPLETION=/usr/share/bash-completion/completions/pi-pcloud
 ZSH_COMPLETION=/usr/share/zsh/vendor-completions/_pi-pcloud
+SYSCTL_DROP_IN=/etc/sysctl.d/99-pi-pcloud.conf
+HOSTS_BEGIN='# pi-pcloud local overrides'
+HOSTS_END='# end pi-pcloud local overrides'
 
 # By path, not by name: sysctl lives in /usr/sbin, which a root shell entered
 # with `su` (no dash) does not have on its PATH - and $SUDO is empty there, so
@@ -45,7 +49,13 @@ sysctl_command() {
 
 apply_sysctl() {
     echo "🧰 Applying host sysctl settings..."
-    $SUDO cp "$PROJECT_DIR/config/sysctl.d/pi-pcloud.conf" /etc/sysctl.d/99-pi-pcloud.conf
+    $SUDO cp "$PROJECT_DIR/config/sysctl.d/pi-pcloud.conf" "$SYSCTL_DROP_IN"
+    $SUDO "$(sysctl_command)" --system >/dev/null
+}
+
+remove_sysctl() {
+    echo "🧰 Removing host sysctl settings..."
+    $SUDO rm -f "$SYSCTL_DROP_IN"
     $SUDO "$(sysctl_command)" --system >/dev/null
 }
 
@@ -60,6 +70,17 @@ apply_boot_settings() {
     run_script configure-kernel-params.sh || echo "  ⚠ kernel parameters skipped"
 }
 
+restore_boot_settings() {
+    echo "💽 Restoring original swap config..."
+    run_script configure-swap.sh remove || echo "  ⚠ swap config left as it is"
+    echo "🐧 Removing kernel command-line parameters..."
+    run_script configure-kernel-params.sh remove || echo "  ⚠ kernel parameters left as they are"
+}
+
+drop_hosts_override() {
+    $SUDO sed -i "/$HOSTS_BEGIN/,/$HOSTS_END/d" /etc/hosts
+}
+
 add_hosts_override() {
     local host_name="" lan_ip=""
     echo "🌐 Adding local DNS overrides to /etc/hosts..."
@@ -69,10 +90,15 @@ add_hosts_override() {
         echo "  ⚠ HOST_NAME or HOST_LAN_IP not set, skipping"
         return 0
     fi
-    $SUDO sed -i "/# pi-pcloud local overrides/,/# end pi-pcloud local overrides/d" /etc/hosts
-    printf '# pi-pcloud local overrides\n%s\theadscale.%s\n# end pi-pcloud local overrides\n' \
-        "$lan_ip" "$host_name" | $SUDO tee -a /etc/hosts >/dev/null
+    drop_hosts_override
+    printf '%s\n%s\theadscale.%s\n%s\n' "$HOSTS_BEGIN" "$lan_ip" "$host_name" "$HOSTS_END" |
+        $SUDO tee -a /etc/hosts >/dev/null
     echo "  ✔ headscale.$host_name -> $lan_ip"
+}
+
+remove_hosts_override() {
+    echo "🌐 Removing local DNS overrides from /etc/hosts..."
+    drop_hosts_override
 }
 
 # Rendered through mktemp rather than a predictable /tmp path: any other local
@@ -106,6 +132,22 @@ install_systemd_units() {
     echo "✅ Systemd units installed"
 }
 
+# Stopping pi-pcloud.service runs its ExecStop, `docker compose down`; the
+# timers stop with it, so no backup or cron run starts against a stack being
+# taken apart. Errors are silenced because a unit already gone is the expected
+# case on a half-removed host.
+# shellcheck disable=SC2086 # the unit lists are split on purpose
+remove_systemd_units() {
+    local unit=""
+    echo "🧹 Removing systemd units..."
+    $SUDO systemctl stop $TIMERS $RENDERED_UNITS 2>/dev/null
+    $SUDO systemctl disable $TIMERS $ENABLED_UNITS 2>/dev/null
+    for unit in $RENDERED_UNITS $TIMERS; do
+        $SUDO rm -f "/etc/systemd/system/$unit"
+    done
+    $SUDO systemctl daemon-reload
+}
+
 # A symlink, not a copy: the command follows this checkout, so a git pull
 # updates it and there is no rendered duplicate to drift.
 install_command() {
@@ -117,9 +159,33 @@ install_command() {
     echo "✅ pi-pcloud available on PATH (new shells get completion)"
 }
 
-echo "📦 Installing system files..."
-apply_sysctl
-apply_boot_settings
-add_hosts_override
-install_systemd_units
-install_command
+remove_command() {
+    echo "🧹 Removing the pi-pcloud command..."
+    $SUDO rm -f "$BIN_LINK" "$BASH_COMPLETION" "$ZSH_COMPLETION"
+}
+
+install_all() {
+    echo "📦 Installing system files..."
+    apply_sysctl
+    apply_boot_settings
+    add_hosts_override
+    install_systemd_units
+    install_command
+}
+
+# Best-effort throughout: a step that fails must not leave the rest of the host
+# integration behind.
+remove_all() {
+    set +e
+    remove_systemd_units
+    remove_command
+    remove_hosts_override
+    remove_sysctl
+    restore_boot_settings
+}
+
+case "$*" in
+    "") install_all ;;
+    --remove) remove_all ;;
+    *) die "usage: $(basename "$0") [--remove]" ;;
+esac

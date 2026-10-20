@@ -101,8 +101,8 @@ PER_INVOCATION='db-backup.sh sqlite-backup.sh'
 HOST_ONLY='api-keys.sh authelia-ntfy-watch.sh changed-services.sh
 configure-kernel-params.sh configure-swap.sh install-system.sh lint.sh
 pg-major-upgrade.sh pi-pcloud ram-usage.sh recovery-kit.sh rotate-password.sh
-rotate-secret.sh sarif-merge.py services.sh services-picker.py update.sh
-wan-allowlist-sync.sh openclaw-sync.py uptime-kuma-watchdog.sh'
+rotate-secret.sh sarif-merge.py services.sh services-picker.py uninstall.sh
+update.sh wan-allowlist-sync.sh openclaw-sync.py uptime-kuma-watchdog.sh'
 
 # config/ files a container reads only while it initialises for the first time,
 # spelled as the path under config/. config/postgres/init-databases.sh is
