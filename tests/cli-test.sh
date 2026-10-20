@@ -37,7 +37,7 @@ for arg in "$@"; do
         target="$(eval printf '%s' "\${$#}")"
         case "$target" in
             start | stop | status | logs | config | services | doctor) exit 0 ;;
-            enable | disable | headscale-register) exit 0 ;;
+            enable | disable | headscale-register | uninstall) exit 0 ;;
             *) exit 1 ;;
         esac
     fi
@@ -58,15 +58,18 @@ ok "a plain command passes"   "$(cli status)"   "MAKE --no-print-directory -C $R
 ok "logs passes through"      "$(cli logs)"     "MAKE --no-print-directory -C $REPO_DIR logs"
 
 # Arguments reach make untouched: the Makefile takes them positionally, so
-# there is no s=<service> translation left in the wrapper to get wrong.
+# there is no s=<service> translation left in the wrapper to get wrong. They go
+# after `--`, where make cannot mistake one for an option of its own.
 ok "enable takes a service"   "$(cli enable stremio)" \
-    "MAKE --no-print-directory -C $REPO_DIR enable stremio"
+    "MAKE --no-print-directory -C $REPO_DIR enable -- stremio"
 ok "disable takes a service"  "$(cli disable stremio)" \
-    "MAKE --no-print-directory -C $REPO_DIR disable stremio"
+    "MAKE --no-print-directory -C $REPO_DIR disable -- stremio"
 ok "enable without a service still forwards" "$(cli enable)" \
     "MAKE --no-print-directory -C $REPO_DIR enable"
 ok "headscale-register takes a key" "$(cli headscale-register abc123)" \
-    "MAKE --no-print-directory -C $REPO_DIR headscale-register abc123"
+    "MAKE --no-print-directory -C $REPO_DIR headscale-register -- abc123"
+ok "a dashed argument is not an option of make's" "$(cli uninstall --purge)" \
+    "MAKE --no-print-directory -C $REPO_DIR uninstall -- --purge"
 
 # An unknown command must not surface a raw make failure.
 out="$(cli no-such-command)"
@@ -106,6 +109,15 @@ case "$help" in
     *"rotate-secret TARGET=<name>  "*"check-secrets "*) ok "help lists commands with their arguments" yes yes ;;
     *) ok "help lists commands with their arguments" "$help" "rotate-secret TARGET=<name> ... check-secrets" ;;
 esac
+
+# The other half of the `--`: the Makefile hands the word to the script. -n
+# prints the recipe and runs nothing.
+ok "make uninstall -- --purge reaches the script" \
+    "$("$REAL_MAKE" -n -s -C "$REPO_DIR" uninstall -- --purge | grep uninstall.sh)" \
+    'sh scripts/uninstall.sh "--purge"'
+ok "  and a plain make uninstall passes nothing" \
+    "$("$REAL_MAKE" -n -s -C "$REPO_DIR" uninstall | grep uninstall.sh)" \
+    'sh scripts/uninstall.sh ""'
 
 # --- finding the checkout ---------------------------------------------------
 

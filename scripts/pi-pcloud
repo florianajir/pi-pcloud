@@ -73,8 +73,16 @@ list_services() {
 
 # --no-print-directory: the wrapper is the interface, so make's "Entering
 # directory" noise would leak an implementation detail into every command.
+# The command's own arguments go after `--`, so one starting with a dash
+# (`uninstall --purge`) reaches the command instead of being read as an option
+# of make's.
 run_make() {
-    exec make --no-print-directory -C "$DIR" "$@"
+    local target="$1"
+    shift
+    if [ "$#" -eq 0 ]; then
+        exec make --no-print-directory -C "$DIR" "$target"
+    fi
+    exec make --no-print-directory -C "$DIR" "$target" -- "$@"
 }
 
 cmd="${1:-}"
