@@ -144,11 +144,12 @@ answer "nor a file only a first init reads"         "" \
 answer "but the rest of that tree still counts"     "postgres" \
     config/postgres/postgresql.conf
 
-# backrest mounts its backup hooks as single files, which pin the inode the
-# file had at creation; git replaces a changed file with a new inode. Only a
-# recreate shows backrest the pulled hook.
-answer "a backup hook recreates the backrest that runs it" "backrest" scripts/db-backup.sh
-answer "and so does the other one"                      "backrest" scripts/sqlite-backup.sh
+# backrest reads its snapshot hooks through a bind of the scripts/ directory,
+# which shows a pulled file at once, and runs each one fresh: nothing to
+# recreate - so no backup killed mid-run by an update.
+answer "a backup hook recreates nothing"            "" scripts/db-backup.sh
+answer "nor does a backrest-prefixed hook"          "" scripts/backrest-post-hook.sh
+answer "but backrest's own pre-start still counts"  "backrest" scripts/backrest-pre-start.sh
 
 # --- everything ---------------------------------------------------------------
 #

@@ -644,11 +644,11 @@ services:
       # sqlite-backup.sh's consistent copies of the live databases mounted
       # above.
       - ${DATA_LOCATION:-./data}/backrest/sqlite:/userdata/sqlite-backups
-      - ./scripts/db-backup.sh:/hooks/db-backup.sh:ro
-      - ./scripts/sqlite-backup.sh:/hooks/sqlite-backup.sh:ro
-      - ./scripts/backrest-env-snapshot.sh:/hooks/backrest-env-snapshot.sh:ro
-      - ./scripts/backrest-post-hook.sh:/hooks/backrest-post-hook.sh:ro
-      - ./scripts/backrest-unlock.sh:/hooks/backrest-unlock.sh:ro
+      # The hooks config.json runs as /hooks/<script>. The directory rather than
+      # each file, for the reason given for /pi-web-src above: git replaces a
+      # changed script with a new inode, so a file bind would keep running the
+      # pre-pull hook until backrest was recreated.
+      - ./scripts:/hooks:ro
     tmpfs:
       - /cache
       - /tmp

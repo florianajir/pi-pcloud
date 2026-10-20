@@ -62,6 +62,15 @@ ALWAYS_ALL_CONFIG_DIRS='systemd'
 # order, run-if-enabled.sh gates them, stack-up.sh is the sequence itself.
 SHARED_START_PATH='lib.sh pilib.py run-hooks.sh run-if-enabled.sh stack-up.sh'
 
+# backrest's snapshot hooks. Compose binds the whole scripts/ directory as
+# /hooks, and backrest starts a fresh shell on the script for every run, so a
+# pulled version is the one the next backup executes and nothing needs
+# recreating - nor gets a running backup killed by a recreate. That only holds
+# for a directory bind; tests/compose-invariants.py fails if one of these is
+# ever bound file by file again.
+PER_INVOCATION='backrest-env-snapshot.sh backrest-post-hook.sh backrest-unlock.sh
+db-backup.sh sqlite-backup.sh'
+
 # Host-side tooling: operator commands, CI helpers, and install-system.sh with
 # its two steps. None is mounted into a container, none renders a file a
 # container reads, so their contents changing obliges no recreate at all.
@@ -113,11 +122,11 @@ FIRST_INIT_CONFIG='postgres/init-databases.sh'
 CONFIG_DIR_ALIASES='immich:immich-server,immich-machine-learning'
 
 # Scripts a service reads without carrying its name, spelled like the line
-# above. backrest runs these two as pre-snapshot hooks through single-file
-# binds, and a single-file bind pins the inode the file had when the container
-# was created: git replaces a changed file with a new inode, so only a recreate
-# shows backrest the pulled version - until then it runs the old hook.
-SCRIPT_ALIASES='db-backup.sh:backrest sqlite-backup.sh:backrest'
+# above. For a script bound file by file: a single-file bind pins the inode the
+# file had when the container was created, and git replaces a changed file with
+# a new one, so only a recreate shows the service the pulled version. None
+# today - backrest's hooks go through a directory bind, see PER_INVOCATION.
+SCRIPT_ALIASES=''
 
 # Containers a recreate has to drag along, spelled <service>:<also>[,<also>].
 # The name resolved above is the one that *owns* the file; these are the ones
@@ -268,6 +277,7 @@ for path in $changed; do
             _base="${path#scripts/}"
             case "$_base" in */*) ;; # a subdirectory of scripts/ owns nothing by name
             *)
+                in_words "$_base" "$PER_INVOCATION" && continue
                 in_words "$_base" "$HOST_ONLY" && continue
                 in_words "$_base" "$SHARED_START_PATH" && { echo ALL; exit 0; }
                 owners="$(script_readers "$_base")"

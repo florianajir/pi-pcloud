@@ -524,8 +524,8 @@ def recreate_exceptions(repo_dir):
         # tracked_files() returning None outside a checkout.
         return None
     names = ("HOST_CONFIG_DIRS", "ALWAYS_ALL_CONFIG_DIRS", "SHARED_START_PATH",
-             "HOST_ONLY", "FIRST_INIT_CONFIG", "CONFIG_DIR_ALIASES", "SCRIPT_ALIASES",
-             "ALSO_RECREATE")
+             "PER_INVOCATION", "HOST_ONLY", "FIRST_INIT_CONFIG", "CONFIG_DIR_ALIASES",
+             "SCRIPT_ALIASES", "ALSO_RECREATE")
     found = {}
     for name in names:
         match = re.search(rf"^{name}='([^']*)'", source, re.M | re.S)
@@ -657,6 +657,13 @@ def recreate_mapping_gaps(repo_dir, services):
             script = source[len(scripts_root):] if source.startswith(scripts_root) else ""
             if not script or "/" in script:
                 continue
+            if script in lists["PER_INVOCATION"]:
+                messages.append(
+                    f"{name} binds scripts/{script} file by file, but changed-services.sh lists it "
+                    "in PER_INVOCATION, which recreates nothing: a single-file bind keeps the "
+                    "replaced inode, so bind the scripts/ directory instead"
+                )
+                continue
             owner = max((s for s in services if script.startswith(f"{s}-")), key=len, default=None)
             readers = script_aliased.get(script, [owner] if owner else [])
             if name in readers or any(name in coupled.get(reader, []) for reader in readers):
@@ -666,6 +673,16 @@ def recreate_mapping_gaps(repo_dir, services):
                 f"{'/'.join(readers) or 'no service'}; add {script}:{name} to SCRIPT_ALIASES, "
                 f"or a pull rewriting it leaves {name} running the old file"
             )
+
+    # PER_INVOCATION is only true while the hooks reach their service through a
+    # bind of the scripts/ directory itself, which sees a pulled file at once.
+    if lists["PER_INVOCATION"] and not any(
+            scripts_root.rstrip("/") in (service.get("bind_sources") or [])
+            for service in services.values()):
+        messages.append(
+            "changed-services.sh lists PER_INVOCATION scripts, but no service binds the scripts/ "
+            "directory, so nothing reads them fresh on each run"
+        )
 
     # A path shape this never recognises reads as "nobody shares a config tree",
     # which is the same green as a stack that genuinely does not - so say when
@@ -728,7 +745,7 @@ def recreate_mapping_gaps(repo_dir, services):
     # boot path runs, and the convention says nothing about its name.
     scripts = {path[len("scripts/"):] for path in tracked
                if path.startswith("scripts/") and path.count("/") == 1}
-    classified = (lists["SHARED_START_PATH"] | lists["HOST_ONLY"]
+    classified = (lists["SHARED_START_PATH"] | lists["PER_INVOCATION"] | lists["HOST_ONLY"]
                   | {entry.partition(":")[0] for entry in lists["SCRIPT_ALIASES"]})
     for script in sorted(scripts):
         # Longest service name prefixing it, the rule services.sh applies to
@@ -739,8 +756,8 @@ def recreate_mapping_gaps(repo_dir, services):
             continue
         messages.append(
             f"scripts/{script} is prefixed by no service name, so every change to it restarts the whole "
-            "stack; rename it <service>-*, or classify it in SHARED_START_PATH / HOST_ONLY / "
-            "SCRIPT_ALIASES in scripts/changed-services.sh"
+            "stack; rename it <service>-*, or classify it in SHARED_START_PATH / PER_INVOCATION / "
+            "HOST_ONLY / SCRIPT_ALIASES in scripts/changed-services.sh"
         )
     for script in sorted(classified):
         if script not in scripts:
