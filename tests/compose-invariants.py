@@ -524,7 +524,7 @@ def recreate_exceptions(repo_dir):
         # tracked_files() returning None outside a checkout.
         return None
     names = ("HOST_CONFIG_DIRS", "ALWAYS_ALL_CONFIG_DIRS", "SHARED_START_PATH",
-             "PER_INVOCATION", "HOST_ONLY", "FIRST_INIT_CONFIG", "CONFIG_DIR_ALIASES",
+             "HOST_ONLY", "FIRST_INIT_CONFIG", "CONFIG_DIR_ALIASES", "SCRIPT_ALIASES",
              "ALSO_RECREATE")
     found = {}
     for name in names:
@@ -575,6 +575,17 @@ def recreate_mapping_gaps(repo_dir, services):
         for reader in aliased[directory]:
             if reader not in services:
                 messages.append(f"CONFIG_DIR_ALIASES says {reader} reads config/{directory}, "
+                                "but no such service is declared")
+
+    for entry in sorted(lists["SCRIPT_ALIASES"]):
+        script, _, readers = entry.partition(":")
+        if not readers:
+            messages.append(f"SCRIPT_ALIASES entry {entry} names no reader; "
+                            "the spelling is <script>:<service>[,<service>]")
+            continue
+        for reader in readers.split(","):
+            if reader not in services:
+                messages.append(f"SCRIPT_ALIASES says {reader} reads scripts/{script}, "
                                 "but no such service is declared")
 
     # Which containers each service drags along when it is recreated. A name that
@@ -696,7 +707,8 @@ def recreate_mapping_gaps(repo_dir, services):
     # boot path runs, and the convention says nothing about its name.
     scripts = {path[len("scripts/"):] for path in tracked
                if path.startswith("scripts/") and path.count("/") == 1}
-    classified = lists["SHARED_START_PATH"] | lists["PER_INVOCATION"] | lists["HOST_ONLY"]
+    classified = (lists["SHARED_START_PATH"] | lists["HOST_ONLY"]
+                  | {entry.partition(":")[0] for entry in lists["SCRIPT_ALIASES"]})
     for script in sorted(scripts):
         # Longest service name prefixing it, the rule services.sh applies to
         # bootstraps so beszel-agent-* does not also read as beszel's.
@@ -706,8 +718,8 @@ def recreate_mapping_gaps(repo_dir, services):
             continue
         messages.append(
             f"scripts/{script} is prefixed by no service name, so every change to it restarts the whole "
-            "stack; rename it <service>-*, or classify it in SHARED_START_PATH / PER_INVOCATION / "
-            "HOST_ONLY in scripts/changed-services.sh"
+            "stack; rename it <service>-*, or classify it in SHARED_START_PATH / HOST_ONLY / "
+            "SCRIPT_ALIASES in scripts/changed-services.sh"
         )
     for script in sorted(classified):
         if script not in scripts:

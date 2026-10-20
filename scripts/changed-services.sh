@@ -62,20 +62,6 @@ ALWAYS_ALL_CONFIG_DIRS='systemd'
 # order, run-if-enabled.sh gates them, stack-up.sh is the sequence itself.
 SHARED_START_PATH='lib.sh pilib.py run-hooks.sh run-if-enabled.sh stack-up.sh'
 
-# Mounted into backrest (compose-monitoring.yaml) but executed as a fresh
-# process on every backup run, so a rewrite is picked up with nothing recreated.
-# Named here rather than skipped by a rule, because by path they are exactly as
-# ownerless as the SHARED_START_PATH ones above.
-#
-# These two are *single-file* binds, which pin an inode rather than a path, so
-# the exemption only holds if git rewrites the file in place. Measured on this
-# host, 2026-09-14: `git pull --ff-only` over a modified file preserves its
-# inode, so the running backrest does see the new script. If that ever stops
-# being true - git unlinks instead of truncating when the mode changes - the
-# symptom is backrest running a stale hook forever, and the fix is to map these
-# to backrest rather than exempt them.
-PER_INVOCATION='db-backup.sh sqlite-backup.sh'
-
 # Host-side tooling: operator commands, CI helpers, and install-system.sh with
 # its two steps. None is mounted into a container, none renders a file a
 # container reads, so their contents changing obliges no recreate at all.
@@ -122,6 +108,13 @@ FIRST_INIT_CONFIG='postgres/init-databases.sh'
 # mount config/immich. Kept in the same greppable shape as the lists above so
 # tests/compose-invariants.py can read every exception from one place.
 CONFIG_DIR_ALIASES='immich:immich-server,immich-machine-learning'
+
+# Scripts a service reads without carrying its name, spelled like the line
+# above. backrest runs these two as pre-snapshot hooks through single-file
+# binds, and a single-file bind pins the inode the file had when the container
+# was created: git replaces a changed file with a new inode, so only a recreate
+# shows backrest the pulled version - until then it runs the old hook.
+SCRIPT_ALIASES='db-backup.sh:backrest sqlite-backup.sh:backrest'
 
 # Containers a recreate has to drag along, spelled <service>:<also>[,<also>].
 # The name resolved above is the one that *owns* the file; these are the ones
@@ -177,7 +170,14 @@ in_words() {
 # whole script on the first config/ directory naming no service - the case that
 # has to reach the ALL answer.
 config_dir_readers() {
-    for _alias in $CONFIG_DIR_ALIASES; do
+    alias_readers "$1" "$CONFIG_DIR_ALIASES" && return 0
+    if in_words "$1" "$KNOWN"; then printf '%s' "$1"; fi
+}
+
+# The services an alias entry names for <name>; fails when no entry does.
+# Usage: alias_readers <name> <aliases>
+alias_readers() {
+    for _alias in $2; do
         case "$_alias" in
             "$1":*)
                 printf '%s' "${_alias#*:}" | tr ',' ' '
@@ -185,7 +185,7 @@ config_dir_readers() {
                 ;;
         esac
     done
-    if in_words "$1" "$KNOWN"; then printf '%s' "$1"; fi
+    return 1
 }
 
 # The service a script belongs to, by longest name prefixing it - the same rule
@@ -200,6 +200,13 @@ script_owner() {
         esac
     done
     printf '%s' "$_owner"
+}
+
+# The services a script belongs to: an alias when it has one, its prefix
+# otherwise.
+script_readers() {
+    alias_readers "$1" "$SCRIPT_ALIASES" && return 0
+    script_owner "$1"
 }
 
 # A service plus everything ALSO_RECREATE couples to it. Applied to the owner
@@ -258,10 +265,9 @@ for path in $changed; do
             _base="${path#scripts/}"
             case "$_base" in */*) ;; # a subdirectory of scripts/ owns nothing by name
             *)
-                in_words "$_base" "$PER_INVOCATION" && continue
                 in_words "$_base" "$HOST_ONLY" && continue
                 in_words "$_base" "$SHARED_START_PATH" && { echo ALL; exit 0; }
-                owners="$(script_owner "$_base")"
+                owners="$(script_readers "$_base")"
                 ;;
             esac
             ;;
