@@ -4,9 +4,10 @@
 #
 # Each case runs the real script and lib.sh in a fresh clone that is one commit
 # behind a throwaway origin, so `git pull` really moves HEAD. docker, systemctl,
-# sudo, make and sleep are stubs on PATH, and changed-services.sh, stack-up.sh
-# and install-system.sh are stubs in the clone, all recording their calls - so
-# no container, no unit and no host file is touched. Run with `make test`.
+# sudo and sleep are stubs on PATH, and check-env.sh, changed-services.sh,
+# stack-up.sh and install-system.sh are stubs in the clone, all recording their
+# calls - so no container, no unit and no host file is touched. Run with
+# `make test`.
 set -eu
 
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -71,14 +72,6 @@ case "$1" in
 esac
 STUB
 
-# Logs the commit it runs against, which is how the cases below tell that
-# check-env reads the pulled Makefile rather than the one before the pull.
-cat >"$WORK/bin/make" <<'STUB'
-#!/bin/sh
-echo "make $* at $(git rev-parse HEAD)" >>"$CALLS"
-[ -z "${FAIL_CHECK_ENV:-}" ]
-STUB
-
 cat >"$WORK/bin/sleep" <<'STUB'
 #!/bin/sh
 echo "sleep $*" >>"$CALLS"
@@ -110,6 +103,13 @@ cat >"$ORIGIN/scripts/changed-services.sh" <<'STUB'
 echo "changed-services.sh $*" >>"$CALLS"
 [ -z "${CHANGED_ANSWER:-}" ] || printf '%s\n' $CHANGED_ANSWER
 exit "${CHANGED_STATUS:-0}"
+STUB
+# Logs the commit it runs against, which is how the cases below tell that the
+# check runs the pulled script rather than the one before the pull.
+cat >"$ORIGIN/scripts/check-env.sh" <<'STUB'
+#!/bin/sh
+echo "check-env.sh at $(git rev-parse HEAD)" >>"$CALLS"
+[ -z "${FAIL_CHECK_ENV:-}" ]
 STUB
 for stub in stack-up.sh install-system.sh; do
     printf '#!/bin/sh\necho "%s" >>"$CALLS"\n' "$stub" >"$ORIGIN/scripts/$stub"
@@ -158,7 +158,7 @@ fresh_clone
 run_update "" UNIT_ACTIVE=1 CHANGED_ANSWER="kavita ntfy"
 ok "an update with changed config succeeds" "$rc" 0
 ok "and runs every step in order" "$calls" "$(cat <<EOF
-make --no-print-directory check-env at $AFTER
+check-env.sh at $AFTER
 docker compose pull --ignore-buildable
 docker compose build --pull
 install-system.sh
@@ -303,7 +303,7 @@ run_update --images UNIT_ACTIVE=1
 ok "an images-only update succeeds" "$rc" 0
 ok "  without pulling the repository" "$(git -C "$APP" rev-parse HEAD)" "$BEFORE"
 ok "  and runs only the image steps" "$calls" "$(cat <<EOF
-make --no-print-directory check-env at $BEFORE
+check-env.sh at $BEFORE
 docker compose pull --ignore-buildable
 docker compose build --pull
 systemctl is-active --quiet pi-pcloud.service

@@ -25,7 +25,7 @@ make restart
 | `CLOUDFLARE_DNS_API_TOKEN` | Cloudflare API token, `Zone → DNS → Edit` on your domain | *(dashboard)* |
 | `CLOUDFLARE_ZONE_ID` | Your domain's zone ID | *(dashboard)* |
 
-`make print-required-vars` prints this list as the Makefile actually enforces it.
+`sh scripts/check-env.sh --list` prints this list as `make check-env` actually enforces it.
 
 **Generating the Cloudflare token:** dashboard → **API Tokens** → Create token → Permissions `Zone → DNS → Edit`, Zone resources `Include → your domain`.
 

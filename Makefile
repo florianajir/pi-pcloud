@@ -1,6 +1,4 @@
-.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env print-required-vars test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit api-keys
-
-REQUIRED_ENV_VARS := HOST_NAME TIMEZONE EMAIL ADMIN_USER PASSWORD HOST_LAN_IP CLOUDFLARE_DNS_API_TOKEN CLOUDFLARE_ZONE_ID
+.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit api-keys
 
 MAKEFLAGS += --no-print-directory
 
@@ -31,8 +29,7 @@ SERVICE       := $(if $(s),$(s),$(GOAL_ARG))
 HEADSCALE_KEY := $(GOAL_ARG)
 
 # Generated from the `## ` comment on each target, so a new target cannot be
-# missing from it: `## <args> | text` prints the arguments beside the name, and
-# a target with no such comment is internal (print-required-vars, for install.sh).
+# missing from it: `## <args> | text` prints the arguments beside the name.
 help: ## This help
 	@echo "Commands:"
 	@awk '/^[a-z][a-z0-9-]*:.*## / { \
@@ -109,12 +106,7 @@ doctor: ## Report anything outside its threshold (disk, RAM, temp, containers, b
 	@sh scripts/doctor.sh
 
 check-env: ## Validate required .env variables
-	@sh scripts/check-env.sh $(REQUIRED_ENV_VARS)
-
-# Read by install.sh so it prompts for exactly this list: make expands `+=`
-# appends and line continuations that a text scrape of this file would miss.
-print-required-vars:
-	@echo "$(REQUIRED_ENV_VARS)"
+	@sh scripts/check-env.sh
 
 # Same suites CI runs. Every test works on a temporary copy - and compose-test
 # renders with --no-interpolate, so not even .env is read - so this touches

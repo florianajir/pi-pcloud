@@ -23,7 +23,7 @@ fail=0
 
 # Every required variable except PASSWORD, which each case below supplies.
 write_env() {
-    for var in $(make -s -C "$REPO_DIR" print-required-vars); do
+    for var in $(sh "$REPO_DIR/scripts/check-env.sh" --list); do
         [ "$var" != PASSWORD ] || continue
         printf '%s=placeholder-value\n' "$var"
     done >"$APP/.env"

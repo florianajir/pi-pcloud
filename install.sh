@@ -4,7 +4,7 @@
 #
 # Checks prerequisites, clones the repository (default ~/pi-pcloud, override
 # with PI_PCLOUD_DIR; run from inside an existing clone to reuse it), builds
-# .env from .env.dist by prompting for the Makefile's REQUIRED_ENV_VARS, then
+# .env from .env.dist by prompting for the variables check-env enforces, then
 # hands over to `make preflight` and `make install`.
 #
 # Standalone by design: the prerequisite/clone phase runs before the clone
@@ -406,23 +406,22 @@ gen_password() {
     printf '%s' "$secret"
 }
 
-# The Makefile owns the required-variable list (enforced by check-env), so it
-# is asked to expand the list rather than scraped: a text scrape reads only the
-# `:=` line and would silently miss a later `+=` append, leaving a variable
-# unprompted until `make preflight` fails at the very end of the install. make
-# is guaranteed by ensure_base_tools, and this runs after the clone. Tokens are
-# still validated because they are eval'd as variable names below.
+# scripts/check-env.sh owns the required-variable list, so it is asked for the
+# list rather than scraped: a variable left unprompted here would only surface
+# when `make preflight` fails at the very end of the install. This runs after
+# the clone. Tokens are still validated because they are eval'd as variable
+# names below.
 read_required_vars() {
     local raw="" var="" out=""
 
-    raw="$(make -s -C "$INSTALL_DIR" print-required-vars 2>/dev/null || true)"
+    raw="$(sh "$INSTALL_DIR/scripts/check-env.sh" --list 2>/dev/null || true)"
     for var in $raw; do
         case "$var" in
-            *[!A-Z0-9_]* | '') die "unexpected token '$var' in the Makefile's REQUIRED_ENV_VARS" ;;
+            *[!A-Z0-9_]* | '') die "unexpected token '$var' in check-env.sh's required-variable list" ;;
         esac
         out="$out $var"
     done
-    [ -n "$out" ] || die "could not read REQUIRED_ENV_VARS from $INSTALL_DIR/Makefile ('make print-required-vars' returned nothing)"
+    [ -n "$out" ] || die "could not read the required variables ('$INSTALL_DIR/scripts/check-env.sh --list' returned nothing)"
     printf '%s' "$out"
 }
 
