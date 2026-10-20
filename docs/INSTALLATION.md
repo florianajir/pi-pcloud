@@ -64,7 +64,7 @@ Optional settings (SMTP, S3 backups, `DEFAULT_LANGUAGE`) are left empty; fill th
 git clone https://github.com/florianajir/pi-pcloud.git
 cd pi-pcloud
 cp .env.dist .env       # fill in the required variables
-make preflight          # Docker, Compose, cgroup v2, required commands
+make preflight          # .env, Docker, cgroup version, memory limits, kernel IPv6
 make install            # systemd units, secrets, containers, databases
 make logs               # first startup takes 2–5 minutes
 ```

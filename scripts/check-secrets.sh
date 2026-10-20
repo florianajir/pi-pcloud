@@ -28,9 +28,13 @@ case "$*" in
     *) die "usage: $(basename "$0") [--without-sudo]" ;;
 esac
 
-if [ ! -f "$ENV_FILE" ]; then
-    echo "❌ .env missing (copy .env.dist)"
-    exit 1
+require_env_file
+
+# Authenticated once, up front: a sudo that cannot (no terminal, a wrong
+# password) fails every check with status 1, which would read as every secret
+# having drifted and advise rotating them all.
+if [ -n "$AS" ]; then
+    $AS -v || die "sudo could not authenticate; nothing was checked (--without-sudo skips it)"
 fi
 
 targets="$(run_script rotate-secret.sh --list)"

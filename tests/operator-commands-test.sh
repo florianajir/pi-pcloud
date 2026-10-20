@@ -48,16 +48,20 @@ mkdir -p "$WORK/bin"
 cat >"$WORK/bin/sudo" <<'STUB'
 #!/bin/sh
 echo "sudo $*" >>"$CALLS"
+[ "$1" != "-v" ] || exit "${SUDO_FAILS:-0}"
 exec "$@"
 STUB
 
-# Answers the two listings headscale-nodes.sh parses, and fails a node delete
-# when asked to.
+# Answers the two listings headscale-nodes.sh parses, and fails the node
+# listing or a node delete when asked to.
 cat >"$WORK/bin/docker" <<'STUB'
 #!/bin/sh
 echo "docker $*" >>"$CALLS"
 case "$*" in
-    *"headscale nodes list -o json") echo '[{"id":1},{"id":2}]' ;;
+    *"headscale nodes list -o json")
+        [ -z "${FAIL_LIST:-}" ] || exit 1
+        echo '[{"id":1},{"id":2}]'
+        ;;
     *"headscale preauthkeys list -o json") echo '[{"id":7}]' ;;
     *"nodes delete --identifier 1 --force") [ -z "${FAIL_DELETE:-}" ] ;;
 esac
@@ -105,6 +109,10 @@ EOF
 )"
 if [ "$(id -u)" != "0" ]; then
     contains "  each through sudo" "$calls" "sudo /bin/sh $APP/scripts/rotate-secret.sh good --check"
+
+    run env SUDO_FAILS=1 sh "$APP/scripts/check-secrets.sh"
+    ok "a sudo that cannot authenticate fails the check" "$rc" 1
+    lacks "  without reporting any secret as drifted" "$out" "✘"
 fi
 
 run sh "$APP/scripts/check-secrets.sh" --without-sudo
@@ -138,10 +146,11 @@ contains "an exported EMAIL wins over .env" "$calls" "--user other@example.test"
 
 # --- headscale-reset --------------------------------------------------------------
 
+# Usage: reset <answer> [FAIL_DELETE=1|FAIL_LIST=1]
 reset() {
     : >"$CALLS"
     rc=0
-    out="$(printf '%s\n' "$1" | env -u PROJECT_DIR -u ENV_FILE ${2:+FAIL_DELETE=1} \
+    out="$(printf '%s\n' "$1" | env -u PROJECT_DIR -u ENV_FILE ${2:-} \
         sh "$APP/scripts/headscale-nodes.sh" reset 2>&1)" || rc=$?
     calls="$(cat "$CALLS")"
 }
@@ -156,9 +165,15 @@ contains "  every node is deleted" "$calls" "nodes delete --identifier 2 --force
 contains "  every preauth key expired" "$calls" "preauthkeys expire --id 7 --force"
 contains "  and headscale restarted" "$calls" "docker compose restart headscale"
 
-reset yes fail
+reset yes FAIL_DELETE=1
 contains "a node that will not delete is named" "$out" "node 1 was not deleted"
 contains "  and the reset carries on" "$calls" "preauthkeys expire --id 7 --force"
+ok "  but does not report success" "$rc" 1
+
+reset yes FAIL_LIST=1
+contains "a listing that fails is named" "$out" "could not list the nodes"
+lacks "  not reported as a completed reset" "$out" "reset complete"
+ok "  and fails the command" "$rc" 1
 
 run sh "$APP/scripts/headscale-nodes.sh" bogus
 [ "$rc" -ne 0 ] && failed=yes || failed=no

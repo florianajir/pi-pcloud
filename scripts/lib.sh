@@ -75,6 +75,14 @@ get_env_value() {
     read_env_value_from_file "$ENV_FILE" "$1"
 }
 
+# For the operator commands: a missing .env is a setup step left out, so the
+# message names the fix rather than going through die's log prefix.
+require_env_file() {
+    [ -f "$ENV_FILE" ] && return 0
+    echo "❌ .env missing (copy .env.dist)"
+    exit 1
+}
+
 # Strip a trailing CR (a .env edited from Windows over Samba) and one layer of
 # surrounding quotes — what Compose, systemd and run-if-enabled.sh all do to a
 # value, and what get_env_value deliberately does not. Reading a list verbatim

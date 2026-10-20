@@ -17,10 +17,7 @@ set -eu
 
 [ "$#" -gt 0 ] || die "usage: $(basename "$0") <VARIABLE>..."
 
-if [ ! -f "$ENV_FILE" ]; then
-    echo "❌ .env missing (copy .env.dist)"
-    exit 1
-fi
+require_env_file
 
 echo "🔍 Checking required .env variables..."
 missing=0

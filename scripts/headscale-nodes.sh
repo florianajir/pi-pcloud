@@ -15,10 +15,7 @@ set -eu
 register() {
     local key="$1" user=""
     echo "🔐 Registering headscale node..."
-    if [ ! -f "$ENV_FILE" ]; then
-        echo "❌ .env missing (copy .env.dist)"
-        exit 1
-    fi
+    require_env_file
     if [ -z "$key" ]; then
         echo "❌ Key missing (use: make headscale-register <key>)"
         exit 1
@@ -31,15 +28,19 @@ register() {
     compose run --rm headscale nodes register --key "$key" --user "$user"
 }
 
+# Fails when the listing does: piped straight into jq, a headscale that is down
+# reads as one with nothing to delete, and the reset reports success.
 # Usage: headscale_ids nodes|preauthkeys
 headscale_ids() {
-    compose exec -T headscale headscale "$1" list -o json | jq -r '.[].id' 2>/dev/null
+    local json=""
+    json="$(compose exec -T headscale headscale "$1" list -o json)" || return 1
+    printf '%s' "$json" | jq -r '.[]?.id'
 }
 
 # Best-effort past the confirmation: one node that will not delete must not
 # keep every preauth key alive.
 reset() {
-    local answer="" id=""
+    local answer="" id="" ids="" complete=1
     echo "⚠️  This will WIPE ALL Headscale nodes, preauth keys, and IP allocations!"
     printf "Are you sure? Type 'yes' to confirm: "
     read -r answer || answer=""
@@ -48,17 +49,23 @@ reset() {
         exit 1
     fi
     echo "🧹 Deleting all Headscale nodes..."
-    for id in $(headscale_ids nodes); do
+    ids="$(headscale_ids nodes)" || { echo "  ⚠ could not list the nodes"; complete=0; }
+    for id in $ids; do
         compose exec -T headscale headscale nodes delete --identifier "$id" --force ||
-            echo "  ⚠ node $id was not deleted"
+            { echo "  ⚠ node $id was not deleted"; complete=0; }
     done
     echo "🧹 Deleting all Headscale preauth keys..."
-    for id in $(headscale_ids preauthkeys); do
+    ids="$(headscale_ids preauthkeys)" || { echo "  ⚠ could not list the preauth keys"; complete=0; }
+    for id in $ids; do
         compose exec -T headscale headscale preauthkeys expire --id "$id" --force ||
-            echo "  ⚠ preauth key $id was not expired"
+            { echo "  ⚠ preauth key $id was not expired"; complete=0; }
     done
     echo "🧹 Resetting Headscale IP allocations (restarting service)..."
-    compose restart headscale || echo "  ⚠ headscale did not restart"
+    compose restart headscale || { echo "  ⚠ headscale did not restart"; complete=0; }
+    if [ "$complete" -eq 0 ]; then
+        echo "❌ Headscale reset incomplete - see the warnings above"
+        exit 1
+    fi
     echo "✅ Headscale reset complete"
 }
 

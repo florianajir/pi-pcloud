@@ -27,7 +27,7 @@ fi
 # accepts `-m` on a kernel that does not enforce it.
 if docker run --rm -m 32m "$PROBE_IMAGE" sh -c \
     'cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null' |
-    grep -qE '33554432|32'; then
+    grep -qx 33554432; then
     echo "✔ memory limits enforced"
 else
     echo "⚠ memory limits NOT enforced"
