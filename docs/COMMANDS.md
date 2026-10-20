@@ -18,7 +18,7 @@ The command is a symlink to `scripts/pi-pcloud` inside the checkout, so `git pul
 
 | Command | What it does |
 |---------|--------------|
-| `make preflight` | Verify Docker, cgroup v2 and dependencies |
+| `make preflight` | Validate `.env`, then check that Docker is reachable, which cgroup version runs, that memory limits are enforced and that the kernel has IPv6 |
 | `make install` | Deploy the stack and create the systemd units |
 | `make start` / `make stop` / `make restart` | Control the whole stack |
 | `make update` | Pull code and images, rebuild, re-apply host files, apply in place |

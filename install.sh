@@ -93,7 +93,7 @@ confirm() {
 
 # A value Docker Compose's .env parser would mangle is refused at the prompt
 # instead of reaching the services altered while the bootstrap scripts read it
-# verbatim. scripts/lib.sh owns the rule (the Makefile's check-env calls the
+# verbatim. scripts/lib.sh owns the rule (scripts/check-env.sh calls the
 # same function, so the two cannot drift); it is read here in a subshell
 # because sourcing lib.sh would clobber this script's log/die. Post-clone
 # only, which is where every prompt happens.
