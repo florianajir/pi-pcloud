@@ -147,10 +147,14 @@ restore_original_conf() {
 }
 
 main() {
-    if [ "${1:-}" = "remove" ]; then
-        restore_original_conf
-        return 0
-    fi
+    case "$*" in
+        "") ;;
+        remove)
+            restore_original_conf
+            return 0
+            ;;
+        *) die "usage: $(basename "$0") [remove]" ;;
+    esac
 
     if [ ! -f "$DPHYS_CONF" ]; then
         log "No $DPHYS_CONF (dphys-swapfile not installed); skipping swap sizing"

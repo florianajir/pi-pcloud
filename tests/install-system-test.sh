@@ -227,8 +227,9 @@ contains "  and says so" "$out" "✅ Uninstall complete"
 first_stop="$(grep -n 'systemctl stop' "$CALLS" | head -n1 | cut -d: -f1)"
 volumes="$(grep -n 'docker compose down -v' "$CALLS" | head -n1 | cut -d: -f1)"
 ok "the stack stops before its volumes go" "$([ "${first_stop:-0}" -gt 0 ] && [ "$first_stop" -lt "${volumes:-0}" ] && echo yes)" yes
-contains "the data directories go" "$(cat "$REMOVED")" "$APP/data/nextcloud"
-contains "  the versioned Postgres cluster too" "$(cat "$REMOVED")" "$APP/data/postgres18"
+contains "the data directories go" "$(cat "$REMOVED")" "$APP/./data/nextcloud"
+contains "  Nextcloud's config.php with them" "$(cat "$REMOVED")" "$APP/./data/nextcloud-config"
+contains "  the versioned Postgres cluster too" "$(cat "$REMOVED")" "$APP/./data/postgres18"
 ok "nothing is removed outside the checkout's data and the host files" "$(removed_outside)" ""
 ok "the generated config goes" "$([ -e "$APP/config/headscale/config.yaml" ] || echo gone)" gone
 ok ".env stays" "$([ -f "$APP/.env" ] && echo kept)" kept
@@ -236,6 +237,14 @@ ok ".env stays" "$([ -f "$APP/.env" ] && echo kept)" kept
 mkdir -p "$WORK/elsewhere/data/nextcloud"
 uninstall yes "$WORK/elsewhere"
 lacks "an exported PROJECT_DIR is ignored" "$(cat "$REMOVED")" "$WORK/elsewhere"
+
+# --- uninstall: a data root outside the checkout ------------------------------------------
+
+write_env
+printf 'DATA_LOCATION=%s\n' "$WORK/usb" >>"$APP/.env"
+uninstall yes
+contains "the data directories follow DATA_LOCATION" "$(cat "$REMOVED")" "$WORK/usb/nextcloud"
+lacks "  and leave the checkout's data/ alone" "$(cat "$REMOVED")" "$APP/./data/nextcloud"
 
 # --- uninstall: the cluster outside data/ ------------------------------------------------
 

@@ -25,7 +25,7 @@ The command is a symlink to `scripts/pi-pcloud` inside the checkout, so `git pul
 | `make update-images` | Images only: pull, rebuild, recreate just the containers whose image moved |
 | `make install-system` | Re-apply only what lives outside the repo: sysctl, swap size, kernel command line, `/etc/hosts`, systemd units, the `pi-pcloud` command and its completions |
 | `make pg-upgrade to=<image>` | Move the shared Postgres cluster to a new major (dump/restore). One step of a procedure — read [Postgres upgrades](POSTGRES-UPGRADE.md) first |
-| `make uninstall` | After a typed `yes`: remove the stack, its volumes and data directories, the Postgres cluster wherever `POSTGRES_DATA_LOCATION` puts it, the generated configs, and everything `make install-system` put on the host — `.env` is kept. **Destructive** |
+| `make uninstall` | After a typed `yes`: remove the stack, its volumes and data directories under `DATA_LOCATION`, the Postgres cluster wherever `POSTGRES_DATA_LOCATION` puts it, the generated configs, and everything `make install-system` put on the host — `.env` is kept. **Destructive** |
 
 ### Day to day
 

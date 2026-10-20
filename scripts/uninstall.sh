@@ -15,9 +15,24 @@ unset PROJECT_DIR ENV_FILE
 
 [ "$#" -eq 0 ] || die "takes no arguments (got: $*)"
 
-DATA_DIRS='nextcloud n8n immich lldap authelia-config'
+DATA_DIRS='nextcloud nextcloud-config nextcloud-themes n8n immich lldap
+authelia-config'
 GENERATED_CONFIGS='headplane/config.yaml headscale/config.yaml
 headscale/policy.hujson ntfy/ntfy.env beszel-agent/agent.env'
+
+# Refuses a root that resolves to nothing or to "/", rather than letting
+# `rm -rf "$root"/x` expand into `rm -rf /x`.
+removable_root() {
+    case "$1" in
+        "" | "/") return 1 ;;
+    esac
+    printf '%s' "$1"
+}
+
+# The bind mounts follow DATA_LOCATION, as compose's ${DATA_LOCATION:-./data}
+# does: a fixed ./data would leave every one of them behind on a moved data
+# root while the Postgres cluster, which follows it too, is gone.
+DATA_ROOT="$(removable_root "$(resolve_data_location_path)")" || DATA_ROOT=""
 
 confirm() {
     local answer="" dir="" file=""
@@ -26,9 +41,9 @@ confirm() {
     echo "⚠️  WARNING: This will remove ALL data including:"
     echo "   - Docker volumes (pi-hole, headscale, etc.)"
     for dir in $DATA_DIRS; do
-        echo "   - Bind-mount data dir: ./data/$dir"
+        echo "   - Bind-mount data dir: ${DATA_ROOT:-<DATA_LOCATION>}/$dir"
     done
-    echo "   - Bind-mount data dirs: ./data/postgres*"
+    echo "   - Bind-mount data dirs: ${DATA_ROOT:-<DATA_LOCATION>}/postgres*"
     echo "   - The Postgres cluster, wherever POSTGRES_DATA_LOCATION puts it"
     for file in $GENERATED_CONFIGS; do
         echo "   - Generated config: ./config/$file"
@@ -45,22 +60,17 @@ confirm() {
 }
 
 # POSTGRES_DATA_LOCATION can put the cluster on another disk entirely, which
-# the data/ glob misses - and a surviving PGDATA is exactly the failure
+# the data root glob misses - and a surviving PGDATA is exactly the failure
 # remove_data describes. Resolved through lib.sh so this cannot drift from what
-# compose/compose-core.yaml mounts; skipped, loudly, if it resolves to nothing
-# or to "/" rather than expanding into `rm -rf /postgres*`.
+# compose/compose-core.yaml mounts.
 remove_postgres_cluster() {
     local root=""
-    root="$(resolve_postgres_data_location_path)"
-    case "$root" in
-        "" | "/")
-            echo "  ⚠ could not resolve the Postgres data root; remove the cluster by hand"
-            ;;
-        *)
-            echo "  · Postgres cluster at $root"
-            $SUDO rm -rf "$root"/postgres*
-            ;;
-    esac
+    if ! root="$(removable_root "$(resolve_postgres_data_location_path)")"; then
+        echo "  ⚠ could not resolve the Postgres data root; remove the cluster by hand"
+        return 0
+    fi
+    echo "  · Postgres cluster at $root"
+    $SUDO rm -rf "$root"/postgres*
 }
 
 # postgres* and not postgres: from 18 the cluster directory carries the major
@@ -71,12 +81,17 @@ remove_postgres_cluster() {
 remove_data() {
     local dir="" file=""
     echo "🐳 Removing containers and volumes..."
-    docker compose down -v --remove-orphans 2>/dev/null
+    docker compose down -v --remove-orphans 2>/dev/null ||
+        echo "  ⚠ docker compose down failed; check \`docker volume ls\` for what is left"
     echo "🧹 Removing bind-mount data directories..."
-    for dir in $DATA_DIRS; do
-        $SUDO rm -rf "$PROJECT_DIR/data/$dir"
-    done
-    $SUDO rm -rf "$PROJECT_DIR"/data/postgres*
+    if [ -n "$DATA_ROOT" ]; then
+        for dir in $DATA_DIRS; do
+            $SUDO rm -rf "$DATA_ROOT/$dir"
+        done
+        $SUDO rm -rf "$DATA_ROOT"/postgres*
+    else
+        echo "  ⚠ could not resolve the data root; remove the data directories by hand"
+    fi
     remove_postgres_cluster
     echo "🧹 Removing generated config files..."
     for file in $GENERATED_CONFIGS; do

@@ -178,7 +178,7 @@ print-required-vars:
 # Same suites CI runs. Every test works on a temporary copy - and compose-test
 # renders with --no-interpolate, so not even .env is read - so this touches
 # neither .env nor the host.
-test: ## Run every suite in tests/ (no host changes)
+test: ## Run the test suites against temporary copies (no host changes)
 	@sh tests/install-test.sh
 	@sh tests/check-env-test.sh
 	@sh tests/lib-test.sh
