@@ -577,13 +577,15 @@ def recreate_mapping_gaps(repo_dir, services):
                 messages.append(f"CONFIG_DIR_ALIASES says {reader} reads config/{directory}, "
                                 "but no such service is declared")
 
+    script_aliased = {}
     for entry in sorted(lists["SCRIPT_ALIASES"]):
         script, _, readers = entry.partition(":")
         if not readers:
             messages.append(f"SCRIPT_ALIASES entry {entry} names no reader; "
                             "the spelling is <script>:<service>[,<service>]")
             continue
-        for reader in readers.split(","):
+        script_aliased[script] = readers.split(",")
+        for reader in script_aliased[script]:
             if reader not in services:
                 messages.append(f"SCRIPT_ALIASES says {reader} reads scripts/{script}, "
                                 "but no such service is declared")
@@ -646,6 +648,25 @@ def recreate_mapping_gaps(repo_dir, services):
                 f"CONFIG_DIR_ALIASES), or a pull rewriting that tree recreates {'/'.join(owners)} "
                 f"and leaves {name} on the file it replaced"
             )
+    # The same hole for scripts/: a file bound into a service that neither its
+    # <service>- prefix nor SCRIPT_ALIASES names is recreated for somebody else,
+    # or for nobody, and a single-file bind keeps the replaced inode until then.
+    scripts_root = f"{Path(repo_dir).resolve()}/scripts/"
+    for name, service in sorted(services.items()):
+        for source in service.get("bind_sources") or []:
+            script = source[len(scripts_root):] if source.startswith(scripts_root) else ""
+            if not script or "/" in script:
+                continue
+            owner = max((s for s in services if script.startswith(f"{s}-")), key=len, default=None)
+            readers = script_aliased.get(script, [owner] if owner else [])
+            if name in readers or any(name in coupled.get(reader, []) for reader in readers):
+                continue
+            messages.append(
+                f"{name} binds scripts/{script}, which changed-services.sh resolves to "
+                f"{'/'.join(readers) or 'no service'}; add {script}:{name} to SCRIPT_ALIASES, "
+                f"or a pull rewriting it leaves {name} running the old file"
+            )
+
     # A path shape this never recognises reads as "nobody shares a config tree",
     # which is the same green as a stack that genuinely does not - so say when
     # the render produced host paths and not one of them landed under config/.
