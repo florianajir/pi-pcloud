@@ -15,31 +15,8 @@ REPO_DIR="$(dirname "$TESTS_DIR")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
-
-contains() {
-    case "$2" in
-        *"$3"*) ok "$1" yes yes ;;
-        *) ok "$1" "$2" "(contains) $3" ;;
-    esac
-}
-
-lacks() {
-    case "$2" in
-        *"$3"*) ok "$1" "$2" "(lacks) $3" ;;
-        *) ok "$1" yes yes ;;
-    esac
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 CALLS="$WORK/calls"
 PULLS="$WORK/pulls"
@@ -321,5 +298,4 @@ run_update --bogus
 ok "an unknown argument is refused" "$failed" yes
 ok "  before anything runs" "$calls" ""
 
-printf 'update-test.sh: %d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

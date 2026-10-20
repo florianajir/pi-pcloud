@@ -18,8 +18,8 @@ mkdir -p "$APP/scripts"
 cp "$REPO_DIR/Makefile" "$APP/"
 cp "$REPO_DIR/scripts/lib.sh" "$REPO_DIR/scripts/check-env.sh" "$APP/scripts/"
 
-pass=0
-fail=0
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # Every required variable except PASSWORD, which each case below supplies.
 write_env() {
@@ -110,5 +110,4 @@ else
     esac
 fi
 
-printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

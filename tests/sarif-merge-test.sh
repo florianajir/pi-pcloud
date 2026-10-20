@@ -20,17 +20,8 @@ MERGE="$REPO_DIR/scripts/sarif-merge.py"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # sarif <uri> <cve>... : one Trivy-shaped run, one rule and one result per CVE.
 sarif() {
@@ -253,5 +244,4 @@ python3 "$MERGE" "$WORK/big.out.sarif" "$WORK/big.sarif" >/dev/null
 ok "a large run that still fits is uploaded" \
     "$(jq -r '.runs[0].results | length' "$WORK/big.out.sarif")" 4800
 
-printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

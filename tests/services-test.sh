@@ -15,31 +15,8 @@ REPO_DIR="$(dirname "$TESTS_DIR")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
-
-contains() {
-    case "$2" in
-        *"$3"*) ok "$1" yes yes ;;
-        *) ok "$1" "$2" "should contain: $3" ;;
-    esac
-}
-
-lacks() {
-    case "$2" in
-        *"$3"*) ok "$1" "$2" "should NOT contain: $3" ;;
-        *) ok "$1" yes yes ;;
-    esac
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 cp -r "$REPO_DIR/scripts" "$WORK/scripts"
 cp "$REPO_DIR/compose.yaml" "$WORK/compose.yaml"
@@ -553,5 +530,4 @@ ok       "a completed enable keeps its .env write"  "$rc" 0
 contains "  starting the service"                   "$out" "up -d kavita"
 contains "  and leaving it enabled"                 ",$(written_line)," ",kavita,"
 
-printf '\nservices-test.sh: %d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

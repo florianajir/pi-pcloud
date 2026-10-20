@@ -17,31 +17,8 @@ UNIT="$REPO_DIR/config/systemd/system/pi-pcloud.service"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
-
-contains() {
-    case "$2" in
-        *"$3"*) ok "$1" yes yes ;;
-        *) ok "$1" "$2" "should contain: $3" ;;
-    esac
-}
-
-lacks() {
-    case "$2" in
-        *"$3"*) ok "$1" "$2" "should NOT contain: $3" ;;
-        *) ok "$1" yes yes ;;
-    esac
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # The entries run-hooks.sh declares, in order: "script.sh", "service:script.sh",
 # or "service,service:script.sh" for a hook whose service is started by more
@@ -477,5 +454,4 @@ ok "the hook reads the services init-databases.sh declares" \
 ok "  and that list is not empty" \
     "$([ -n "$services_from_hook" ] && echo yes || echo no)" yes
 
-printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

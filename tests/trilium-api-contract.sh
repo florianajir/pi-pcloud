@@ -20,17 +20,8 @@ set -eu
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$TESTS_DIR")"
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # The status class, not the exact code: the bootstrap only needs these calls to
 # succeed, and pinning 204 where 200 would do turns an upstream tidy-up into a
@@ -41,16 +32,6 @@ succeeds() {
         *)
             fail=$((fail + 1))
             printf 'FAIL %s\n  got  [%s]\n  want [a 2xx]\n' "$1" "$2"
-            ;;
-    esac
-}
-
-contains() {
-    case "$2" in
-        *"$3"*) pass=$((pass + 1)) ;;
-        *)
-            fail=$((fail + 1))
-            printf 'FAIL %s\n  got  [%s]\n  want it to contain [%s]\n' "$1" "$2" "$3"
             ;;
     esac
 }
@@ -261,5 +242,4 @@ answer="$(printf '%s' "$mcp" | probe -X POST --data @- \
     -H 'Accept: application/json, text/event-stream' "$BASE/mcp")"
 contains "/mcp accepts the ETAPI token in Authorization" "$answer" '"serverInfo"'
 
-printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

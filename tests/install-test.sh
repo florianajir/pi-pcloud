@@ -26,17 +26,8 @@ sed '/^main "\$@"$/d' "$REPO_DIR/install.sh" >"$WORK/install-lib.sh"
 set +e
 
 INSTALL_DIR="$REPO_DIR"
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # Status as a word, so a helper's exit code cannot be mistaken for the result.
 yn() { if "$@" >/dev/null 2>&1; then echo yes; else echo no; fi; }
@@ -336,5 +327,4 @@ pick_services() { printf 'bad$value\n'; }
 expect_die "an unsafe picked value dies" "COMPOSE_PROFILES" \
     '(unset COMPOSE_PROFILES; select_services)'
 
-printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

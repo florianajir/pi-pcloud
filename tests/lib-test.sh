@@ -15,17 +15,8 @@ REPO_DIR="$(dirname "$TESTS_DIR")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # PROJECT_DIR is the repository so fix_ownership reads a real owner off it; the
 # files under test all live in $WORK. ENV_FILE is set because lib.sh derives it
@@ -159,5 +150,4 @@ ok "a typed yes goes ahead"       "$(answer yes)" "0 Wipe it? Type 'yes' to conf
 ok "anything else aborts"         "$(answer y)" "1 Wipe it? Type 'yes' to confirm: Aborted"
 ok "so does the end of input"     "$(answer EOF)" "1 Wipe it? Type 'yes' to confirm: Aborted"
 
-printf '\nlib-test.sh: %d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish
