@@ -188,6 +188,7 @@ ok "  before anything runs" "$(cat "$CALLS")" ""
 # --- uninstall: the confirmation ----------------------------------------------------
 
 mkdir -p "$APP/data/nextcloud" "$APP/data/postgres18" "$APP/config/headscale" "$APP/config/ntfy"
+MEDIA_DIRS='nextcloud immich comics manga download'
 : >"$APP/config/headscale/config.yaml"
 : >"$APP/config/ntfy/ntfy.env"
 
@@ -202,6 +203,19 @@ uninstall() {
     rc=0
     out="$(printf '%s\n' "$1" | env -u PROJECT_DIR -u ENV_FILE ${2:+PROJECT_DIR="$2"} \
         sh "$APP/scripts/uninstall.sh" 2>&1)" || rc=$?
+}
+
+# Whole-line match: data/nextcloud-config contains data/nextcloud.
+removed() {
+    if grep -qxF "$1" "$REMOVED"; then echo yes; else echo no; fi
+}
+
+media_removed() {
+    local dir="" list=""
+    for dir in $MEDIA_DIRS; do
+        [ "$(removed "$1/$dir")" = no ] || list="$list $dir"
+    done
+    printf '%s' "${list# }"
 }
 
 uninstall no
@@ -227,9 +241,11 @@ contains "  and says so" "$out" "✅ Uninstall complete"
 first_stop="$(grep -n 'systemctl stop' "$CALLS" | head -n1 | cut -d: -f1)"
 volumes="$(grep -n 'docker compose down -v' "$CALLS" | head -n1 | cut -d: -f1)"
 ok "the stack stops before its volumes go" "$([ "${first_stop:-0}" -gt 0 ] && [ "$first_stop" -lt "${volumes:-0}" ] && echo yes)" yes
-contains "the data directories go" "$(cat "$REMOVED")" "$APP/./data/nextcloud"
-contains "  Nextcloud's config.php with them" "$(cat "$REMOVED")" "$APP/./data/nextcloud-config"
+ok "the state directories go" "$(removed "$APP/./data/lldap")" yes
+ok "  Nextcloud's config.php with them" "$(removed "$APP/./data/nextcloud-config")" yes
 contains "  the versioned Postgres cluster too" "$(cat "$REMOVED")" "$APP/./data/postgres18"
+ok "the media libraries stay" "$(media_removed "$APP/./data")" ""
+contains "  and the end of the run lists them by path" "$out" "   - $APP/./data/immich"
 ok "nothing is removed outside the checkout's data and the host files" "$(removed_outside)" ""
 ok "the generated config goes" "$([ -e "$APP/config/headscale/config.yaml" ] || echo gone)" gone
 ok ".env stays" "$([ -f "$APP/.env" ] && echo kept)" kept
@@ -243,8 +259,9 @@ lacks "an exported PROJECT_DIR is ignored" "$(cat "$REMOVED")" "$WORK/elsewhere"
 write_env
 printf 'DATA_LOCATION=%s\n' "$WORK/usb" >>"$APP/.env"
 uninstall yes
-contains "the data directories follow DATA_LOCATION" "$(cat "$REMOVED")" "$WORK/usb/nextcloud"
-lacks "  and leave the checkout's data/ alone" "$(cat "$REMOVED")" "$APP/./data/nextcloud"
+ok "the state directories follow DATA_LOCATION" "$(removed "$WORK/usb/lldap")" yes
+ok "  and leave the checkout's data/ alone" "$(removed "$APP/./data/lldap")" no
+ok "  without touching the media there" "$(media_removed "$WORK/usb")" ""
 
 # --- uninstall: the cluster outside data/ ------------------------------------------------
 
@@ -258,6 +275,16 @@ uninstall yes
 contains "a root that resolves to / is refused" "$out" "could not resolve the Postgres data root"
 ok "  rather than expanded into /postgres*" \
     "$(removed_outside)" ""
+
+# --- uninstall: no option deletes the media ------------------------------------------
+
+write_env
+reset_records
+rc=0
+out="$(printf 'yes\n' | env -u PROJECT_DIR -u ENV_FILE sh "$APP/scripts/uninstall.sh" --purge 2>&1)" || rc=$?
+[ "$rc" -ne 0 ] && failed=yes || failed=no
+ok "an argument, --purge included, is refused" "$failed" yes
+ok "  before anything runs" "$(cat "$CALLS")" ""
 
 printf 'install-system-test.sh: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

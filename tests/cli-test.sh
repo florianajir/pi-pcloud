@@ -107,6 +107,16 @@ case "$help" in
     *) ok "help lists commands with their arguments" "$help" "rotate-secret TARGET=<name> ... check-secrets" ;;
 esac
 
+# A second argument has no rule, and make would only say so after the first
+# goal's recipe ran. -n prints recipes and runs none.
+out="$("$REAL_MAKE" -n -s -C "$REPO_DIR" enable stremio extra 2>&1 || true)"
+case "$out" in
+    *"enable takes one argument, got: stremio extra"*) ok "a second argument is refused" yes yes ;;
+    *) ok "a second argument is refused" "$out" "enable takes one argument, got: stremio extra" ;;
+esac
+lacks_recipe="$(printf '%s\n' "$out" | grep -c 'services.sh' || true)"
+ok "  before any recipe runs" "$lacks_recipe" 0
+
 # --- finding the checkout ---------------------------------------------------
 
 # Installed shape: a symlink on PATH, with no PI_PCLOUD_DIR to help.

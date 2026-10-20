@@ -1,6 +1,7 @@
 #!/bin/sh
-# `make uninstall`: remove the stack, its data and everything it installed on
-# the host, after an explicit "yes". .env is kept.
+# `make uninstall`: remove the stack, its state and everything it installed on
+# the host, after an explicit "yes". The media libraries and .env are kept:
+# nothing a person put into the stack is deleted by it.
 #
 # Host-only, never mounted into a container, so sourcing lib.sh is fine here.
 
@@ -15,8 +16,10 @@ unset PROJECT_DIR ENV_FILE
 
 [ "$#" -eq 0 ] || die "takes no arguments (got: $*)"
 
-DATA_DIRS='nextcloud nextcloud-config nextcloud-themes n8n immich lldap
-authelia-config'
+# What the services keep under DATA_LOCATION, split by who filled it: the stack
+# wrote the state and goes with it, a person filled the media libraries.
+STATE_DIRS='nextcloud-config nextcloud-themes n8n lldap authelia-config'
+MEDIA_DIRS='nextcloud immich comics manga download'
 GENERATED_CONFIGS='headplane/config.yaml headscale/config.yaml
 headscale/policy.hujson ntfy/ntfy.env beszel-agent/agent.env'
 
@@ -35,20 +38,22 @@ removable_root() {
 DATA_ROOT="$(removable_root "$(resolve_data_location_path)")" || DATA_ROOT=""
 
 confirm() {
-    local answer="" dir="" file=""
+    local answer="" dir="" file="" root="${DATA_ROOT:-<DATA_LOCATION>}"
     echo "🗑️  Uninstalling pi-pcloud..."
     echo
-    echo "⚠️  WARNING: This will remove ALL data including:"
+    echo "⚠️  WARNING: This will remove:"
     echo "   - Docker volumes (pi-hole, headscale, etc.)"
-    for dir in $DATA_DIRS; do
-        echo "   - Bind-mount data dir: ${DATA_ROOT:-<DATA_LOCATION>}/$dir"
+    for dir in $STATE_DIRS; do
+        echo "   - State dir: $root/$dir"
     done
-    echo "   - Bind-mount data dirs: ${DATA_ROOT:-<DATA_LOCATION>}/postgres*"
+    echo "   - State dirs: $root/postgres*"
     echo "   - The Postgres cluster, wherever POSTGRES_DATA_LOCATION puts it"
     for file in $GENERATED_CONFIGS; do
         echo "   - Generated config: ./config/$file"
     done
     echo "   - The systemd units, sysctl drop-in, /etc/hosts record and pi-pcloud command"
+    echo
+    echo "   Kept: .env and the media libraries ($MEDIA_DIRS under $root)."
     echo
     printf "Are you sure? Type 'yes' to confirm: "
     read -r answer || answer=""
@@ -61,8 +66,8 @@ confirm() {
 
 # POSTGRES_DATA_LOCATION can put the cluster on another disk entirely, which
 # the data root glob misses - and a surviving PGDATA is exactly the failure
-# remove_data describes. Resolved through lib.sh so this cannot drift from what
-# compose/compose-core.yaml mounts.
+# remove_state describes. Resolved through lib.sh so this cannot drift from
+# what compose/compose-core.yaml mounts.
 remove_postgres_cluster() {
     local root=""
     if ! root="$(removable_root "$(resolve_postgres_data_location_path)")"; then
@@ -78,24 +83,32 @@ remove_postgres_cluster() {
 # reinstall then finds a non-empty PGDATA, never runs init-databases.sh, and
 # every service fails to authenticate against roles still holding the old
 # PASSWORD. The glob also takes any leftover pg-major-upgrade.sh dump directory.
-remove_data() {
+remove_state() {
     local dir="" file=""
     echo "🐳 Removing containers and volumes..."
     docker compose down -v --remove-orphans 2>/dev/null ||
         echo "  ⚠ docker compose down failed; check \`docker volume ls\` for what is left"
-    echo "🧹 Removing bind-mount data directories..."
+    echo "🧹 Removing state directories..."
     if [ -n "$DATA_ROOT" ]; then
-        for dir in $DATA_DIRS; do
+        for dir in $STATE_DIRS; do
             $SUDO rm -rf "$DATA_ROOT/$dir"
         done
         $SUDO rm -rf "$DATA_ROOT"/postgres*
     else
-        echo "  ⚠ could not resolve the data root; remove the data directories by hand"
+        echo "  ⚠ could not resolve the data root; remove the state directories by hand"
     fi
     remove_postgres_cluster
     echo "🧹 Removing generated config files..."
     for file in $GENERATED_CONFIGS; do
         rm -f "$PROJECT_DIR/config/$file"
+    done
+}
+
+report_kept_media() {
+    local dir=""
+    echo "ℹ️  Media libraries kept - delete them by hand if you no longer want them:"
+    for dir in $MEDIA_DIRS; do
+        echo "   - ${DATA_ROOT:-<DATA_LOCATION>}/$dir"
     done
 }
 
@@ -106,7 +119,8 @@ cd "$PROJECT_DIR"
 # stopped before their data disappears.
 set +e
 run_script install-system.sh --remove
-remove_data
+remove_state
 echo "✅ Uninstall complete"
 echo
+report_kept_media
 echo "ℹ️  Note: .env file preserved. Remove manually if needed."
