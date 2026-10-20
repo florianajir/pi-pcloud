@@ -43,9 +43,7 @@
 # summary. Fix up anything marked FAILED manually.
 #
 # Usage: sh scripts/rotate-password.sh [--yes] [--skip-postgres]
-#   --yes             Skip the interactive confirmation (the Makefile target
-#                      already confirms before calling this, so it passes
-#                      --yes).
+#   --yes             Skip the interactive confirmation.
 #   --skip-postgres    Rotate only the LLDAP admin account + Authelia's
 #                      matching ldap_password secret (the actual SSO master
 #                      credential). Touches nothing else, .env included - see
@@ -99,9 +97,7 @@ confirm() {
     fi
     echo "   Active sessions on Authelia/Nextcloud/etc. may be interrupted."
     echo ""
-    printf "Type 'yes' to confirm: "
-    read -r reply
-    [ "$reply" = "yes" ] || { echo "Aborted"; exit 1; }
+    confirm_or_abort
 }
 
 recreate() {
@@ -818,7 +814,7 @@ rotate_beszel_superuser() {
 }
 
 main() {
-    [ -f "$ENV_FILE" ] || die ".env missing at $ENV_FILE"
+    require_env_file
 
     OLD_PASSWORD="$(get_env_value PASSWORD)"
     ADMIN_USER="$(get_env_value ADMIN_USER)"

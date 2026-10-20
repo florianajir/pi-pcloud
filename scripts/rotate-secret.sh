@@ -121,10 +121,7 @@ fail() {
 }
 
 confirm() {
-    [ "$ASSUME_YES" -eq 1 ] && return 0
-    printf 'Rotate %s? Type yes to confirm: ' "$TARGET"
-    read -r _answer
-    [ "$_answer" = "yes" ] || die "aborted"
+    [ "$ASSUME_YES" -eq 1 ] || confirm_or_abort "Rotate $TARGET?"
 }
 
 fingerprint() {
@@ -645,7 +642,7 @@ rotate_ntfy() {
 
 # --- Main ---------------------------------------------------------------------
 
-[ -f "$ENV_FILE" ] || die ".env missing at $ENV_FILE"
+require_env_file
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
     log "=== checking $TARGET ==="

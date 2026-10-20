@@ -40,14 +40,9 @@ headscale_ids() {
 # Best-effort past the confirmation: one node that will not delete must not
 # keep every preauth key alive.
 reset() {
-    local answer="" id="" ids="" complete=1
+    local id="" ids="" complete=1
     echo "⚠️  This will WIPE ALL Headscale nodes, preauth keys, and IP allocations!"
-    printf "Are you sure? Type 'yes' to confirm: "
-    read -r answer || answer=""
-    if [ "$answer" != "yes" ]; then
-        echo "Aborted"
-        exit 1
-    fi
+    confirm_or_abort "Are you sure?"
     echo "🧹 Deleting all Headscale nodes..."
     ids="$(headscale_ids nodes)" || { echo "  ⚠ could not list the nodes"; complete=0; }
     for id in $ids; do

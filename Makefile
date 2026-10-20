@@ -171,15 +171,12 @@ headscale-reset: ## Reset all Headscale nodes, preauth keys, and IP allocations
 	@sh scripts/headscale-nodes.sh reset
 
 rotate-password: ## Rotate PASSWORD after a leak (LLDAP admin + Authelia only, no Postgres)
-	@if [ ! -f .env ]; then echo "❌ .env missing (copy .env.dist)"; exit 1; fi
-	sh scripts/rotate-password.sh --skip-postgres
+	@sh scripts/rotate-password.sh --skip-postgres
 
 rotate-password-full: ## Same, plus every Postgres role and every other service using PASSWORD
-	@if [ ! -f .env ]; then echo "❌ .env missing (copy .env.dist)"; exit 1; fi
-	sh scripts/rotate-password.sh
+	@sh scripts/rotate-password.sh
 
 rotate-secret: ## TARGET=<name> | Rotate one per-service secret and propagate it (no TARGET lists them)
-	@if [ ! -f .env ]; then echo "❌ .env missing (copy .env.dist)"; exit 1; fi
 	@$(if $(TARGET),$(SUDO) )sh scripts/rotate-secret.sh "$(TARGET)"
 
 check-secrets: ## Report which secrets have drifted from their consumers; changes nothing
