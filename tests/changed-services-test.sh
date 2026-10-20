@@ -129,7 +129,6 @@ answer "a config tree read under another name" \
 # --- nothing to recreate -----------------------------------------------------
 
 answer "host-side tooling touches no container"     "" scripts/lint.sh
-answer "a per-invocation backup hook neither"       "" scripts/db-backup.sh
 answer "nor a file install-system copies to /etc"   "" config/completion/pi-pcloud.bash
 answer "nor the sysctl drop-in"                     "" config/sysctl.d/pi-pcloud.conf
 answer "nor a path outside config/ and scripts/"    "" docs/COMMANDS.md
@@ -144,6 +143,12 @@ answer "nor a file only a first init reads"         "" \
     config/postgres/init-databases.sh
 answer "but the rest of that tree still counts"     "postgres" \
     config/postgres/postgresql.conf
+
+# backrest mounts its backup hooks as single files, which pin the inode the
+# file had at creation; git replaces a changed file with a new inode. Only a
+# recreate shows backrest the pulled hook.
+answer "a backup hook recreates the backrest that runs it" "backrest" scripts/db-backup.sh
+answer "and so does the other one"                      "backrest" scripts/sqlite-backup.sh
 
 # --- everything ---------------------------------------------------------------
 #
