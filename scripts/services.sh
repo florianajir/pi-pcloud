@@ -377,7 +377,7 @@ run_shared_post_start_hooks() {
     case "$_just_ran" in
         *" uptime-kuma "*) return 0 ;;
     esac
-    if /bin/sh "$PROJECT_DIR/scripts/run-if-enabled.sh" uptime-kuma >/dev/null 2>&1; then
+    if service_enabled uptime-kuma >/dev/null 2>&1; then
         run_hook uptime-kuma-bootstrap.sh
     fi
 }
