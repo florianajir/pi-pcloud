@@ -1128,12 +1128,3 @@ build_candidate_usernames() {
     esac
     printf '%s' "$result"
 }
-
-normalize_json() {
-    if [ -z "${1:-}" ]; then
-        printf '[]'
-        return 0
-    fi
-
-    printf '%s' "$1" | jq -c 'if type == "array" then sort else . end'
-}

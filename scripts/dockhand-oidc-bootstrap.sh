@@ -762,6 +762,15 @@ verify_dockhand_timezones_db() {
     return 0
 }
 
+normalize_json() {
+    if [ -z "${1:-}" ]; then
+        printf '[]'
+        return 0
+    fi
+
+    printf '%s' "$1" | jq -c 'if type == "array" then sort else . end'
+}
+
 verify_dockhand_notifications_db() {
     local notification_id enabled url desired_event_types current_event_types env_enabled env_id
 
