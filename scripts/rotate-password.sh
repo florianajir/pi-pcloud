@@ -43,9 +43,7 @@
 # summary. Fix up anything marked FAILED manually.
 #
 # Usage: sh scripts/rotate-password.sh [--yes] [--skip-postgres]
-#   --yes             Skip the interactive confirmation (the Makefile target
-#                      already confirms before calling this, so it passes
-#                      --yes).
+#   --yes             Skip the interactive confirmation.
 #   --skip-postgres    Rotate only the LLDAP admin account + Authelia's
 #                      matching ldap_password secret (the actual SSO master
 #                      credential). Touches nothing else, .env included - see
@@ -99,9 +97,7 @@ confirm() {
     fi
     echo "   Active sessions on Authelia/Nextcloud/etc. may be interrupted."
     echo ""
-    printf "Type 'yes' to confirm: "
-    read -r reply
-    [ "$reply" = "yes" ] || { echo "Aborted"; exit 1; }
+    confirm_or_abort
 }
 
 recreate() {
@@ -457,7 +453,7 @@ rotate_freshrss() {
 # --- ntfy: regenerate the admin user hash and reload it ---
 
 rotate_ntfy() {
-    if sh "$PROJECT_DIR/scripts/ntfy-pre-start.sh" >/dev/null 2>&1; then
+    if run_script ntfy-pre-start.sh >/dev/null 2>&1; then
         note "✔ Regenerated ntfy admin credentials"
     else
         note "✘ FAILED to regenerate ntfy admin credentials"
@@ -515,7 +511,7 @@ rotate_shelfmark() {
         note "✘ SKIPPED Shelfmark (pi-shelfmark not running)"
         return 0
     fi
-    if ! sh "$PROJECT_DIR/scripts/shelfmark-pre-start.sh" >/dev/null 2>&1; then
+    if ! run_script shelfmark-pre-start.sh >/dev/null 2>&1; then
         note "✘ FAILED to re-render config/shelfmark/shelfmark.env"
         return 0
     fi
@@ -535,7 +531,7 @@ rotate_aiostreams() {
         note "✘ SKIPPED AIOStreams (pi-aiostreams not running)"
         return 0
     fi
-    if ! sh "$PROJECT_DIR/scripts/aiostreams-pre-start.sh" >/dev/null 2>&1; then
+    if ! run_script aiostreams-pre-start.sh >/dev/null 2>&1; then
         note "✘ FAILED to re-render config/aiostreams/aiostreams.env"
         return 0
     fi
@@ -818,7 +814,7 @@ rotate_beszel_superuser() {
 }
 
 main() {
-    [ -f "$ENV_FILE" ] || die ".env missing at $ENV_FILE"
+    require_env_file
 
     OLD_PASSWORD="$(get_env_value PASSWORD)"
     ADMIN_USER="$(get_env_value ADMIN_USER)"

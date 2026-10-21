@@ -10,8 +10,8 @@ set -eu
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$TESTS_DIR")"
 
-pass=0
-fail=0
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # stremio-lan is deliberately outside "all" - it is the alternative to stremio,
 # never both - so it has to be named, or its block would go unchecked until
@@ -51,15 +51,6 @@ out="$(DATA_LOCATION=/nonexistent/compose-test COMPOSE_PROFILES="$PROFILES" \
 
 # Each category is a class of drift, so a failure names every instance rather
 # than only the first.
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
-
 none() {
     _label="$1"
     _prefix="$2"
@@ -458,5 +449,4 @@ refuses "a service reachable only through the catch-all" \
     "cannot ask for it on its own" '{"services": {"vague": {"image": "x:1", "profiles": ["all"]}}}'
 
 printf '%s\n' "$out" | grep '^CHECKED ' | sed 's/^CHECKED/compose-test.sh: checked/'
-printf '\ncompose-test.sh: %d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

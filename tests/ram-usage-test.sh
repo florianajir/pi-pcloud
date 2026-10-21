@@ -16,31 +16,8 @@ SCRIPT="$REPO_DIR/scripts/ram-usage.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
-
-contains() {
-    case "$2" in
-        *"$3"*) ok "$1" yes yes ;;
-        *) ok "$1" "$2" "should contain: $3" ;;
-    esac
-}
-
-lacks() {
-    case "$2" in
-        *"$3"*) ok "$1" "$2" "should NOT contain: $3" ;;
-        *) ok "$1" yes yes ;;
-    esac
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 NOW="$(date +%s)"
 SLICE="$WORK/cgroup/system.slice"
@@ -242,5 +219,4 @@ ok "a scope that vanished entirely is dropped, not fatal" "$rc" 0
 ok "  and never eats the containers behind it in the listing" \
     "$(printf '%s\n' "$out" | grep -c .)" 11
 
-printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

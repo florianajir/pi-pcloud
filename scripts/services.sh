@@ -44,13 +44,6 @@ set -eu
 
 is_dry_run() { [ "${DRY_RUN:-0}" = "1" ]; }
 
-require_env_file() {
-    if [ ! -f "$ENV_FILE" ]; then
-        echo "❌ .env missing (copy .env.dist)" >&2
-        exit 1
-    fi
-}
-
 has_profiles_line() {
     grep -qE '^COMPOSE_PROFILES=' "$ENV_FILE"
 }
@@ -384,7 +377,7 @@ run_shared_post_start_hooks() {
     case "$_just_ran" in
         *" uptime-kuma "*) return 0 ;;
     esac
-    if /bin/sh "$PROJECT_DIR/scripts/run-if-enabled.sh" uptime-kuma >/dev/null 2>&1; then
+    if service_enabled uptime-kuma >/dev/null 2>&1; then
         run_hook uptime-kuma-bootstrap.sh
     fi
 }

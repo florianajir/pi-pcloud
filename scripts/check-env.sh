@@ -2,9 +2,11 @@
 # `make check-env`: every required variable is set in .env, to a value Docker
 # Compose's .env parser passes through unmangled.
 #
-# The variables arrive as arguments, from the Makefile's REQUIRED_ENV_VARS:
-# install.sh reads that same list through `make print-required-vars`, so it is
-# kept in one place. The reader and the safety rule come from lib.sh, which
+#   check-env.sh          check the required variables
+#   check-env.sh --list   print their names, for install.sh's prompts
+#
+# The list lives here and nowhere else: install.sh prompts for exactly what this
+# check enforces. The reader and the safety rule come from lib.sh, which
 # install.sh's prompt also calls - a second copy here would let the installer
 # and this check disagree the moment either is tightened.
 #
@@ -15,21 +17,29 @@ set -eu
 # shellcheck source=scripts/lib.sh disable=SC1091
 . "$(dirname "$0")/lib.sh"
 
-[ "$#" -gt 0 ] || die "usage: $(basename "$0") <VARIABLE>..."
+REQUIRED_ENV_VARS='HOST_NAME TIMEZONE EMAIL ADMIN_USER PASSWORD HOST_LAN_IP
+CLOUDFLARE_DNS_API_TOKEN CLOUDFLARE_ZONE_ID'
 
-require_env_file
+check_required_vars() {
+    local var="" value="" missing=0
+    require_env_file
+    echo "🔍 Checking required .env variables..."
+    for var in $REQUIRED_ENV_VARS; do
+        value="$(read_env_value_from_file "$ENV_FILE" "$var")"
+        if [ -z "$value" ]; then
+            echo "  ❌ $var is not set or empty"
+            missing=1
+        elif ! env_value_is_safe "$value"; then
+            echo "  ❌ $var $ENV_VALUE_RULES"
+            missing=1
+        fi
+    done
+    [ "$missing" -eq 0 ] || exit 1
+    echo "✔ Required .env variables OK"
+}
 
-echo "🔍 Checking required .env variables..."
-missing=0
-for var in "$@"; do
-    value="$(read_env_value_from_file "$ENV_FILE" "$var")"
-    if [ -z "$value" ]; then
-        echo "  ❌ $var is not set or empty"
-        missing=1
-    elif ! env_value_is_safe "$value"; then
-        echo "  ❌ $var $ENV_VALUE_RULES"
-        missing=1
-    fi
-done
-[ "$missing" -eq 0 ] || exit 1
-echo "✔ Required .env variables OK"
+case "$*" in
+    "") check_required_vars ;;
+    --list) printf '%s\n' $REQUIRED_ENV_VARS ;;
+    *) die "usage: $(basename "$0") [--list]" ;;
+esac

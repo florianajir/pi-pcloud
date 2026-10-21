@@ -15,17 +15,8 @@ REPO_DIR="$(dirname "$TESTS_DIR")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # PROJECT_DIR is the repository so fix_ownership reads a real owner off it; the
 # files under test all live in $WORK. ENV_FILE is set because lib.sh derives it
@@ -142,5 +133,21 @@ for candidate in "$FILE".bak.*; do
 done
 ok "no copy when nothing is dropped" "$copies" 0
 
-printf '\nlib-test.sh: %d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+# --- confirm_or_abort ----------------------------------------------------------
+
+# Usage: answer <input or "EOF"> - prints the status, then the output.
+answer() {
+    local rc=0 out=""
+    if [ "$1" = EOF ]; then
+        out="$( (confirm_or_abort "Wipe it?") </dev/null 2>&1)" || rc=$?
+    else
+        out="$(printf '%s\n' "$1" | (confirm_or_abort "Wipe it?") 2>&1)" || rc=$?
+    fi
+    printf '%s %s' "$rc" "$out"
+}
+
+ok "a typed yes goes ahead"       "$(answer yes)" "0 Wipe it? Type 'yes' to confirm: "
+ok "anything else aborts"         "$(answer y)" "1 Wipe it? Type 'yes' to confirm: Aborted"
+ok "so does the end of input"     "$(answer EOF)" "1 Wipe it? Type 'yes' to confirm: Aborted"
+
+finish

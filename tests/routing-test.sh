@@ -14,17 +14,8 @@ set -eu
 
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # project <outside-ip> <render-json> : the records, or nothing on refusal.
 project() {
@@ -271,5 +262,4 @@ esac
 api_says '[{"name": "kavita@docker"}, {"name": "ntfy@docker", "status": "enabled"}]'
 ok "a router in no state at all fails" "$rc" 1
 
-printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

@@ -18,33 +18,31 @@ mkdir -p "$APP/scripts"
 cp "$REPO_DIR/Makefile" "$APP/"
 cp "$REPO_DIR/scripts/lib.sh" "$REPO_DIR/scripts/check-env.sh" "$APP/scripts/"
 
-pass=0
-fail=0
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # Every required variable except PASSWORD, which each case below supplies.
 write_env() {
-    for var in $(make -s -C "$REPO_DIR" print-required-vars); do
+    for var in $(sh "$REPO_DIR/scripts/check-env.sh" --list); do
         [ "$var" != PASSWORD ] || continue
         printf '%s=placeholder-value\n' "$var"
     done >"$APP/.env"
     printf 'PASSWORD=%s\n' "$1" >>"$APP/.env"
 }
 
+# run_check: accept or reject, with the command's output left in $WORK/out.
+run_check() {
+    if make -C "$APP" check-env >"$WORK/out" 2>&1; then
+        echo accept
+    else
+        echo reject
+    fi
+}
+
 # check_value <description> <PASSWORD value> <accept|reject>
 check_value() {
     write_env "$2"
-    if make -C "$APP" check-env >"$WORK/out" 2>&1; then
-        got=accept
-    else
-        got=reject
-    fi
-    if [ "$got" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s: got %s, want %s\n' "$1" "$got" "$3"
-        sed 's/^/    /' "$WORK/out"
-    fi
+    ok "$1" "$(run_check)" "$3"
 }
 
 check_value "a plain password"        'hunter2'      accept
@@ -61,54 +59,20 @@ check_value "an empty value"          ''             reject
 
 # A missing .env must be reported, not treated as an empty one.
 rm -f "$APP/.env"
-if make -C "$APP" check-env >"$WORK/out" 2>&1; then
-    fail=$((fail + 1))
-    echo "FAIL a missing .env: accepted"
-else
-    case "$(cat "$WORK/out")" in
-        *".env missing"*) pass=$((pass + 1)) ;;
-        *)
-            fail=$((fail + 1))
-            echo "FAIL a missing .env: unexpected message"
-            sed 's/^/    /' "$WORK/out"
-            ;;
-    esac
-fi
+ok       "a missing .env is refused" "$(run_check)" reject
+contains "  and named"               "$(cat "$WORK/out")" ".env missing"
 
 # A required variable absent from the file must fail by name.
 write_env 'hunter2'
 grep -v '^HOST_NAME=' "$APP/.env" >"$APP/.env.tmp"
 mv "$APP/.env.tmp" "$APP/.env"
-if make -C "$APP" check-env >"$WORK/out" 2>&1; then
-    fail=$((fail + 1))
-    echo "FAIL a missing variable: accepted"
-else
-    case "$(cat "$WORK/out")" in
-        *"HOST_NAME is not set or empty"*) pass=$((pass + 1)) ;;
-        *)
-            fail=$((fail + 1))
-            echo "FAIL a missing variable: did not name HOST_NAME"
-            sed 's/^/    /' "$WORK/out"
-            ;;
-    esac
-fi
+ok       "a missing variable is refused" "$(run_check)" reject
+contains "  by name"                     "$(cat "$WORK/out")" "HOST_NAME is not set or empty"
 
 # check-env is useless if it cannot reach the rule it enforces.
 write_env 'hunter2'
 rm -f "$APP/scripts/lib.sh"
-if make -C "$APP" check-env >"$WORK/out" 2>&1; then
-    fail=$((fail + 1))
-    echo "FAIL an unreadable lib.sh: accepted"
-else
-    case "$(cat "$WORK/out")" in
-        *"lib.sh"*) pass=$((pass + 1)) ;;
-        *)
-            fail=$((fail + 1))
-            echo "FAIL an unreadable lib.sh: unexpected message"
-            sed 's/^/    /' "$WORK/out"
-            ;;
-    esac
-fi
+ok       "an unreadable lib.sh is refused" "$(run_check)" reject
+contains "  and named"                     "$(cat "$WORK/out")" "lib.sh"
 
-printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

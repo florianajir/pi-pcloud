@@ -121,10 +121,7 @@ fail() {
 }
 
 confirm() {
-    [ "$ASSUME_YES" -eq 1 ] && return 0
-    printf 'Rotate %s? Type yes to confirm: ' "$TARGET"
-    read -r _answer
-    [ "$_answer" = "yes" ] || die "aborted"
+    [ "$ASSUME_YES" -eq 1 ] || confirm_or_abort "Rotate $TARGET?"
 }
 
 fingerprint() {
@@ -286,10 +283,10 @@ rotate_backrest_auth() {
     backup_path "${PROJECT_DIR}/config/backrest/backrest.env"
     backup_path "$HOMEPAGE_BACKREST_SECRET"
     rm -f "${PROJECT_DIR}/config/backrest/backrest.env"
-    sh "${SCRIPT_DIR}/backrest-pre-start.sh" >/dev/null || fail "backrest-pre-start.sh failed"
+    run_script backrest-pre-start.sh >/dev/null || fail "backrest-pre-start.sh failed"
     recreate_enabled backrest || fail "could not recreate backrest"
     wait_for_health "$BACKREST_CONTAINER" 60 2 || fail "backrest did not become healthy"
-    sh "${SCRIPT_DIR}/homepage-widgets-bootstrap.sh" >/dev/null ||
+    run_script homepage-widgets-bootstrap.sh >/dev/null ||
         fail "homepage-widgets-bootstrap.sh failed"
     check_backrest_auth || fail "Homepage's copy still disagrees after the bootstrap"
 }
@@ -486,7 +483,7 @@ rotate_generated_env_file() {
     shift 2
     backup_path "$_file"
     rm -f "$_file"
-    sh "${SCRIPT_DIR}/${_script}" >/dev/null || fail "${_script} failed"
+    run_script "${_script}" >/dev/null || fail "${_script} failed"
     [ -s "$_file" ] || fail "${_script} did not recreate $_file"
     recreate_enabled "$@" || fail "could not recreate: $*"
 }
@@ -558,7 +555,7 @@ rotate_redis_auth() {
     backup_path "$_conf"
     backup_path "$_copy"
     rm -f "$_dir/redis_password" "$_conf" "$_copy"
-    sh "${SCRIPT_DIR}/redis-pre-start.sh" >/dev/null || fail "redis-pre-start.sh failed"
+    run_script redis-pre-start.sh >/dev/null || fail "redis-pre-start.sh failed"
     [ -s "$_dir/redis_password" ] || fail "the Redis password was not regenerated"
 
     # redis first, or every consumer is recreated against a server still
@@ -578,7 +575,7 @@ rotate_redis_auth() {
     # that is SSO down with nothing in the logs pointing at this rotation. No
     # --force: an env_file change moves the config hash by itself.
     if enabled_services | grep -qx aiometadata; then
-        sh "${SCRIPT_DIR}/aiometadata-pre-start.sh" >/dev/null ||
+        run_script aiometadata-pre-start.sh >/dev/null ||
             fail "aiometadata-pre-start.sh failed"
     fi
     recreate_enabled aiometadata || fail "could not recreate aiometadata"
@@ -591,7 +588,7 @@ rotate_vaultwarden() {
     backup_path "$_dir/vaultwarden_admin_token"
     backup_path "$_dir/vaultwarden_admin_token_hash"
     rm -f "$_dir/vaultwarden_admin_token" "$_dir/vaultwarden_admin_token_hash"
-    sh "${SCRIPT_DIR}/vaultwarden-pre-start.sh" >/dev/null || fail "vaultwarden-pre-start.sh failed"
+    run_script vaultwarden-pre-start.sh >/dev/null || fail "vaultwarden-pre-start.sh failed"
     [ -s "$_dir/vaultwarden_admin_token" ] || fail "the token was not regenerated"
     recreate_enabled vaultwarden || fail "could not recreate vaultwarden"
 }
@@ -627,7 +624,7 @@ rotate_ntfy() {
         mv "$_keep" "$_nf"
         fix_ownership "$_nf"
     fi
-    sh "${SCRIPT_DIR}/ntfy-pre-start.sh" >/dev/null || fail "ntfy-pre-start.sh failed"
+    run_script ntfy-pre-start.sh >/dev/null || fail "ntfy-pre-start.sh failed"
     [ -s "${PROJECT_DIR}/config/ntfy/ntfy.env" ] || fail "ntfy.env was not recreated"
     recreate_enabled ntfy backrest uptime-kuma ||
         fail "could not recreate the services that read ntfy.env"
@@ -645,7 +642,7 @@ rotate_ntfy() {
 
 # --- Main ---------------------------------------------------------------------
 
-[ -f "$ENV_FILE" ] || die ".env missing at $ENV_FILE"
+require_env_file
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
     log "=== checking $TARGET ==="

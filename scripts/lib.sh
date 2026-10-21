@@ -79,7 +79,19 @@ get_env_value() {
 # message names the fix rather than going through die's log prefix.
 require_env_file() {
     [ -f "$ENV_FILE" ] && return 0
-    echo "❌ .env missing (copy .env.dist)"
+    echo "❌ .env missing (copy .env.dist)" >&2
+    exit 1
+}
+
+# The operator commands' last stop before something they cannot take back:
+# anything but a typed "yes", end of input included, ends the whole command.
+# Usage: confirm_or_abort [question]
+confirm_or_abort() {
+    local answer=""
+    printf "%sType 'yes' to confirm: " "${1:+$1 }"
+    read -r answer || answer=""
+    [ "$answer" = yes ] && return 0
+    echo "Aborted"
     exit 1
 }
 
@@ -1115,13 +1127,4 @@ build_candidate_usernames() {
         *) result="$result admin" ;;
     esac
     printf '%s' "$result"
-}
-
-normalize_json() {
-    if [ -z "${1:-}" ]; then
-        printf '[]'
-        return 0
-    fi
-
-    printf '%s' "$1" | jq -c 'if type == "array" then sort else . end'
 }

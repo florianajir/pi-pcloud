@@ -1,6 +1,4 @@
-.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env print-required-vars test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit api-keys
-
-REQUIRED_ENV_VARS := HOST_NAME TIMEZONE EMAIL ADMIN_USER PASSWORD HOST_LAN_IP CLOUDFLARE_DNS_API_TOKEN CLOUDFLARE_ZONE_ID
+.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit api-keys
 
 MAKEFLAGS += --no-print-directory
 
@@ -31,8 +29,7 @@ SERVICE       := $(if $(s),$(s),$(GOAL_ARG))
 HEADSCALE_KEY := $(GOAL_ARG)
 
 # Generated from the `## ` comment on each target, so a new target cannot be
-# missing from it: `## <args> | text` prints the arguments beside the name, and
-# a target with no such comment is internal (print-required-vars, for install.sh).
+# missing from it: `## <args> | text` prints the arguments beside the name.
 help: ## This help
 	@echo "Commands:"
 	@awk '/^[a-z][a-z0-9-]*:.*## / { \
@@ -47,8 +44,6 @@ install: check-env install-system ## Install & enable systemd unit, start stack 
 	@if [ "$(SKIP_START)" = "1" ]; then \
 		echo "⏭️  SKIP_START=1 set; not starting stack"; \
 	else \
-		echo "🚀 Starting stack..."; \
-		$(SUDO) systemctl start $(UNIT); \
 		$(MAKE) start; \
 	fi
 	@echo "✅ Installation complete"
@@ -94,27 +89,22 @@ logs: ## Follow compose logs
 # the interactive checklist) lives in scripts/services.sh — these targets are
 # thin wrappers around it.
 services: ## List optional services and whether each is enabled
-	@/bin/sh scripts/services.sh list
+	@sh scripts/services.sh list
 
 enable: ## <name> | Enable an optional service (updates COMPOSE_PROFILES, starts it, runs its init hooks)
-	@/bin/sh scripts/services.sh enable "$(SERVICE)"
+	@sh scripts/services.sh enable "$(SERVICE)"
 
 disable: ## <name> | Disable an optional service (updates COMPOSE_PROFILES, stops it)
-	@/bin/sh scripts/services.sh disable "$(SERVICE)"
+	@sh scripts/services.sh disable "$(SERVICE)"
 
 config: ## Interactive checklist to choose which services run
-	@/bin/sh scripts/services.sh config
+	@sh scripts/services.sh config
 
 doctor: ## Report anything outside its threshold (disk, RAM, temp, containers, backups)
 	@sh scripts/doctor.sh
 
 check-env: ## Validate required .env variables
-	@sh scripts/check-env.sh $(REQUIRED_ENV_VARS)
-
-# Read by install.sh so it prompts for exactly this list: make expands `+=`
-# appends and line continuations that a text scrape of this file would miss.
-print-required-vars:
-	@echo "$(REQUIRED_ENV_VARS)"
+	@sh scripts/check-env.sh
 
 # Same suites CI runs. Every test works on a temporary copy - and compose-test
 # renders with --no-interpolate, so not even .env is read - so this touches
@@ -179,15 +169,12 @@ headscale-reset: ## Reset all Headscale nodes, preauth keys, and IP allocations
 	@sh scripts/headscale-nodes.sh reset
 
 rotate-password: ## Rotate PASSWORD after a leak (LLDAP admin + Authelia only, no Postgres)
-	@if [ ! -f .env ]; then echo "❌ .env missing (copy .env.dist)"; exit 1; fi
-	sh scripts/rotate-password.sh --skip-postgres
+	@sh scripts/rotate-password.sh --skip-postgres
 
 rotate-password-full: ## Same, plus every Postgres role and every other service using PASSWORD
-	@if [ ! -f .env ]; then echo "❌ .env missing (copy .env.dist)"; exit 1; fi
-	sh scripts/rotate-password.sh
+	@sh scripts/rotate-password.sh
 
 rotate-secret: ## TARGET=<name> | Rotate one per-service secret and propagate it (no TARGET lists them)
-	@if [ ! -f .env ]; then echo "❌ .env missing (copy .env.dist)"; exit 1; fi
 	@$(if $(TARGET),$(SUDO) )sh scripts/rotate-secret.sh "$(TARGET)"
 
 check-secrets: ## Report which secrets have drifted from their consumers; changes nothing
@@ -196,10 +183,10 @@ check-secrets: ## Report which secrets have drifted from their consumers; change
 # No check-env dependency: this reads config/backrest/config.json, not .env, and
 # it is most wanted precisely when the rest of the install is in a bad way.
 recovery-kit: ## Print the five values that open the off-site backup, to store on paper
-	sh scripts/recovery-kit.sh
+	@sh scripts/recovery-kit.sh
 
 # Deliberately not "print every secret": .env holds the rest and Backrest
 # carries it off-site, while these are generated on first start and shown in no
 # UI, so a machine that is not this one has no other way to get them.
 api-keys: ## Print the gateway base URLs and tokens, to paste into a client elsewhere
-	sh scripts/api-keys.sh
+	@sh scripts/api-keys.sh

@@ -26,17 +26,8 @@ sed '/^main "\$@"$/d' "$REPO_DIR/install.sh" >"$WORK/install-lib.sh"
 set +e
 
 INSTALL_DIR="$REPO_DIR"
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # Status as a word, so a helper's exit code cannot be mistaken for the result.
 yn() { if "$@" >/dev/null 2>&1; then echo yes; else echo no; fi; }
@@ -74,22 +65,18 @@ ok "rejects wrapping quotes"   "$(yn value_is_safe '"hunter2"')" no
 ok "rejects a newline"         "$(yn value_is_safe "$(printf 'a\nb')")" no
 ok "empty is safe (unwritten)" "$(yn value_is_safe '')" yes
 
-# --- the required-variable list comes from make, not a text scrape ----------
+# --- the required-variable list is check-env's own, not a copy -------------
 
-ok "required vars match make" \
+ok "required vars are the ones check-env enforces" \
     "$(read_required_vars)" \
-    " $(make -s -C "$REPO_DIR" print-required-vars)"
+    "$(sh "$REPO_DIR/scripts/check-env.sh" --list | sed 's/^/ /' | tr -d '\n')"
 
-mkdir -p "$WORK/appended/scripts"
-cp "$REPO_DIR/Makefile" "$WORK/appended/"
-cp "$REPO_DIR/scripts/lib.sh" "$WORK/appended/scripts/"
-printf '\nREQUIRED_ENV_VARS += CI_EXTRA_VAR\n' >>"$WORK/appended/Makefile"
-case "$(INSTALL_DIR="$WORK/appended" read_required_vars)" in
-    *CI_EXTRA_VAR) ok "honours a += append" yes yes ;;
-    *) ok "honours a += append" no yes ;;
-esac
+mkdir -p "$WORK/injected/scripts"
+printf 'printf "HOST_NAME\\nx;reboot\\n"\n' >"$WORK/injected/scripts/check-env.sh"
+expect_die "refuses a token that is not a variable name" "unexpected token 'x;reboot'" \
+    'INSTALL_DIR="$WORK/injected" read_required_vars'
 
-expect_die "dies without a Makefile" "could not read REQUIRED_ENV_VARS" \
+expect_die "dies without check-env.sh" "could not read the required variables" \
     'INSTALL_DIR="$WORK/missing" read_required_vars'
 
 # --- .env reads are delegated, with no shadow parser to drift --------------
@@ -268,7 +255,7 @@ ok "  HOST_LAN_GATEWAY" "$(grep -c '^HOST_LAN_GATEWAY=192.168.1.1$' "$ENV_FILE")
 ok "  PIHOLE_IP"      "$(grep -c '^PIHOLE_IP=192.168.1.250$' "$ENV_FILE")" 1
 ok "  no duplicate keys" \
     "$(grep -v '^#' "$ENV_FILE" | grep '=' | cut -d= -f1 | sort | uniq -d | tr '\n' ' ')" ""
-for var in $(make -s -C "$REPO_DIR" print-required-vars); do
+for var in $(sh "$REPO_DIR/scripts/check-env.sh" --list); do
     ok "  $var is present and non-empty" \
         "$([ -n "$(read_env_key "$ENV_FILE" "$var")" ] && echo yes || echo no)" yes
 done
@@ -340,5 +327,4 @@ pick_services() { printf 'bad$value\n'; }
 expect_die "an unsafe picked value dies" "COMPOSE_PROFILES" \
     '(unset COMPOSE_PROFILES; select_services)'
 
-printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

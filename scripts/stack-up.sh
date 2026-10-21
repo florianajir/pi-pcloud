@@ -170,7 +170,7 @@ await_healthy() {
 # --- Run ---
 
 log "Preparing configuration..."
-/bin/sh "$SCRIPT_DIR/run-hooks.sh" pre-start
+run_script run-hooks.sh pre-start
 
 log "Starting containers (only what changed is recreated)..."
 start_containers
@@ -181,6 +181,6 @@ log "Waiting for the containers to report healthy..."
 await_healthy || true
 
 log "Running bootstraps..."
-/bin/sh "$SCRIPT_DIR/run-hooks.sh" post-start
+run_script run-hooks.sh post-start
 
 log "Stack is up"

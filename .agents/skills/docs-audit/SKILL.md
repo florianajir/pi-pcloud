@@ -19,7 +19,7 @@ Read the source, then the doc — not the other way around.
 | `docs/README.md` | the set of files actually in `docs/` |
 | `docs/COMMANDS.md` | `Makefile` (targets, args) and the `scripts/` each target calls |
 | `docs/ARCHITECTURE.md` | `compose/*.yaml` (services) and `compose.yaml` (networks, volumes vs bind mounts), `${DATA_LOCATION}` layout |
-| `docs/INSTALLATION.md` | `.env.dist`, `Makefile` `REQUIRED_ENV_VARS` + `install` recipe, first-run bootstrap scripts |
+| `docs/INSTALLATION.md` | `.env.dist`, `scripts/check-env.sh` `REQUIRED_ENV_VARS`, the `install` recipe, first-run bootstrap scripts |
 | `docs/CONFIGURATION.md` | `.env.dist`, compose `environment:` defaults (`${VAR:-default}`), the scripts a variable claims to drive |
 | `docs/AI.md` | `llama-cpp`/`piper`/`parakeet`/`system-tools`/`open-webui` compose stanzas, `config/system-tools/app.py`, `config/piper/Dockerfile`, `scripts/open-webui-bootstrap.sh`, `scripts/llama-cpp-pre-start.sh` |
 | `docs/TROUBLESHOOTING.md` | the command in each block actually runs as written, against the container/host it names |
@@ -46,7 +46,7 @@ never quote keys, secrets or tokens into a doc.
   repo; a value with no source is a fabrication to delete or fix.
 - **Variable tables match `.env.dist`** plus compose `${VAR:-default}` fallbacks —
   both directions: no documented variable that nothing reads, no required variable
-  missing from the docs (`Makefile` `REQUIRED_ENV_VARS` is the "required" list).
+  missing from the docs (`scripts/check-env.sh` `REQUIRED_ENV_VARS` is the "required" list).
 - **Commands run as written**: middleware lists, `make` targets, `docker compose exec`
   invocations (does that binary/script exist *in that container*, or on the host?).
 - **Version-sensitive claims** ("X doesn't support Y") get re-checked against the

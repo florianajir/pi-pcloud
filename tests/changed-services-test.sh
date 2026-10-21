@@ -19,17 +19,8 @@ SCRIPT="$REPO_DIR/scripts/changed-services.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # The compose render, stubbed: `all,stremio-lan` is the ownership list (every
 # declared service), anything else is the enablement one. They differ on
@@ -179,5 +170,4 @@ rc=0
 env -u COMPOSE_PROFILES /bin/sh "$WORK/scripts/changed-services.sh" HEAD >/dev/null 2>&1 || rc=$?
 ok "one revision is a usage error" "$rc" 1
 
-printf 'changed-services-test.sh: %d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

@@ -38,7 +38,7 @@ removable_root() {
 DATA_ROOT="$(removable_root "$(resolve_data_location_path)")" || DATA_ROOT=""
 
 confirm() {
-    local answer="" dir="" file="" root="${DATA_ROOT:-<DATA_LOCATION>}"
+    local dir="" file="" root="${DATA_ROOT:-<DATA_LOCATION>}"
     echo "🗑️  Uninstalling pi-pcloud..."
     echo
     echo "⚠️  WARNING: This will remove:"
@@ -55,12 +55,7 @@ confirm() {
     echo
     echo "   Kept: .env and the media libraries ($MEDIA_DIRS under $root)."
     echo
-    printf "Are you sure? Type 'yes' to confirm: "
-    read -r answer || answer=""
-    if [ "$answer" != "yes" ]; then
-        echo "Aborted"
-        exit 1
-    fi
+    confirm_or_abort "Are you sure?"
     echo
 }
 

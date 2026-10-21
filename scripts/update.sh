@@ -23,12 +23,6 @@ UPDATE_BASE=""
 STAGE=none
 UPDATE_RECORD=""
 
-# Through make: the required-variable list lives in the Makefile, where
-# install.sh reads it too.
-check_env() {
-    make --no-print-directory check-env
-}
-
 # Compose pulls every image at once, and GHCR (lscr.io included) answers that
 # burst with `toomanyrequests` for a dozen images at a time. Every image the
 # failed attempt did fetch is local by the next one, so a retry asks for far
@@ -173,7 +167,7 @@ update_from_repository() {
     echo "📥 Repository..."
     git pull --ff-only
     record_progress || true
-    check_env
+    run_script check-env.sh
     echo "📦 Images (the stack keeps running)..."
     enter_stage images
     refresh_images
@@ -191,7 +185,7 @@ update_from_repository() {
 
 update_images() {
     echo "📦 Updating images (the stack keeps running)..."
-    check_env
+    run_script check-env.sh
     refresh_images
     echo "🚀 Recreating the containers whose image moved..."
     apply_stack

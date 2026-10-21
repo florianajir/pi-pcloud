@@ -15,17 +15,8 @@ WORK="$(mktemp -d)"
 export WORK
 trap 'rm -rf "$WORK"' EXIT
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 mkdir -p "$WORK/bin" "$WORK/state"
 
@@ -108,5 +99,4 @@ ok "the password reaches curl on stdin" \
 ok "and never on its command line" \
     "$(grep -c 'stub-password' "$WORK/curl-args" || true)" "0"
 
-printf '%s passed, %s failed\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

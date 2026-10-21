@@ -12,17 +12,8 @@ CLI="$REPO_DIR/scripts/pi-pcloud"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-pass=0
-fail=0
-
-ok() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$2" "$3"
-    fi
-}
+# shellcheck source=tests/testlib.sh
+. "$(dirname "$0")/testlib.sh"
 
 # Kept for the help cases, which need the Makefile actually parsed.
 REAL_MAKE="$(command -v make)"
@@ -87,18 +78,13 @@ case "$(cli --list-services | tr '\n' ' ')" in
     *stremio*) ok "services come from compose.yaml" yes yes ;;
     *) ok "services come from compose.yaml" "$(cli --list-services | tr '\n' ' ')" yes ;;
 esac
-case " $(cli --list-commands | tr '\n' ' ') " in
-    *" print-required-vars "*) ok "an internal target is not offered" offered "not offered" ;;
-    *) ok "an internal target is not offered" yes yes ;;
-esac
 
 # --- help covers every command ----------------------------------------------
 
 # `make help` is generated from the `## ` comment on each target, so a target
-# without one is a command help leaves out. print-required-vars is the one
-# exception: install.sh reads it, nobody types it.
+# without one is a command help leaves out.
 undocumented="$(grep -E '^[a-z][a-z0-9-]*:' "$REPO_DIR/Makefile" | grep -v '## ' |
-    cut -d: -f1 | grep -vx print-required-vars | tr '\n' ' ' || true)"
+    cut -d: -f1 | tr '\n' ' ' || true)"
 ok "every command has a help line" "$undocumented" ""
 
 help="$("$REAL_MAKE" --no-print-directory -s -C "$REPO_DIR" help)"
@@ -131,5 +117,4 @@ case "$out" in
     *) ok "a wrong PI_PCLOUD_DIR is refused" "$out" yes ;;
 esac
 
-printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
-[ "$fail" -eq 0 ]
+finish

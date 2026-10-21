@@ -155,7 +155,7 @@ for entry in $list; do
 
     # Gate before the script is looked at: the unit's `run-if-enabled.sh <svc>
     # <cmd>` returned 0 for a disabled service without ever reaching it.
-    if [ -n "$service" ] && ! /bin/sh "$SCRIPT_DIR/run-if-enabled.sh" "$service"; then
+    if [ -n "$service" ] && ! service_enabled "$service"; then
         log "$script skipped ($service disabled)"
         continue
     fi
