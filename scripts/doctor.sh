@@ -18,6 +18,10 @@ set -eu
 # healthcheck makes.
 report_anomalies() {
     echo "🩺 Diagnostic"
+    if ! service_enabled system-tools; then
+        echo "  · skipped: system-tools is disabled (make enable system-tools)"
+        return 0
+    fi
     compose exec -T system-tools python3 -c \
         "import urllib.request as r; print(r.urlopen('http://localhost:8000/status/anomalies').read().decode())" \
         || echo "❌ system-tools unreachable - check 'docker compose ps' and 'make logs'"

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Tests for scripts/check-secrets.sh (`make check-secrets`, and the last block
-# of `make doctor`) and scripts/headscale-nodes.sh (`make headscale-register`,
-# `make headscale-reset`).
+# of `make doctor`), scripts/doctor.sh and scripts/headscale-nodes.sh
+# (`make headscale-register`, `make headscale-reset`).
 #
 # Each runs in a throwaway checkout: rotate-secret.sh is a stub answering a
 # fixed set of statuses, and docker and sudo are stubs on PATH that record
@@ -51,7 +51,13 @@ export PATH
 APP="$WORK/app"
 mkdir -p "$APP/scripts"
 cp "$REPO_DIR/scripts/lib.sh" "$REPO_DIR/scripts/check-secrets.sh" \
-    "$REPO_DIR/scripts/headscale-nodes.sh" "$APP/scripts/"
+    "$REPO_DIR/scripts/headscale-nodes.sh" "$REPO_DIR/scripts/doctor.sh" \
+    "$REPO_DIR/scripts/run-if-enabled.sh" "$APP/scripts/"
+
+cat >"$APP/scripts/ram-usage.sh" <<'STUB'
+#!/bin/sh
+echo "ram-usage $*" >>"$CALLS"
+STUB
 
 # good is in sync, root needs privileges the caller lacks, drifted has drifted.
 cat >"$APP/scripts/rotate-secret.sh" <<'STUB'
@@ -155,5 +161,17 @@ ok "  and fails the command" "$rc" 1
 run sh "$APP/scripts/headscale-nodes.sh" bogus
 [ "$rc" -ne 0 ] && failed=yes || failed=no
 ok "an unknown subcommand is refused" "$failed" yes
+
+# --- doctor -----------------------------------------------------------------------
+
+run COMPOSE_PROFILES=system-tools sh "$APP/scripts/doctor.sh"
+contains "doctor asks system-tools for the anomalies" "$calls" "docker compose exec -T system-tools"
+lacks "  and reports no skip" "$out" "skipped"
+
+run COMPOSE_PROFILES=stremio sh "$APP/scripts/doctor.sh"
+contains "a disabled system-tools skips the diagnostic" "$out" "skipped: system-tools is disabled"
+lacks "  without calling into it" "$calls" "system-tools"
+contains "  and the memory ceilings still follow" "$calls" "ram-usage report"
+ok "  without failing doctor" "$rc" 0
 
 finish

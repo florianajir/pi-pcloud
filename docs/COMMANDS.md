@@ -33,7 +33,7 @@ The command is a symlink to `scripts/pi-pcloud` inside the checkout, so `git pul
 |---------|--------------|
 | `make status` | `systemctl status` for the stack unit and the Authelia log watcher |
 | `make logs` | Follow live logs |
-| `make doctor` | Report anything outside its threshold: disk, RAM, swap, temperature, load, containers, restarts, backups — then which memory ceilings are actually binding and which were never approached ([Monitoring](MONITORING.md#ceilings-and-what-psi-cannot-see)), then whether each secret still agrees with its consumers |
+| `make doctor` | Report anything outside its threshold: disk, RAM, swap, temperature, load, containers, restarts, backups (skipped while `system-tools` is disabled) — then which memory ceilings are actually binding and which were never approached ([Monitoring](MONITORING.md#ceilings-and-what-psi-cannot-see)), then whether each secret still agrees with its consumers |
 | `make services` | List optional services, whether each is enabled, what the running containers hold right now, and the RAM ceilings of the selection |
 | `make enable <service>` | Enable a service: update `COMPOSE_PROFILES`, start it, run its init hooks — then what it costs: its ceiling, and what it was last measured holding here |
 | `make disable <service>` | Disable a service: update `COMPOSE_PROFILES` and stop it — and say what that frees |

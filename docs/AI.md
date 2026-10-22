@@ -687,7 +687,7 @@ One operation, `get_system_status(topic)`:
 | `backups` | Last backup per plan, whether it worked, when the next one runs |
 | `devices` | Tailnet devices, their owner, which are online, when the rest were last seen |
 
-The same verdict is reachable from a shell with **`make doctor`**, which asks this container for the `anomalies` topic and prints it — the same endpoint, so the terminal and the chat cannot disagree.
+The same verdict is reachable from a shell with **`make doctor`**, which asks this container for the `anomalies` topic and prints it — the same endpoint, so the terminal and the chat cannot disagree. With `system-tools` disabled, `make doctor` skips that block.
 
 ### Reporting versus judging
 

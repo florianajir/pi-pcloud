@@ -8,7 +8,7 @@ make status     # systemd unit state for the stack and the log watcher
 make logs       # follow everything
 ```
 
-`make doctor` asks the `system-tools` container for the same reading the AI assistant's `anomalies` topic returns, so the terminal and the chat cannot disagree.
+`make doctor` asks the `system-tools` container for the same reading the AI assistant's `anomalies` topic returns, so the terminal and the chat cannot disagree. With `system-tools` disabled that block is skipped; the memory ceilings and the secret checks still run.
 
 ## Startup
 
