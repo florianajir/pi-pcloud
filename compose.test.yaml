@@ -175,7 +175,7 @@ services:
   # klutchell/unbound is a distroless image; pass -d to stay in foreground.
   # The drill binary is broken on some ARM64 kernels; use unbound-host instead.
   unbound:
-    image: klutchell/unbound:v1.26.1@sha256:9a3939ca33d6d3b42b81a70391bb8e43f0a08d2bd7a3fdffb43d427493345c36
+    image: klutchell/unbound:v1.26.2@sha256:50cbeb32b5838a829a7226b19cb151f9535bd7f9f3190f950780f452fe807478
     command: ["-d"]
     volumes: !override
       - ./config/unbound/unbound.conf:/etc/unbound/unbound.conf:ro
