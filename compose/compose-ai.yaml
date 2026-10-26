@@ -440,7 +440,7 @@ services:
   # but its own config, no capability.
   openclaw:
     <<: *service-defaults
-    image: ghcr.io/openclaw/openclaw:2026.10.5@sha256:f40d1e66fd14d8c5b49c832f4100f83b53fdc01f5108f7db11de38fd0ee6dbe5
+    image: ghcr.io/openclaw/openclaw:2026.10.7@sha256:fb26f0841659dc757f23feec9adeab51f11d76779a409db5d22e191b43841afa
     container_name: pi-openclaw
     profiles: ["openclaw", "all"]
     # Not the image's docker-entrypoint.mjs: its `openclaw doctor --fix`
