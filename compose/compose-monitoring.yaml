@@ -45,7 +45,7 @@ x-healthcheck-fast: &healthcheck-fast
 services:
   beszel:
     <<: *service-defaults
-    image: henrygd/beszel:0.21.0
+    image: henrygd/beszel:0.21.1
     container_name: pi-beszel
     profiles: ["beszel", "beszel-agent", "all"]
     networks:
