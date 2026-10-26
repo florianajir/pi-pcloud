@@ -154,7 +154,7 @@ services:
     <<: *service-defaults
     container_name: pi-immich
     profiles: ["immich-server", "all"]
-    image: ghcr.io/immich-app/immich-server:v3.3.3
+    image: ghcr.io/immich-app/immich-server:v3.3.5
     volumes:
       - ${DATA_LOCATION:-./data}/immich:/data
       - ${DATA_LOCATION:-./data}/authelia-config/immich-oauth-config.yaml:/immich-oauth-config.yaml:ro
@@ -244,7 +244,7 @@ services:
     labels:
       - "homepage.description=Face and object recognition for Immich"
       - "pi-pcloud.companion-of=immich-server"
-    image: ghcr.io/immich-app/immich-machine-learning:v3.3.1
+    image: ghcr.io/immich-app/immich-machine-learning:v3.3.5
     networks:
       - egress_immich
       - immich
