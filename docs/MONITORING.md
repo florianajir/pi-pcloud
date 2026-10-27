@@ -142,6 +142,8 @@ to write the file is never an error.
 
 Everything below is created and kept in sync by `scripts/uptime-kuma-bootstrap.sh`, which runs on stack start and can be re-run any time. It *converges* existing monitors rather than only creating missing ones, so reshaping the instance means editing `scripts/uptime-kuma-bootstrap.py` and re-running. Monitors paused by hand in the UI stay paused.
 
+The image is the `-slim` variant, with no Chromium and no embedded MariaDB: the database is SQLite, and a *Real Browser* monitor added by hand needs a remote browser configured in the UI.
+
 ### Groups are blast radius, not theme
 
 The group decides the check interval, the retry budget and the ntfy priority:
