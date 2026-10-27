@@ -76,7 +76,7 @@ Every routed service follows the same path: TLS at Traefik, then the `lan` IP al
 | **Gluetun** | VPN gateway; owns the network namespace for qBittorrent, Kapowarr and Stremio | those three |
 | **qBittorrent** | Torrent client, all traffic through Gluetun | users |
 | **Prowlarr** | Indexer manager | users |
-| **FlareSolverr** | Solves the Cloudflare challenges of Prowlarr's protected indexers | Prowlarr only |
+| **FlareSolverr** | Solves the Cloudflare challenges of Prowlarr's protected indexers and Kapowarr's download source | Prowlarr and Kapowarr only, on a segment of their own |
 | **Kapowarr** | Comics and manga manager; feeds the Kavita libraries | users |
 | **Shelfmark** | Book and audiobook search; files what it downloads into the Kavita Books library | users |
 | **Audiobookshelf** | Audiobook player for `download/audiobooks/`, with Audible metadata matching and progress sync | users |

@@ -164,6 +164,12 @@ networks:
       config:
         - subnet: 172.31.242.0/24
         - subnet: fd00:31:242::/64
+  egress_flaresolverr:
+    driver: bridge
+    name: egress_flaresolverr
+    ipam:
+      config:
+        - subnet: 172.31.243.0/24
   frontend:
     driver: bridge
     name: frontend
@@ -222,6 +228,17 @@ networks:
     driver: bridge
     name: rss
     internal: true
+  # FlareSolverr and its two clients: Prowlarr, and Kapowarr through gluetun's
+  # namespace. Gluetun's firewall admits every subnet attached to it, so joining
+  # is all Kapowarr needs. Pinned outside 172.30.0.0/16 so FlareSolverr's
+  # address is not in ALLOW_IP_RANGES, which qBittorrent exempts from its login.
+  flaresolverr:
+    driver: bridge
+    name: flaresolverr
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.244.0/24
   # Redis only - on `auth`, a media addon would have a route to the directory.
   aiometadata:
     driver: bridge
