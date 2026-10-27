@@ -171,24 +171,6 @@ services:
       LLDAP_JWT_SECRET: ci-jwt-secret-for-testing-placeholder
     env_file: !reset []
 
-  # --- unbound: use multi-arch image for CI (mvance/unbound-rpi is ARM-only) ---
-  # klutchell/unbound is a distroless image; pass -d to stay in foreground.
-  # The drill binary is broken on some ARM64 kernels; use unbound-host instead.
-  unbound:
-    image: klutchell/unbound:v1.26.2@sha256:50cbeb32b5838a829a7226b19cb151f9535bd7f9f3190f950780f452fe807478
-    command: ["-d"]
-    volumes: !override
-      - ./config/unbound/unbound.conf:/etc/unbound/unbound.conf:ro
-      # This image ships its trust anchor at /var/unbound/root.key, not where the
-      # production image keeps it; unbound.conf includes this path either way.
-      - ./config/unbound/dnssec-ci.conf:/etc/unbound/dnssec.d/dnssec.conf:ro
-    healthcheck:
-      test: ["CMD", "unbound-host", "-r", "-t", "A", "cloudflare.com"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-
   # --- pihole: disable host port bindings, fix static IP for CI bridge network ---
   pihole:
     # systemd-resolved already holds port 53 on the runner.

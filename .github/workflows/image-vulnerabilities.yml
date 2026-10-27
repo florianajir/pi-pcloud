@@ -44,8 +44,7 @@ jobs:
       TRIVY: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
       # The stack runs on a Raspberry Pi. The amd64 variant of an image carries
       # different package versions, so scanning it would report vulnerabilities
-      # this host does not have and miss the ones it does — and
-      # mvance/unbound-rpi publishes no amd64 variant at all.
+      # this host does not have and miss the ones it does.
       PLATFORM: linux/arm64
       # Only what a tag bump can actually fix. A vulnerability with no upstream
       # fix is not an action, and this exists to say which bumps are worth
