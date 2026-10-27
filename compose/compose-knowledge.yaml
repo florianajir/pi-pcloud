@@ -47,7 +47,7 @@ services:
     <<: *service-defaults
     # The Debian image: mod_auth_openidc is only built into this variant, and
     # OIDC_ENABLED makes Apache refuse to start without it.
-    image: freshrss/freshrss:1.30.2@sha256:a4a4a2233c082940b3ed5a32e2bf12d6c5271062be7e34c188dec99816540fc4
+    image: freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df
     container_name: pi-freshrss
     profiles: ["freshrss", "all"]
     networks:
