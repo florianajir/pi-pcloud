@@ -146,7 +146,7 @@ services:
 
   headscale:
     <<: *service-defaults
-    image: headscale/headscale:v0.29.5
+    image: headscale/headscale:v0.29.6
     container_name: pi-headscale
     command: serve
     environment:
