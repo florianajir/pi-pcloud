@@ -361,7 +361,7 @@ services:
   # else, so backrest takes both the database dump and the bare repositories.
   forgejo:
     <<: *service-defaults
-    image: codeberg.org/forgejo/forgejo:17.0.0@sha256:06d38310de496a10186d952bdad5ca764c153c8023ede8dfa0944c79a1dc5412
+    image: codeberg.org/forgejo/forgejo:17.0.1@sha256:fcd19ff4ebc85fb098a67e8e1d0d5a84d07dd6e8a23edcfdfd5b71a6178953be
     container_name: pi-forgejo
     profiles: ["forgejo", "all"]
     networks:
