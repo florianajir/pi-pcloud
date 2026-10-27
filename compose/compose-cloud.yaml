@@ -154,7 +154,7 @@ services:
     <<: *service-defaults
     container_name: pi-immich
     profiles: ["immich-server", "all"]
-    image: ghcr.io/immich-app/immich-server:v3.3.3
+    image: ghcr.io/immich-app/immich-server:v3.3.5
     volumes:
       - ${DATA_LOCATION:-./data}/immich:/data
       - ${DATA_LOCATION:-./data}/authelia-config/immich-oauth-config.yaml:/immich-oauth-config.yaml:ro
@@ -244,7 +244,7 @@ services:
     labels:
       - "homepage.description=Face and object recognition for Immich"
       - "pi-pcloud.companion-of=immich-server"
-    image: ghcr.io/immich-app/immich-machine-learning:v3.3.1
+    image: ghcr.io/immich-app/immich-machine-learning:v3.3.5
     networks:
       - egress_immich
       - immich
@@ -361,7 +361,7 @@ services:
   # else, so backrest takes both the database dump and the bare repositories.
   forgejo:
     <<: *service-defaults
-    image: codeberg.org/forgejo/forgejo:17.0.0@sha256:06d38310de496a10186d952bdad5ca764c153c8023ede8dfa0944c79a1dc5412
+    image: codeberg.org/forgejo/forgejo:17.0.1@sha256:fcd19ff4ebc85fb098a67e8e1d0d5a84d07dd6e8a23edcfdfd5b71a6178953be
     container_name: pi-forgejo
     profiles: ["forgejo", "all"]
     networks:
@@ -625,7 +625,7 @@ services:
 
   n8n:
     <<: *service-defaults
-    image: n8nio/n8n:2.44.4
+    image: n8nio/n8n:2.44.6
     container_name: pi-n8n
     profiles: ["n8n", "n8n-runners", "all"]
     expose:
@@ -691,7 +691,7 @@ services:
 
   n8n-runners:
     <<: *service-defaults
-    image: n8nio/runners:2.44.4
+    image: n8nio/runners:2.44.6
     container_name: pi-n8n-runners
     profiles: ["n8n-runners", "all"]
     labels:
@@ -718,7 +718,7 @@ services:
 
   ntfy:
     <<: *service-defaults
-    image: binwiederhier/ntfy:v2.32.0
+    image: binwiederhier/ntfy:v2.33.1
     container_name: pi-ntfy
     command: serve
     networks:

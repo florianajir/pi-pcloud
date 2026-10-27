@@ -276,7 +276,7 @@ services:
   # would change that, and mean moving it behind gluetun.
   aiostreams:
     <<: *service-defaults
-    image: ghcr.io/viren070/aiostreams:v2.36.0
+    image: ghcr.io/viren070/aiostreams:v2.37.0
     container_name: pi-aiostreams
     profiles: ["aiostreams", "all"]
     networks:
@@ -428,7 +428,7 @@ services:
 
   aiometadata:
     <<: *service-defaults
-    image: ghcr.io/cedya77/aiometadata:3.7.0@sha256:6bdb7482c9e848e5c5894fa04bcf8580e73ca578ddd47d2a51f337b4a8fa3a85
+    image: ghcr.io/cedya77/aiometadata:3.8.0@sha256:4b2c433d7aa369da53bc9b204f9373153f31eff421c03134190a4abd640e43fb
     container_name: pi-aiometadata
     profiles: ["aiometadata", "all"]
     networks:
@@ -813,7 +813,7 @@ services:
     # The full image, for its bundled bypasser: the -lite one's FlareSolverr
     # reports the direct-download mirror's DDoS-Guard as solved while returning the
     # interstitial. Hence a second Chromium, with its mem_limit and shm_size.
-    image: ghcr.io/calibrain/shelfmark:v1.5.0@sha256:c598583bebc70d9ecab49e7e65ba627e08389352df35b647462e33894b3cfb14
+    image: ghcr.io/calibrain/shelfmark:v1.5.1@sha256:acfa46b8be80f1e2f084a7703ff027ab274397feb24006114e92c05c140b62c3
     container_name: pi-shelfmark
     profiles: ["shelfmark", "all"]
     networks:
@@ -903,7 +903,7 @@ services:
 
   audiobookshelf:
     <<: *service-defaults
-    image: ghcr.io/advplyr/audiobookshelf:2.37.1@sha256:581d68b2a6fc7ebf58d81c878a9f387cbbc0d88ac9d37b298b9cee10168af85b
+    image: ghcr.io/advplyr/audiobookshelf:2.37.2@sha256:b897c33f05972fb1bf484f7487bc878fa91ec8691335c1db6e2929c3a7658efa
     container_name: pi-audiobookshelf
     profiles: ["audiobookshelf", "all"]
     networks:

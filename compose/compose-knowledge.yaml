@@ -47,7 +47,7 @@ services:
     <<: *service-defaults
     # The Debian image: mod_auth_openidc is only built into this variant, and
     # OIDC_ENABLED makes Apache refuse to start without it.
-    image: freshrss/freshrss:1.30.2@sha256:a4a4a2233c082940b3ed5a32e2bf12d6c5271062be7e34c188dec99816540fc4
+    image: freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df
     container_name: pi-freshrss
     profiles: ["freshrss", "all"]
     networks:
@@ -211,7 +211,7 @@ services:
     <<: *service-defaults
     # ghcr: the docker.io repository stopped at v0.95.0 when the project
     # renamed.
-    image: ghcr.io/triliumnext/trilium:v0.106.0@sha256:be93e82699b12950ac4e2e7b565ce092fe215b8dd6ddfc47921e37b49e6a0e8b
+    image: ghcr.io/triliumnext/trilium:v0.106.1@sha256:d87d810fdcb549db65710a40933acaa16bc75c9426a9164c547f7ba95592941b
     container_name: pi-trilium
     profiles: ["trilium", "all"]
     networks:
@@ -294,7 +294,7 @@ services:
   # feed: a price, a stock status, a school menu.
   changedetection:
     <<: *service-defaults
-    image: ghcr.io/dgtlmoon/changedetection.io:0.60.9@sha256:04eaae7915bad711160cb15abe160f6d3fabe98bbbd658509d4b7a654000fb2d
+    image: ghcr.io/dgtlmoon/changedetection.io:0.60.10@sha256:72f97681f390e4d6ae3e6585e1e0036449910f347144b766fc23910458566a1a
     container_name: pi-changedetection
     profiles: ["changedetection", "all"]
     networks:
