@@ -332,7 +332,7 @@ services:
 
   dockhand:
     <<: *service-defaults
-    image: fnsys/dockhand:v1.0.54
+    image: fnsys/dockhand:v1.0.55
     container_name: pi-dockhand
     profiles: ["dockhand", "all"]
     # Not frontend: it reads the Docker socket. Its bootstrap sets
