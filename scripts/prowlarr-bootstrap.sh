@@ -5,10 +5,10 @@
 #   3. maintain a patched copy of one bundled indexer definition, so it maps the
 #      infohash the feed sends
 #   4. point a health/update notification at ntfy
-# Prowlarr shares gluetun's network namespace, so qBittorrent (localhost:8080),
-# FlareSolverr (localhost:8191) and the Prowlarr API (localhost:9696) are all reachable
-# from inside the container. The API key is read straight from config.xml
-# (rendered by prowlarr-pre-start.sh). A post-start hook, so it runs after compose up.
+# Every call runs inside the Prowlarr container: qBittorrent is gluetun:8080,
+# FlareSolverr flaresolverr:8191 and the Prowlarr API localhost:9696. The API key
+# is read straight from config.xml (rendered by prowlarr-pre-start.sh). A
+# post-start hook, so it runs after compose up.
 
 set -eu
 

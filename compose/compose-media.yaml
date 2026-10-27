@@ -84,6 +84,8 @@ services:
         # validation rejects a dotless host and then fails to start the browser.
         aliases:
           - gluetun.docker
+      # Kapowarr's route to FlareSolverr.
+      flaresolverr: {}
     expose:
       - 8080
       - 11470
@@ -634,6 +636,7 @@ services:
     profiles: ["prowlarr", "all"]
     networks:
       - frontend
+      - flaresolverr
     dns:
       - 1.1.1.1
       - 1.0.0.1
@@ -678,8 +681,10 @@ services:
     labels:
       - "homepage.description=Cloudflare challenge solver for Prowlarr"
       - "pi-pcloud.companion-of=prowlarr"
+    # Off frontend: its Chromium is unsandboxed and often behind on fixes.
     networks:
-      - frontend
+      - flaresolverr
+      - egress_flaresolverr
     dns:
       - 1.1.1.1
       - 1.0.0.1

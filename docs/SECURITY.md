@@ -433,10 +433,13 @@ greps for `PONG`; `make check-secrets` proves the same thing from outside.
 
 Every service that needs nothing but an ingress route gets a two-member segment with Traefik rather
 than a seat on `frontend` — `backup`, `dockhand` and `vaultwarden_web` follow that pattern — and the
-data segments behind the apps are `internal: true`. Three single-member networks — `egress_unbound`,
-`egress_immich`, `egress_ddns` — exist only because a bridge is the sole way to give a container the
-internet: their occupants need egress and no peer at all. The full list of networks, subnets and
-members is in [Networking → Network isolation](NETWORKING.md#network-isolation).
+data segments behind the apps are `internal: true`. Four single-member networks — `egress_unbound`,
+`egress_immich`, `egress_ddns`, `egress_flaresolverr` — exist only because a bridge is the sole way
+to give a container the internet: their occupants need egress and no peer at all. FlareSolverr's
+only other network is the internal `flaresolverr`, shared with Prowlarr and Gluetun, because its
+Chromium renders indexer pages unsandboxed and often lags security fixes; through Gluetun it still
+reaches every port in that namespace, Kapowarr's and Stremio's included. The full list of
+networks, subnets and members is in [Networking → Network isolation](NETWORKING.md#network-isolation).
 
 Inside `frontend` there is no isolation: any member can open any other member's `expose`d port, with
 no Traefik and so no `lan` middleware and no forward-auth in the path. That is a property of a Docker

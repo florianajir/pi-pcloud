@@ -164,6 +164,12 @@ networks:
       config:
         - subnet: 172.31.242.0/24
         - subnet: fd00:31:242::/64
+  egress_flaresolverr:
+    driver: bridge
+    name: egress_flaresolverr
+    ipam:
+      config:
+        - subnet: 172.31.243.0/24
   frontend:
     driver: bridge
     name: frontend
@@ -222,6 +228,15 @@ networks:
     driver: bridge
     name: rss
     internal: true
+  # Outside 172.30.0.0/16: in ALLOW_IP_RANGES, FlareSolverr would skip
+  # qBittorrent's login. docs/NETWORKING.md#network-isolation
+  flaresolverr:
+    driver: bridge
+    name: flaresolverr
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.244.0/24
   # Redis only - on `auth`, a media addon would have a route to the directory.
   aiometadata:
     driver: bridge
