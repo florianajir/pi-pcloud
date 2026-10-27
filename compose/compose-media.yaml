@@ -681,9 +681,7 @@ services:
     labels:
       - "homepage.description=Cloudflare challenge solver for Prowlarr"
       - "pi-pcloud.companion-of=prowlarr"
-    # Off frontend: its Chromium renders third-party pages with --no-sandbox, and
-    # often lags upstream security fixes. A compromised renderer then reaches
-    # its two clients and the internet, not every service's internal port.
+    # Off frontend: its Chromium is unsandboxed and often behind on fixes.
     networks:
       - flaresolverr
       - egress_flaresolverr

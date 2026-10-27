@@ -228,10 +228,8 @@ networks:
     driver: bridge
     name: rss
     internal: true
-  # FlareSolverr and its two clients: Prowlarr, and Kapowarr through gluetun's
-  # namespace. Gluetun's firewall admits every subnet attached to it, so joining
-  # is all Kapowarr needs. Pinned outside 172.30.0.0/16 so FlareSolverr's
-  # address is not in ALLOW_IP_RANGES, which qBittorrent exempts from its login.
+  # Outside 172.30.0.0/16: in ALLOW_IP_RANGES, FlareSolverr would skip
+  # qBittorrent's login. docs/NETWORKING.md#network-isolation
   flaresolverr:
     driver: bridge
     name: flaresolverr
