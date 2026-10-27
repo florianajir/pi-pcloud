@@ -45,7 +45,7 @@ x-healthcheck-fast: &healthcheck-fast
 services:
   unbound:
     <<: *service-defaults
-    image: mvance/unbound-rpi:1.22.0
+    image: klutchell/unbound:v1.26.2@sha256:50cbeb32b5838a829a7226b19cb151f9535bd7f9f3190f950780f452fe807478
     container_name: pi-unbound
     networks:
       dns_internal:
@@ -54,17 +54,15 @@ services:
     expose:
       - 5335
     volumes:
-      - ./config/unbound/unbound.conf:/opt/unbound/etc/unbound/unbound.conf:ro
-      # The DNSSEC anchor path is image-specific; unbound.conf includes whatever
-      # is mounted here. compose.test.yaml mounts its own for the CI image.
-      - ./config/unbound/dnssec.conf:/etc/unbound/dnssec.d/dnssec.conf:ro
+      - ./config/unbound/unbound.conf:/etc/unbound/unbound.conf:ro
     healthcheck:
       <<: *healthcheck-default
       # localhost is a built-in local zone: this proves the daemon serves, not
       # that the uplink works. A public name turned every WAN cut into an
       # unbound outage, blocking pihole's depends_on. Recursion is Uptime Kuma's
       # `dns resolution` monitor.
-      test: ["CMD", "drill", "@127.0.0.1", "-p", "5335", "localhost"]
+      # -p must precede @server, or this drill queries :53.
+      test: ["CMD", "drill", "-p", "5335", "@127.0.0.1", "localhost"]
       start_period: 10s
       start_interval: 5s
     cpu_shares: *cpu-prio-critical

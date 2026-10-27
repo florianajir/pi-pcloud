@@ -1,9 +1,7 @@
 version: 2
 updates:
-  # Docker images in the Compose files. Both directories are listed because the
-  # fetcher does not recurse and does not follow compose `include:`: compose.yaml
-  # itself pins nothing (every service image lives in compose/), while the root
-  # still holds compose.test.yaml's unbound pin.
+  # Docker images in the Compose files. The fetcher neither recurses nor follows
+  # compose `include:`, so compose/ is named; the root pins nothing.
   # That directory's files are named compose-<domain>.yaml, not <domain>.yaml,
   # for the same fetcher: it matches basenames against
   # /(docker-)?compose(-[\w]+)?(?>\.[\w-]+)?\.ya?ml/i, which "core.yaml" can
@@ -11,7 +9,6 @@ updates:
   # with no error anywhere; tests/compose-invariants.py fails the build instead.
   - package-ecosystem: "docker-compose"
     directories:
-      - "/"
       - "/compose"
     # Images that must carry their sibling's tag. Ungrouped they arrive as two
     # pull requests and auto-merge lands them minutes apart; the skew is a

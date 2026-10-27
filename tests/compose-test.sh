@@ -261,10 +261,6 @@ dependabot_tree() {
     # The other categories read these two and would stop on a tree without them.
     cp "$REPO_DIR/compose.yaml" "$_tree/compose.yaml"
     cp "$REPO_DIR/config/postgres/init-databases.sh" "$_tree/config/postgres/"
-    # The root's own image pin, so the "/" half of `directories:` is exercised
-    # too - compose.yaml pins nothing, and without this the root could stop
-    # being listed with nothing here noticing.
-    cp "$REPO_DIR/compose.test.yaml" "$_tree/compose.test.yaml"
     for _f in "$REPO_DIR"/config/*/Dockerfile; do
         _d="$_tree/config/$(basename "$(dirname "$_f")")"
         mkdir -p "$_d" && cp "$_f" "$_d/"
@@ -293,12 +289,12 @@ dependabot_says() {
 
 blind() {
     _label="$1"
-    _name="$2"
+    _path="$2"   # where the one pin lands, relative to the repository root
     _drop="$3"
     _expect="$4"
     _t="$(mktemp -d)"
     dependabot_tree "$_t"
-    printf 'services:\n  x:\n    image: foo:1\n' > "$_t/compose/$_name"
+    printf 'services:\n  x:\n    image: foo:1\n' > "$_t/$_path"
     if [ -n "$_drop" ]; then
         grep -vF -e "$_drop" "$REPO_DIR/.github/dependabot.yml" > "$_t/.github/dependabot.yml"
     else
@@ -348,11 +344,11 @@ blind_docker "a new Dockerfile no docker update names" config/newthing '' \
 blind_docker "a docker update naming a directory with no Dockerfile" '' /config/ghost \
     "a docker update names /config/ghost, which holds no Dockerfile"
 
-blind "a domain file renamed to one Dependabot never fetches" core.yaml '' \
+blind "a domain file renamed to one Dependabot never fetches" compose/core.yaml '' \
     "compose/core.yaml pins images under a name Dependabot never fetches"
-blind "a /compose that no docker-compose update names" compose-core.yaml '- "/compose"' \
+blind "a /compose that no docker-compose update names" compose/compose-core.yaml '- "/compose"' \
     "images are pinned under /compose but no docker-compose update names"
-blind "a / that no docker-compose update names" compose-core.yaml '- "/"' \
+blind "a root compose file that starts pinning an image" compose.test.yaml '' \
     "images are pinned under / but no docker-compose update names"
 
 # --- and it must never echo a value it was handed ---------------------------

@@ -147,7 +147,8 @@ services:
 
   uptime-kuma:
     <<: *service-defaults
-    image: louislam/uptime-kuma:2.5.6@sha256:9912da7d7d9b6ddc0c2d904beb84d24689c1ed9c33b81419eb9008663a92a329
+    # -slim: no Chromium or embedded MariaDB, which no monitor here needs.
+    image: louislam/uptime-kuma:2.5.8-slim@sha256:3e0ae13fa92d0a1108b7e4133eaa25b2bc4e26d2f5d8691a5cb01ee1fe5c95f1
     container_name: pi-uptime-kuma
     profiles: ["uptime-kuma", "all"]
     networks:

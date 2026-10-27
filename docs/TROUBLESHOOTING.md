@@ -100,7 +100,7 @@ If devices aren't using Pi-hole at all, check your router's DHCP DNS option, or 
 
 ```bash
 docker compose logs unbound | tail -20
-docker compose exec unbound drill @127.0.0.1 -p 5335 cloudflare.com
+docker compose exec unbound drill -p 5335 @127.0.0.1 cloudflare.com
 ```
 
 The Uptime Kuma `dns resolution` monitor covers this whole chain continuously — see [Monitoring](MONITORING.md#what-is-actually-checked).

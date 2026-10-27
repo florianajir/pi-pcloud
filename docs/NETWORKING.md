@@ -30,7 +30,7 @@ sequenceDiagram
 
 `dns_internal` is an internal bridge with no gateway; Unbound's own internet access for root-server queries goes through the separate `egress_unbound` network, of which it is the only member. No other container can reach Unbound, so nothing can bypass Pi-hole's filtering.
 
-**Unbound validates DNSSEC.** The bind-mounted `config/unbound/unbound.conf` replaces the image's whole configuration, trust anchor included — without one Unbound does not validate at all and `harden-dnssec-stripped: yes` is inert. The anchor comes from `config/unbound/dnssec.conf`: `auto-trust-anchor-file` rather than a static `trust-anchor-file`, so RFC 5011 can roll the key (`var/` is owned by `_unbound`, the user the daemon drops to, so it can rewrite the file). `val-clean-additional: yes` drops unvalidated additional-section records rather than passing them through. A bogus domain answers SERVFAIL with no address.
+**Unbound validates DNSSEC.** The bind-mounted `config/unbound/unbound.conf` replaces the image's whole configuration, trust anchor included — without one Unbound does not validate at all and `harden-dnssec-stripped: yes` is inert. It sets `auto-trust-anchor-file` rather than a static `trust-anchor-file`, letting RFC 5011 roll the key: `/var/unbound` belongs to `unbound`, the user the daemon drops to, which can therefore rewrite the file. `val-clean-additional: yes` drops unvalidated additional-section records rather than passing them through. A bogus domain answers SERVFAIL with no address.
 
 ## Local names
 
