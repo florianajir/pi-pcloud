@@ -549,7 +549,7 @@ services:
   # stream URLs it builds. docs/SECURITY.md#per-service-protection.
   stremthru:
     <<: *service-defaults
-    image: ghcr.io/muniftanjim/stremthru:0.105.3
+    image: ghcr.io/muniftanjim/stremthru:0.105.4
     container_name: pi-stremthru
     profiles: ["stremthru", "all"]
     networks:
