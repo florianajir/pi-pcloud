@@ -47,8 +47,6 @@ services:
     <<: *service-defaults
     image: klutchell/unbound:v1.26.2@sha256:50cbeb32b5838a829a7226b19cb151f9535bd7f9f3190f950780f452fe807478
     container_name: pi-unbound
-    # The mounted unbound.conf replaces the image's do-daemonize: no.
-    command: ["-d"]
     networks:
       dns_internal:
         ipv4_address: 172.30.53.53
