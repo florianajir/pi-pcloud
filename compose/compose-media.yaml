@@ -276,7 +276,7 @@ services:
   # would change that, and mean moving it behind gluetun.
   aiostreams:
     <<: *service-defaults
-    image: ghcr.io/viren070/aiostreams:v2.36.0
+    image: ghcr.io/viren070/aiostreams:v2.37.0
     container_name: pi-aiostreams
     profiles: ["aiostreams", "all"]
     networks:
