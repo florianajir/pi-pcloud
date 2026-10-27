@@ -18,8 +18,7 @@ import re
 import subprocess
 import sys
 
-# The Pi is arm64, and runs 32-bit userland containers too: a Cortex-A76 keeps
-# AArch32 at EL0.
+# The Pi is arm64; a Cortex-A76 also runs 32-bit (AArch32) containers.
 RUNNABLE = {"arm64", "arm"}
 
 # Locally built images carry no registry manifest; compose builds them from

@@ -1,8 +1,7 @@
 version: 2
 updates:
-  # Docker images in the Compose files. compose/ is named explicitly because the
-  # fetcher does not recurse and does not follow compose `include:`; the root
-  # pins nothing, and tests/compose-invariants.py fails the build if it starts to.
+  # Docker images in the Compose files. The fetcher neither recurses nor follows
+  # compose `include:`, so compose/ is named; the root pins nothing.
   # That directory's files are named compose-<domain>.yaml, not <domain>.yaml,
   # for the same fetcher: it matches basenames against
   # /(docker-)?compose(-[\w]+)?(?>\.[\w-]+)?\.ya?ml/i, which "core.yaml" can

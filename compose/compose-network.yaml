@@ -47,8 +47,7 @@ services:
     <<: *service-defaults
     image: klutchell/unbound:v1.26.2@sha256:50cbeb32b5838a829a7226b19cb151f9535bd7f9f3190f950780f452fe807478
     container_name: pi-unbound
-    # The image sets do-daemonize: no in its own unbound.conf, which the bind
-    # mount below replaces.
+    # The mounted unbound.conf replaces the image's do-daemonize: no.
     command: ["-d"]
     networks:
       dns_internal:
@@ -64,8 +63,7 @@ services:
       # that the uplink works. A public name turned every WAN cut into an
       # unbound outage, blocking pihole's depends_on. Recursion is Uptime Kuma's
       # `dns resolution` monitor.
-      # -p before @server: this drill fixes the port when it parses the server,
-      # and the other order queries :53 and fails with a network error.
+      # -p must precede @server, or this drill queries :53.
       test: ["CMD", "drill", "-p", "5335", "@127.0.0.1", "localhost"]
       start_period: 10s
       start_interval: 5s
