@@ -631,7 +631,7 @@ services:
 
   prowlarr:
     <<: *service-defaults
-    image: lscr.io/linuxserver/prowlarr:2.6.5
+    image: lscr.io/linuxserver/prowlarr:2.7.0
     container_name: pi-prowlarr
     profiles: ["prowlarr", "all"]
     networks:
