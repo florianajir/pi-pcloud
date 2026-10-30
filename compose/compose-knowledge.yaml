@@ -152,7 +152,7 @@ services:
   searxng:
     <<: *service-defaults
     # Upstream tags one build a day as <date>-<sha>; there is no semver release.
-    image: searxng/searxng:2026.10.24-ef0ec03da
+    image: searxng/searxng:2026.10.27-cb74e7f81
     container_name: pi-searxng
     # Started with open-webui and openclaw, whose web search calls it.
     profiles: ["searxng", "open-webui", "openclaw", "all"]
