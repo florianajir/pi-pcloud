@@ -45,7 +45,7 @@ x-healthcheck-fast: &healthcheck-fast
 services:
   traefik:
     <<: *service-defaults
-    image: traefik:v3.7.15
+    image: traefik:v3.7.16
     container_name: pi-traefik
     environment:
       - CLOUDFLARE_DNS_API_TOKEN=${CLOUDFLARE_DNS_API_TOKEN:-}
