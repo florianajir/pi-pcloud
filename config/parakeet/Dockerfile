@@ -4,7 +4,7 @@
 # container so the model is sized against its own limit rather than that
 # container's limit - see docs/AI.md#why-not-open-webuis-built-in-whisper for the numbers
 # that ruled out the bundled faster-whisper.
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 # int8 by default: 8.7% WER against fp32's 4.5%, but 1.2GB resident instead of
 # 2.3GB and a ~660MB model in the image instead of ~2.5GB. Build with
