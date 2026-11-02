@@ -4,7 +4,7 @@
 # (POST / + GET /voices) rather than the /v1/audio/speech shape Open WebUI's
 # "OpenAI" TTS engine calls. openai_api.py is that translation layer; it uses
 # Piper's Python API directly, so this stays a single process.
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 # piper-tts publishes a manylinux aarch64 wheel, so nothing is compiled here and
 # the image builds in seconds on the Pi. Pinned, like every other image here.
