@@ -1,7 +1,7 @@
 # Built rather than pulled: every off-the-shelf equivalent (node-exporter,
 # glances) speaks Prometheus or its own JSON, not the OpenAPI shape Open WebUI
 # discovers tools from.
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 ENV PYTHONUNBUFFERED=1 \
     HOSTFS=/hostfs
