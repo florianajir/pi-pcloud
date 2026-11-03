@@ -72,7 +72,7 @@ services:
 
   pihole:
     <<: *service-defaults
-    image: pihole/pihole:2026.10.0
+    image: pihole/pihole:2026.10.1
     container_name: pi-pihole
     cap_add:
       - NET_ADMIN
