@@ -244,7 +244,7 @@ services:
     labels:
       - "homepage.description=Face and object recognition for Immich"
       - "pi-pcloud.companion-of=immich-server"
-    image: ghcr.io/immich-app/immich-machine-learning:v3.3.6
+    image: ghcr.io/immich-app/immich-machine-learning:v3.4.0
     networks:
       - egress_immich
       - immich
