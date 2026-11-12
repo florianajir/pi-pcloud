@@ -47,10 +47,11 @@ def make_epub(path, title, creators=(), series=None, index=None, collection=None
         f"<dc:creator>{c}</dc:creator>" if epub3 else f'<dc:creator opf:role="aut" opf:file-as="{c}">{c}</dc:creator>'
         for c in creators
     )
+    opf_prefix = "" if epub3 else f' xmlns:opf="{OPF_NS}"'
     opf = (
         f'<?xml version="1.0" encoding="utf-8"?><package xmlns="{OPF_NS}" version="{"3.0" if epub3 else "2.0"}"'
         ' unique-identifier="id">'
-        f'<metadata xmlns:dc="{DC_NS}"{"" if epub3 else f" xmlns:opf=" + chr(34) + OPF_NS + chr(34)}>'
+        f'<metadata xmlns:dc="{DC_NS}"{opf_prefix}>'
         f'<dc:identifier id="id">urn:uuid:{path.stem}</dc:identifier><dc:title>{title}</dc:title>{people}'
         f"<dc:language>fr</dc:language>{''.join(metas)}</metadata>"
         '<manifest><item id="t" href="text.xhtml" media-type="application/xhtml+xml"/></manifest>'
