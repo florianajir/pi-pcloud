@@ -582,14 +582,17 @@ memory simply stays in the `openclaw_state` volume, which Backrest snapshots eit
   embeddings, which the gateway cannot reach: the index then stalls on a provider mismatch. And
   OpenClaw does not rebuild an index whose scope changed — adding the family room's paths to every
   agent is such a change — it serves stale results until `openclaw memory status --index` runs,
-  because a rebuild may call an embeddings API. Keyword-only, a rebuild costs nothing, so the bootstrap
-  runs it at every start.
+  because a rebuild may call an embeddings API. That command refuses while the gateway runs, so the
+  bootstrap records a digest of the index scope (each agent's workspace and extra paths, the search
+  settings, the image) and, when it changes, runs the rebuild between stopping and starting the
+  gateway, in a `docker compose run` of the same service. Keyword-only, a rebuild costs nothing.
 - **The CLI** runs inside the container: `docker exec pi-openclaw node openclaw.mjs channels status`,
   `… agents list`, `… matrix verify status`. Each call is a second Node process in the same cgroup —
   about 400 MiB — which `mem_limit` leaves room for.
 - **Upgrades** follow the image: the bootstrap reinstalls the plugins whenever the image's version
   changes, with the gateway stopped during the install, since two OpenClaw processes on one state
-  database contend for its leases.
+  database contend for its leases. A new image also changes the index scope, so the gateway is
+  restarted a second time for the rebuild.
 
 ## How Open WebUI is wired
 
