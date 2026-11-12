@@ -19,15 +19,17 @@
    their Matrix account exists.
 5. The household rules (config/openclaw/household/AGENTS.md): a read-only copy
    in every workspace, which the gateway injects into each agent's prompt; and
-   every agent's memory index, rebuilt when its scope changed.
+   every agent's memory index, rebuilt with the gateway stopped when its
+   scope changed.
 6. Its Forgejo side, when Forgejo runs: a local, restricted bot user, the two
    repositories it pushes to (scripts/openclaw-sync.py), and their branch
    protection.
 7. Its Nextcloud side, when Nextcloud runs: an app password per person, which
    the nextcloud plugin (config/openclaw/plugins/nextcloud) acts with.
 
-Restarts the gateway once if the account, the people or the family room
-changed. Idempotent: the next start redoes nothing that is already in place.
+Restarts the gateway once if the account, the people, the family room or the
+memory indexes' scope changed. Idempotent: the next start redoes nothing that
+is already in place.
 """
 
 import hashlib
@@ -583,15 +585,75 @@ def ensure_household_rules():
         log(f"Household rules placed in {len(changed)} workspace(s)")
 
 
-def ensure_memory_indexes():
+# The memory scope the indexes were last rebuilt for, as memory_scope() spells it.
+MEMORY_SCOPE_FILE = "memory-index-scope"
+REINDEX_CONTAINER = "pi-openclaw-reindex"
+
+
+def memory_scope():
+    """What the memory indexes are built from: each agent's workspace and the
+    paths it also searches, the search settings, and the image that indexes
+    them. A digest, recorded once the indexes are rebuilt for it."""
+    config = json.loads((data_dir() / "openclaw.json").read_text(encoding="utf-8"))
+    entries = config.get("agents", {}).get("entries", {})
+    scope = {
+        "image": inspect(CONTAINER, "{{.Config.Image}}"),
+        "agents": {agent: [entry.get("workspace"), entry.get("memory")] for agent, entry in entries.items()},
+        "memory": config.get("memory"),
+    }
+    return hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+
+
+def memory_scope_changed(scope):
+    try:
+        return (data_dir() / MEMORY_SCOPE_FILE).read_text(encoding="utf-8").strip() != scope
+    except OSError:
+        return True
+
+
+def rebuild_memory_indexes(scope):
     """OpenClaw leaves a memory index whose scope changed - the family room's
     paths added to every agent, a provider switched - serving stale results,
     and waits for this command, because a rebuild may call an embeddings API.
-    Search is keyword-only here (openclaw-pre-start.py), so it costs nothing,
-    and it does nothing when every index is current."""
-    proc = docker("exec", CONTAINER, "node", "openclaw.mjs", "memory", "status", "--index", "--json", timeout=600)
+    Search is keyword-only here (openclaw-pre-start.py), so it costs nothing.
+    The command refuses while a gateway owns the state directory, so it runs
+    with the gateway stopped, in a one-off of its own service definition: the
+    same volumes, read-only config and env file. Named, so one left behind by a
+    timeout is removed rather than left to contend with the gateway for the
+    state database."""
+    docker("rm", "-f", REINDEX_CONTAINER)
+    try:
+        proc = subprocess.run(
+            ["docker", "compose", "run", "--rm", "--no-deps", "-T", "--name", REINDEX_CONTAINER, "openclaw",
+             "node", "openclaw.mjs", "memory", "status", "--index", "--json"],
+            cwd=str(pilib.PROJECT_DIR), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600,
+            check=False,
+        )  # fmt: skip
+    except subprocess.TimeoutExpired:
+        docker("rm", "-f", REINDEX_CONTAINER)
+        log("WARNING: the memory index rebuild timed out; the next start retries")
+        return
     if proc.returncode != 0:
-        log("WARNING: could not bring the memory indexes up to date; run `openclaw memory status --index` by hand")
+        log(f"WARNING: could not rebuild the memory indexes; the next start retries: {proc.stderr.strip()[-400:]}")
+        return
+    scope_file = data_dir() / MEMORY_SCOPE_FILE
+    pilib.write_file_atomic(scope_file, scope + "\n")
+    fix_ownership(scope_file)
+    log("Rebuilt the memory indexes for their new scope")
+
+
+def restart_gateway(reindex_scope):
+    log(f"Restarting {CONTAINER} to apply the changes")
+    if docker("stop", CONTAINER, timeout=180).returncode != 0:
+        die(f"could not stop {CONTAINER}")
+    if reindex_scope:
+        rebuild_memory_indexes(reindex_scope)
+    if docker("start", CONTAINER).returncode != 0:
+        die(f"could not start {CONTAINER}")
+    # The CLI steps after it exec into the gateway, and fail against one still
+    # starting.
+    if not pilib.wait_for_health(CONTAINER):
+        die(f"{CONTAINER} did not come back healthy after the restart")
 
 
 # --- 6. Forgejo ---
@@ -847,18 +909,15 @@ def main():
     restart = ensure_bot_account(server_name, password)
     restart = sync_people() or restart
     restart = ensure_family_room(server_name, password, read_people()) or restart
+    # After the steps above, which re-render the config it is read from.
+    scope = memory_scope()
+    reindex = memory_scope_changed(scope)
     # Before anything that can die: the next run finds people.json and the
     # family room already current, and would never ask for this restart again.
-    if restart:
-        log(f"Restarting {CONTAINER} to apply the changes")
-        if docker("restart", CONTAINER, timeout=240).returncode != 0:
-            die(f"could not restart {CONTAINER}")
-        # The CLI steps below exec into it, and failed against a gateway still
-        # starting (measured: the memory index step).
-        if not pilib.wait_for_health(CONTAINER):
-            die(f"{CONTAINER} did not come back healthy after the restart")
+    if restart or reindex:
+        restart_gateway(scope if reindex else None)
+        restart = True
     ensure_household_rules()
-    ensure_memory_indexes()
     ensure_forgejo(host_name)
     ensure_nextcloud_app_passwords(read_people())
     if not restart:
