@@ -280,9 +280,10 @@ These paths are set in several places that must agree, all provisioned by the st
 
 Shelfmark is the manual half of that: you search, it fetches. Torrents go out through
 the same qBittorrent instance (so through the VPN) under its own `shelfmark` category,
-and Shelfmark then renames the finished file into `download/books/`, where Kavita
-already looks. Its grabs are saved outside that folder so Kavita indexes the imported
-book and not the torrent's directory tree.
+and Shelfmark then files the finished book as `download/books/<Author>/<Title> (<Year>)`,
+where Kavita already looks — always in a subfolder, since Kavita skips a file loose at
+its library root. Its grabs are saved outside that folder so Kavita indexes the
+imported book and not the torrent's directory tree.
 
 Shelfmark sits on `frontend`, not in gluetun's namespace, so it does not join the set of
 routers that disappear when gluetun goes unhealthy. Its direct downloads still egress

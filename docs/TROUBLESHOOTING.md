@@ -202,9 +202,12 @@ silent.
 *It is a loose file at the library root.* Kavita takes the series name from the
 containing folder, below the scan root, so a file placed directly in
 `download/books/` has no folder to name a series after and is skipped without an
-error. Give each book its own subfolder. If the file belongs to a torrent, move it
+error. Give each book its own subfolder. Shelfmark's imports already get one
+(`FILE_ORGANIZATION=organize`); a single-file torrent in the `books` category does not,
+since qBittorrent keeps its original layout. If the file belongs to a torrent, move it
 with qBittorrent's `renameFile` API rather than `mv`, so the torrent follows it
-instead of breaking.
+instead of breaking. Then run a forced library scan: Kavita's folder watcher ignores a
+top-level folder it has never seen (`could not find root level folder` in its log).
 
 *The EPUB declares version 3.0 but ships no nav document.* The log says
 `Epub3NavException: NAV item not found in EPUB manifest`, followed by `Unable to
