@@ -124,6 +124,7 @@ test: ## Run the test suites against temporary copies (no host changes)
 	@sh tests/uptime-kuma-watchdog-test.sh
 	@sh tests/compose-test.sh
 	@sh tests/trilium-api-contract.sh
+	@python3 tests/shelfmark-epub-hook-test.py
 	@sh tests/routing-test.sh
 	@sh tests/sarif-merge-test.sh
 

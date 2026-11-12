@@ -285,6 +285,28 @@ where Kavita already looks — always in a subfolder, since Kavita skips a file 
 its library root. Its grabs are saved outside that folder so Kavita indexes the
 imported book and not the torrent's directory tree.
 
+Each import then runs `config/shelfmark/epub-metadata-hook.py` (Shelfmark's
+`CUSTOM_SCRIPT`, fed the task as JSON), which rewrites the EPUB's metadata into the shape
+Kavita's Book library reads. Kavita groups books only on `calibre:series` +
+`calibre:series_index` (or the EPUB 3 collection pair), and treats every comma in
+`dc:creator` as a separator between two people, so a pack whose tomes each spell the
+series differently, or name the author "Last, First", lands as a pile of one-book series
+and phantom authors. The hook:
+
+- gives every book of a pack the series spelling most of them declare, with the index
+  each one declares or carries in its title (`Series T2 - …`, `Series (Tome 12)`) or, failing
+  that, in its file name inside the torrent;
+- strips that series prefix from the title;
+- turns `Last, First` into the author Shelfmark downloaded, adds a missing author, and swaps a
+  title and author that are the wrong way round.
+
+It uses nothing but the download itself and the book picked in Shelfmark: the metadata
+providers Shelfmark ships answer French titles with English series names, or another book
+entirely. When the evidence does not agree (a pack of unrelated books, two tomes claiming
+one index) it leaves the file alone. It never touches a hardlinked file, which is the
+seeding torrent's own data, and it always exits 0, since a failing hook fails the whole
+download. Its output is in Shelfmark's debug log, prefixed `epub-metadata:`.
+
 Shelfmark sits on `frontend`, not in gluetun's namespace, so it does not join the set of
 routers that disappear when gluetun goes unhealthy. Its direct downloads still egress
 through the tunnel, via gluetun's internal HTTP proxy (`HTTPPROXY=on`, port `8888`). The
