@@ -861,6 +861,9 @@ services:
       # Kavita's Book library: cbz/cbr are Kapowarr's, and pdf is added.
       - SUPPORTED_FORMATS=epub,pdf,mobi,azw3,fb2,djvu
       - INGEST_DIR=/downloads/books
+      # Kavita skips a file loose at its library root; `organize` writes
+      # {Author}/{Title} ({Year}), where the default `rename` files it flat.
+      - FILE_ORGANIZATION=organize
       - DESTINATION_AUDIOBOOK=/downloads/audiobooks
       # Audiobookshelf never groups files at its library root; `organize` writes
       # {Author}/{Title}/, where the default leaves multi-file grabs flat.
