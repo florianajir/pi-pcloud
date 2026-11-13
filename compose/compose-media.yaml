@@ -876,6 +876,10 @@ services:
       # qBittorrent.
       - QBITTORRENT_CATEGORY_AUDIOBOOK=shelfmark-audiobooks
       - CALIBRE_WEB_URL=https://kavita.${HOST_NAME:-pi.lan}
+      # Rewrites each imported EPUB's series, title and authors into the shape
+      # Kavita groups by. It always exits 0: a failing hook fails the download.
+      - CUSTOM_SCRIPT=/hooks/epub-metadata-hook.py
+      - CUSTOM_SCRIPT_JSON_PAYLOAD=true
     env_file:
       - path: ./config/shelfmark/shelfmark.env
         required: false
@@ -884,6 +888,7 @@ services:
       # The path qBittorrent uses, so completed torrents need no path mapping.
       # books/ is Kavita's Book library, audiobooks/ Audiobookshelf's.
       - ${DATA_LOCATION:-./data}/download:/downloads
+      - ./config/shelfmark/epub-metadata-hook.py:/hooks/epub-metadata-hook.py:ro
     labels:
       - "homepage.group=Download"
       - "homepage.name=Shelfmark"

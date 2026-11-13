@@ -196,7 +196,7 @@ and are meant to be invisible to Kavita. Check the file actually landed, then tr
 library scan. Audiobooks go to `download/audiobooks/` and Kavita never reads them —
 those are Audiobookshelf's library, and are also browsable through Nextcloud.
 
-**A book sits in `download/books/` and Kavita never shows it.** Two causes, both
+**A book sits in `download/books/` and Kavita never shows it.** Three causes, all
 silent.
 
 *It is a loose file at the library root.* Kavita takes the series name from the
@@ -218,6 +218,24 @@ legacy `toc.ncx` (`<spine toc="ncx">`). Rewriting the OPF's `version="3.0"` to
 Kavita then reads it. Repair a *copy* if the file is being seeded — changing the
 bytes invalidates the torrent — and keep `mimetype` as the first, uncompressed
 zip entry or the result is no longer a valid EPUB.
+
+*The EPUB's `toc.ncx` is truncated.* The log says `Epub2NcxException: navigation point
+"…" should contain content`. A `<navPoint>` lost its `<content src="…"/>`, and Kavita
+rejects the whole book over it. Point each broken entry at the page that opens that
+chapter and the book parses again.
+
+**The tomes of a series show up as separate series in Kavita.** A Book library groups
+EPUBs only on `calibre:series` + `calibre:series_index` (or the EPUB 3
+`belongs-to-collection` + `group-position` pair); a tome without them becomes a series of
+its own, named after its title, and two spellings of the series name make two series.
+Shelfmark's imports are repaired on the way in by `config/shelfmark/epub-metadata-hook.py`
+(see [Architecture](ARCHITECTURE.md#shelfmark)); its decisions are in Shelfmark's debug
+log as `epub-metadata:` lines, including every file it left alone and why. For anything
+else (a `books` qBittorrent grab, a file added by hand), set both tags in the OPF, then
+run a **forced** scan: Kavita fixes a file's series the first time it sees it, and only
+`force=true` re-derives it. A change of letter case alone (`LE ROI DU MONDE` → `Le Roi du
+monde`) is not picked up even then, because Kavita matches series on a normalized name;
+rename the series in Kavita instead.
 
 **Audiobookshelf's page never finishes loading — the spinner turns forever.** Its
 assets are 404ing because `ROUTER_BASE_PATH` was set to the empty string. Unset does
