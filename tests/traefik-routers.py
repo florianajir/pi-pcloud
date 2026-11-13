@@ -1,10 +1,10 @@
 """The reverse proxy's routing table, projected out of the rendered compose file.
 
 Reads `docker compose config --format json` on stdin and prints the records
-tests/routing-smoke.sh needs to probe a live stack: which routers exist, which
-of them are reachable from the LAN only, who is allowed to read Traefik's
-runtime API, and whether the address the probe means to arrive from really is
-outside the ip allowlist.
+tests/routing-smoke.sh needs to probe a live stack: which routers exist, the
+host each answers on, which of them are reachable from the LAN only, who is
+allowed to read Traefik's runtime API, and whether the address the probe means
+to arrive from really is outside the ip allowlist.
 
 Everything is derived from the labels, nothing is hardcoded: the allowlisted
 ranges, the address Traefik's internal API trusts and the port it serves on all
@@ -169,6 +169,7 @@ def main():
         host, _ = host_and_path(router.get("rule") or "")
         if host:
             hosts.setdefault(host, []).append(name)
+            out.append(f"HOST {name} {host}")
 
     gated_ranges = []
     probes = 0

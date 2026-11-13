@@ -10,12 +10,15 @@
 # stopped backend gives, so the first half below asks Traefik itself rather than
 # guessing from a status code.
 #
-# Two halves:
+# Three parts:
 #   * every router Traefik loaded is enabled and carries no error, and every
 #     router compose.yaml declares is one Traefik loaded
 #   * each router answers a request from a LAN address, and refuses the same
 #     request from outside the ip allowlist — so the gate is known to be doing
 #     something rather than merely configured
+#   * Immich's share links, whose public router admits a path at a time: every
+#     operation the running image declares anonymous reaches it from outside,
+#     and nothing else does
 #
 # Needs a running stack, so `make test` does not run it: CI runs it after
 # `up --wait`, and `make smoke` runs it against whatever is up. For the outside
@@ -235,6 +238,42 @@ if [ "$probed" = "$declared_probes" ]; then
     ok "all $probed routers named in the records were probed"
 else
     no "only $probed of $declared_probes routers were probed; the loop stopped early"
+fi
+
+# --- Immich's anonymous API, as the running image declares it ----------------
+#
+# Which requests the edge must pass or refuse is worked out from the image's own
+# OpenAPI document by immich-share-surface.py; its header says how. One exec for
+# every probe: there are a couple of hundred, all HEAD, from outside.
+IMMICH_HOST="$(awk '$1 == "HOST" && $2 == "immich-public" { print $3; exit }' "$RECORDS")"
+if [ -z "$IMMICH_HOST" ]; then
+    printf '  immich-public is not in the render; its share-link surface is not probed\n'
+elif ! compose exec -T "$PROBER" curl -sS -k -f --max-time "$TIMEOUT" \
+    --connect-to "$IMMICH_HOST:443:traefik:443" "https://$IMMICH_HOST/api/spec.json" \
+    </dev/null >"$WORK/immich-spec.json" 2>/dev/null; then
+    no "immich: could not read /api/spec.json from the LAN"
+elif ! python3 "$TESTS_DIR/immich-share-surface.py" probes \
+    <"$WORK/immich-spec.json" >"$WORK/immich-probes" 2>"$WORK/immich-findings"; then
+    no "immich: /api/spec.json does not say what the edge must do"
+    sed 's/^/      /' "$WORK/immich-findings"
+else
+    # A short answer file is the verdict's to report, not set -e's.
+    cut -d' ' -f2 "$WORK/immich-probes" \
+        | compose exec -T "$PROBER" sh -c '
+            while read -r path; do
+                answer="$(curl -s -k -g -I -o /dev/null --max-time "$1" \
+                    --connect-to "$2:443:$3:443" \
+                    -w "%{http_code} %{content_type}" "https://$2$path")" || true
+                printf "%s %s\n" "$path" "${answer:-000}"
+            done' sh "$TIMEOUT" "$IMMICH_HOST" "$OUTSIDE_IP" >"$WORK/immich-answers" || true
+    python3 "$TESTS_DIR/immich-share-surface.py" verdict "$WORK/immich-probes" \
+        <"$WORK/immich-answers" >"$WORK/immich-verdict"
+    while read -r result message; do
+        case "$result" in
+            ok) ok "$message" ;;
+            *) no "$message" ;;
+        esac
+    done <"$WORK/immich-verdict"
 fi
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"

@@ -207,9 +207,12 @@ services:
       - "traefik.http.routers.immich.priority=10"
       # No lan@docker: this rule is the public surface. Anonymous share requests
       # always carry `key` or `slug`, so the API paths are gated on that, never
-      # on a blanket /api. Fails closed: validate any change off-tailnet.
+      # on a blanket /api; /api/public/ is Immich's own anonymous namespace.
+      # Fails closed, so a release whose share page calls a new endpoint breaks
+      # shares off the LAN: tests/routing-smoke.sh probes every operation the
+      # image's /api/spec.json declares to catch it on the bump.
       # docs/SECURITY.md#per-service-protection.
-      - "traefik.http.routers.immich-public.rule=Host(`immich.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/share`) || PathPrefix(`/s/`) || PathPrefix(`/_app`) || Path(`/service-worker.js`) || Path(`/custom.css`) || Path(`/dark_skeleton.png`) || Path(`/api/server/config`) || Path(`/api/server/features`) || Path(`/api/server/media-types`) || ((PathPrefix(`/api/assets`) || PathPrefix(`/api/download`) || PathPrefix(`/api/timeline`) || PathPrefix(`/api/albums`)) && (QueryRegexp(`key`, `.+`) || QueryRegexp(`slug`, `.+`))))"
+      - "traefik.http.routers.immich-public.rule=Host(`immich.${HOST_NAME:-pi.lan}`) && (PathPrefix(`/share`) || PathPrefix(`/s/`) || PathPrefix(`/_app`) || Path(`/service-worker.js`) || Path(`/custom.css`) || Path(`/dark_skeleton.png`) || PathPrefix(`/api/public/`) || Path(`/api/server/config`) || Path(`/api/server/features`) || Path(`/api/server/media-types`) || ((PathPrefix(`/api/assets`) || PathPrefix(`/api/download`) || PathPrefix(`/api/timeline`) || PathPrefix(`/api/albums`) || PathPrefix(`/api/search`)) && (QueryRegexp(`key`, `.+`) || QueryRegexp(`slug`, `.+`))))"
       - "traefik.http.routers.immich-public.entrypoints=websecure"
       # rate-limit-burst: a share page pulls one thumbnail per photo.
       - "traefik.http.routers.immich-public.middlewares=frame-deny@docker,rate-limit-burst@docker"
@@ -224,7 +227,7 @@ services:
       - "traefik.http.middlewares.immich-share-limit.ratelimit.burst=20"
       - "traefik.http.middlewares.immich-share-limit.ratelimit.period=1m"
       - "traefik.http.middlewares.immich-share-limit.ratelimit.sourcecriterion.ipstrategy.ipv6subnet=64"
-      - "traefik.http.routers.immich-share-auth.rule=Host(`immich.${HOST_NAME:-pi.lan}`) && (Path(`/api/shared-links/me`) || Path(`/api/shared-links/login`))"
+      - "traefik.http.routers.immich-share-auth.rule=Host(`immich.${HOST_NAME:-pi.lan}`) && (Path(`/api/shared-links/me`) || Path(`/api/shared-links/login`)) && (QueryRegexp(`key`, `.+`) || QueryRegexp(`slug`, `.+`))"
       - "traefik.http.routers.immich-share-auth.entrypoints=websecure"
       - "traefik.http.routers.immich-share-auth.middlewares=frame-deny@docker,immich-share-limit@docker"
       - "traefik.http.routers.immich-share-auth.tls=true"
