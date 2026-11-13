@@ -139,7 +139,9 @@ A donator key (**Settings → Direct Download**) skips the queue on the slow dow
 hosts. Without one, a direct download that looks stuck is usually just queued.
 
 For audiobook *metadata*, set `HARDCOVER_API_KEY` in `.env` — see
-[Configuration](CONFIGURATION.md#audiobook-metadata-hardcover).
+[Configuration](CONFIGURATION.md#audiobook-metadata-hardcover). For French book summaries
+and editions, set `GOOGLE_API_KEY` — see
+[Configuration](CONFIGURATION.md#book-metadata-google-books).
 
 The default search language is seeded from `DEFAULT_LANGUAGE` (`fr-FR` → `fr`) on first
 start, and each user can override it under **Settings → Search Mode**. Seeded, not

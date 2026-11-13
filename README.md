@@ -90,6 +90,7 @@ Your files, photos, passwords and chat stay on the Pi. These are the exceptions:
 | Web searches from the chat or the dashboard | The public engines SearXNG queries, from the Pi's address | If `searxng` runs |
 | Torrent and indexer traffic | Your VPN provider, through Gluetun | If a download service runs |
 | Stream lookups from Stremio | Your debrid service and the add-ons AIOStreams queries | If `aiostreams` runs |
+| Book titles and authors you search in Shelfmark | Open Library, plus Google Books and Hardcover when their keys are set | If `shelfmark` runs |
 
 Open WebUI's chat, speech-to-text and text-to-speech run on the Pi and send nothing out.
 

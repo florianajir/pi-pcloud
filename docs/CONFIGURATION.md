@@ -197,6 +197,24 @@ already stored in Shelfmark stays — a key pasted by hand looks the same — so
 The key goes into Shelfmark's `plugins/hardcover.json` rather than its environment, so
 `docker inspect` never prints it — the same rule as the OIDC client secrets.
 
+### Book metadata (Google Books)
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `GOOGLE_API_KEY` | Google Cloud API key with the Books API enabled, from **APIs & Services → Credentials → Create credentials → API key** | `AIza…` |
+
+Optional, and only Shelfmark reads it. Open Library, the default book provider, needs no
+key but rarely carries a summary and often returns another edition than the French one;
+Google Books answers a French title with the French edition, its cover and its back-cover
+summary. Restrict the key to the Books API in the Google Cloud console; an OAuth client
+secret (`GOCSPX-…`) is not an API key and is refused.
+
+Set it and `scripts/shelfmark-settings-bootstrap.sh` enables Google Books and makes it the
+**default** book provider on the next `make update`, unless an admin already picked a
+provider other than Open Library; each user can still choose another. Remove it and the
+next run switches the default back to Open Library. As with Hardcover, the key goes into
+`plugins/googlebooks.json`, never the environment, and a stored key is not cleared for you.
+
 ## Auto-generated secrets
 
 These need no configuration, must not be edited by hand, and have no effect if set in `.env`:

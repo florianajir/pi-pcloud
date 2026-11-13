@@ -251,6 +251,33 @@ configure_hardcover() {
         'if (.METADATA_PROVIDER_AUDIOBOOK // "") == "" then .METADATA_PROVIDER_AUDIOBOOK = "hardcover" else . end'
 }
 
+# Google Books answers a French title with the French edition, its cover and its
+# back-cover summary; Open Library, the key-less default, rarely carries a
+# summary. Same contract as Hardcover above: the key in .env is what asks for
+# Google Books, it is reconciled on every start, and removing it releases the
+# selection again.
+#
+# METADATA_PROVIDER is seeded to "openlibrary" on Shelfmark's first start, so
+# that value counts as "never chosen" alongside a missing key; any other
+# provider an admin picked is left alone.
+configure_googlebooks() {
+    local key=""
+
+    key="$(get_env_value GOOGLE_API_KEY)"
+    if [ -z "$key" ]; then
+        log "GOOGLE_API_KEY is not set in .env; releasing the book metadata provider"
+        apply search_mode \
+            'if .METADATA_PROVIDER == "googlebooks" then .METADATA_PROVIDER = "openlibrary" else . end'
+        return 0
+    fi
+
+    apply googlebooks --arg key "$key" \
+        '. + {GOOGLEBOOKS_ENABLED: true, GOOGLEBOOKS_API_KEY: $key}'
+
+    apply search_mode \
+        'if (.METADATA_PROVIDER // "openlibrary") == "openlibrary" then .METADATA_PROVIDER = "googlebooks" else . end'
+}
+
 # The default search-language filter, derived from DEFAULT_LANGUAGE: Shelfmark
 # filters on two-letter codes (its data/book-languages.json) while
 # DEFAULT_LANGUAGE is a BCP 47 tag.
@@ -299,6 +326,7 @@ main() {
     configure_oidc
     configure_proxy
     configure_hardcover
+    configure_googlebooks
     seed_book_language
     seed_mirrors
 
