@@ -1,7 +1,8 @@
 #!/bin/sh
-# Tests for the two checkers behind tests/routing-smoke.sh: the projection that
-# reads the routing table out of the compose files, and the comparison against
-# the one Traefik loaded.
+# Tests for the checkers behind tests/routing-smoke.sh: the projection that
+# reads the routing table out of the compose files, the comparison against the
+# one Traefik loaded, and the one that reads Immich's anonymous surface out of
+# its OpenAPI document.
 #
 # routing-smoke.sh itself needs a running stack, so `make test` cannot run it —
 # which would leave the checkers it depends on covered by nothing. A checker
@@ -158,6 +159,8 @@ ok "neither router on a shared host is probed" \
     "$(printf '%s\n' "$records" | grep -cE '^PROBE (r1|alt) ')" 0
 ok "and both are still declared" \
     "$(printf '%s\n' "$records" | grep -cE '^ROUTER (r1|alt)$')" 2
+ok "and each still names its host, for a check that knows which one answers" \
+    "$(printf '%s\n' "$records" | grep -cE '^HOST (r1|alt) h1.test$')" 2
 
 # --- what it must refuse -----------------------------------------------------
 #
@@ -223,7 +226,8 @@ ok "no allowlist range reaches the output" "$leaked" 0
 
 declared="$(printf 'ROUTER kavita\nROUTER ntfy\n')"
 records_file="$(mktemp)"
-trap 'rm -f "$records_file"' EXIT
+probes_file="$(mktemp)"
+trap 'rm -f "$records_file" "$probes_file"' EXIT
 printf '%s\n' "$declared" >"$records_file"
 
 # api_says <api-json> : the checker's report, and its status in $rc.
@@ -261,5 +265,112 @@ esac
 
 api_says '[{"name": "kavita@docker"}, {"name": "ntfy@docker", "status": "enabled"}]'
 ok "a router in no state at all fails" "$rc" 1
+
+# --- Immich's anonymous surface, read out of its OpenAPI document ------------
+#
+# The share-link part of routing-smoke.sh trusts this projection to sort every
+# operation, and one that sorts them all into a single class reports the same
+# silence as an edge that is right.
+
+ID=00000000-0000-4000-8000-000000000000
+
+# spec [extra-paths-json] : a document broad enough to clear the floors in
+# immich-share-surface.py, so a case fails on what it changed.
+spec() {
+    printf '{"paths": {'
+    _i=1
+    while [ "$_i" -le 50 ]; do
+        printf '"/signed/%s": {"get": {"security": [{"bearer": []}]}},' "$_i"
+        _i=$((_i + 1))
+    done
+    _i=1
+    while [ "$_i" -le 10 ]; do
+        printf '"/shared/%s/{id}": {"get": {"security": [{"bearer": []}], "parameters": [' "$_i"
+        printf '{"name": "id", "in": "path"}, {"name": "key", "in": "query"}]}},'
+        _i=$((_i + 1))
+    done
+    _i=1
+    while [ "$_i" -le 5 ]; do
+        printf '"/public/%s": {"get": {}},' "$_i"
+        _i=$((_i + 1))
+    done
+    printf '"/auth/login": {"post": {}}, "/server/version": {"get": {"security": []}}'
+    [ "$#" -eq 0 ] || printf ',%s' "$1"
+    printf '}}'
+}
+
+# surface <spec-json> : the probes, or the findings on refusal; status in $rc.
+surface() {
+    surface_out="$(printf '%s' "$1" | python3 "$TESTS_DIR/immich-share-surface.py" probes 2>&1)" && rc=0 || rc=$?
+}
+
+# lines <text> <exact-line> : how many times the line occurs.
+lines() {
+    printf '%s\n' "$1" | grep -cxF "$2" || true
+}
+
+surface "$(spec)"
+ok "a document that clears the floors is projected" "$rc" 0
+ok "a share operation reaches Immich with a key" \
+    "$(lines "$surface_out" "open /api/shared/1/$ID?key=routing-smoke")" 1
+ok "or a slug, whichever the link carries" \
+    "$(lines "$surface_out" "open /api/shared/1/$ID?slug=routing-smoke")" 1
+ok "and is refused with neither, so /api is never blanket-open" \
+    "$(lines "$surface_out" "refused /api/shared/1/$ID")" 1
+ok "a public operation reaches Immich" \
+    "$(lines "$surface_out" "open /api/public/1")" 1
+ok "unless it signs in, and then not even with a key" \
+    "$(lines "$surface_out" "refused /api/auth/login?key=routing-smoke")" 1
+ok "an empty security list is public too, and the version stays LAN-only" \
+    "$(lines "$surface_out" "refused /api/server/version")" 1
+ok "a signed-in operation is refused" \
+    "$(lines "$surface_out" "refused /api/signed/1")" 1
+
+surface "$(spec '"/mixed": {"get": {}, "post": {"security": [{"bearer": []}]}}')"
+ok "a path public for one method and signed-in for another is refused" "$rc" 1
+contains "and named" "$surface_out" "/api/mixed must be both reachable and refused"
+
+# The floors exist for this: Immich moving the share key to a header leaves
+# a document that parses, and every share operation would then be checked as
+# a signed-in one — refused, and passing.
+surface "$(spec | sed 's/"name": "key", "in": "query"/"name": "key", "in": "header"/g')"
+ok "a document with no share operations left is refused" "$rc" 1
+contains "and says which class ran dry" "$surface_out" "only 0 shared operations"
+
+surface '{"paths": {'
+ok "a document that is not JSON is refused" "$rc" 1
+contains "and says so" "$surface_out" "is not JSON"
+surface "$(spec)"
+[ "$rc" = 1 ] || printf '%s\n' "$surface_out" >"$probes_file"
+
+# answers : what an edge that is right would answer each probe.
+answers() {
+    awk '{ print $2, ($1 == "open" ? "401 application/json; charset=utf-8" : "403 text/plain; charset=utf-8") }' \
+        "$probes_file"
+}
+
+# verdict <answers> : the checker's lines.
+verdict() {
+    printf '%s\n' "$1" | python3 "$TESTS_DIR/immich-share-surface.py" verdict "$probes_file"
+}
+
+out="$(verdict "$(answers)")"
+lacks "an edge that is right fails nothing" "$out" "no "
+contains "and counts what reached Immich" "$out" "ok immich: 25 anonymous requests reach Immich from outside"
+
+out="$(verdict "$(answers | sed "s|^/api/public/1 .*|/api/public/1 403 text/plain; charset=utf-8|")")"
+contains "a public operation lan@docker refused fails, which is the share page dying" \
+    "$out" "no immich: /api/public/1 is anonymous in Immich but answered 403"
+
+out="$(verdict "$(answers | sed "s|^/api/signed/1 .*|/api/signed/1 401 application/json|")")"
+contains "a signed-in operation that reached Immich fails" \
+    "$out" "no immich: /api/signed/1 reached Immich from outside"
+
+out="$(verdict "$(answers | sed "s|^/api/signed/1 .*|/api/signed/1 429 text/plain|")")"
+contains "a refusal that was not lan@docker's fails" "$out" "answered 429 text/plain from outside"
+
+out="$(verdict "$(answers | sed '$d')")"
+contains "a probe loop that stopped early fails" "$out" "no immich: "
+lacks "rather than passing on what it did answer" "$out" "ok immich"
 
 finish
