@@ -285,8 +285,8 @@ discover them.
 `@assistant:chat.<HOST_NAME>` is a bot account on the stack's Matrix server. Anyone in LLDAP can
 open a direct chat with it from Element Web or Element X, and mention it in the family room the
 bootstrap creates; encrypted rooms work, because the bot runs end-to-end encryption itself. Behind it
-is [OpenClaw](https://github.com/openclaw/openclaw). Its background features — heartbeat, scheduled
-jobs, memory consolidation — are all switched **off**.
+is [OpenClaw](https://github.com/openclaw/openclaw). Its background features — scheduled automations,
+the heartbeat among them, and memory consolidation — are all switched **off**.
 
 | Piece | Where |
 |-------|-------|

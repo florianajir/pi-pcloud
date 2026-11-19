@@ -84,14 +84,16 @@ COMPLETE_GENERATIONS = f"""
         echo "{SEARXNG_PLUGIN} $(node -p "require(process.argv[1]).version" "$dir/package.json")"
     done
 """
-# $1 is the version, the rest the packages to install at it.
+# $1 is the version, the rest the packages to install at it. `npm:` spelled
+# out: a bare package name, @openclaw/* included, resolves on ClawHub, which
+# refuses --pin, and the globs above read npm's install layout.
 INSTALL = f"""
     set -e
     mkdir -p /tmp/install
     version="$1"
     shift
     for package in "$@"; do
-        node openclaw.mjs plugins install "$package@$version" --pin --force
+        node openclaw.mjs plugins install "npm:$package@$version" --pin --force
     done
     case " $* " in
         *" {MATRIX_PLUGIN} "*)
