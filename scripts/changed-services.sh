@@ -89,9 +89,9 @@ SHARED_START_PATH='lib.sh pilib.py run-hooks.sh run-if-enabled.sh stack-up.sh'
 HOST_ONLY='api-keys.sh authelia-ntfy-watch.sh changed-services.sh check-env.sh
 check-secrets.sh configure-kernel-params.sh configure-swap.sh doctor.sh
 headscale-nodes.sh install-system.sh lint.sh pg-major-upgrade.sh pi-pcloud
-preflight.sh ram-usage.sh recovery-kit.sh rotate-password.sh rotate-secret.sh
-sarif-merge.py services.sh services-picker.py uninstall.sh update.sh
-wan-allowlist-sync.sh openclaw-sync.py uptime-kuma-watchdog.sh'
+preflight.sh pull-images.sh ram-usage.sh recovery-kit.sh rotate-password.sh
+rotate-secret.sh sarif-merge.py services.sh services-picker.py uninstall.sh
+update.sh wan-allowlist-sync.sh openclaw-sync.py uptime-kuma-watchdog.sh'
 
 # config/ files a container reads only while it initialises for the first time,
 # spelled as the path under config/. config/postgres/init-databases.sh is
