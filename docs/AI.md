@@ -649,6 +649,12 @@ that was not told to serve it answers **403 with an HTML error page** — which 
 the chat as a search that returned nothing, with no error anywhere. (`html` alone is the
 upstream default.)
 
+`general.contact_url` is load-bearing too, for every caller rather than only the chat:
+SearXNG's wikipedia, wikidata and openstreetmap engines refuse to load without a contact to
+put in their User-Agent, as Wikimedia's and OpenStreetMap's policies require, and the only
+trace is a `can't register engine` line at start. It holds the project's repository URL, the
+same on every install, so the User-Agent names the software and not the household.
+
 `server.limiter` stays `false` there too, but that is already SearXNG's own default, spelled
 out rather than changed: the limiter is bot protection for a public instance, and here the
 only caller it could ever throttle is Open WebUI itself.

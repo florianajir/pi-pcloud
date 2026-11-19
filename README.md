@@ -87,7 +87,7 @@ Your files, photos, passwords and chat stay on the Pi. These are the exceptions:
 | Backups | Your S3 bucket, encrypted by restic before upload | If configured |
 | Messages, photos and documents sent to `@assistant` | Google Gemini, then OpenRouter once the free quota is spent ([details](docs/AI.md#the-family-assistant-openclaw)) | If `openclaw` runs |
 | Requests your own clients send to the gateway's `/groq/v1` and `/openrouter/v1` routes | Groq, OpenRouter | If you use them |
-| Web searches from the chat or the dashboard | The public engines SearXNG queries, from the Pi's address | If `searxng` runs |
+| Web searches from the chat or the dashboard | The public engines SearXNG queries, from the Pi's address; Wikipedia, Wikidata and OpenStreetMap also receive this project's repository URL in the User-Agent | If `searxng` runs |
 | Torrent and indexer traffic | Your VPN provider, through Gluetun | If a download service runs |
 | Stream lookups from Stremio | Your debrid service and the add-ons AIOStreams queries | If `aiostreams` runs |
 | Book titles and authors you search in Shelfmark | Open Library, plus Google Books and Hardcover when their keys are set | If `shelfmark` runs |
