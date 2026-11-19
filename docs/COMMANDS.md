@@ -61,7 +61,7 @@ It runs `scripts/update.sh`. In order: `git pull`, validate `.env` against the r
 
 **Images are refreshed while the stack runs.** It pulls only what `COMPOSE_PROFILES` selects, rebuilds the images built from `config/*/Dockerfile` against their updated bases, and finishes with `docker image prune -f` — dangling layers only. Expect several minutes on a Pi when base images have moved.
 
-**A failed pull is retried twice**, 20 s then 40 s later — in `make update-images` too — since a registry can rate-limit Compose's parallel pulls, and what the failed attempt fetched is already local. A third failure stops the update before anything is rebuilt or applied.
+**One failed image does not cancel the others.** A plain `compose pull` aborts every pull in flight at its first error, so `scripts/pull-images.sh` — which `make update-images` and CI's smoke test use too — first fetches every image it can, then retries only what is still missing, 15 s, 30 s, 1, 2 and 4 min apart: long enough to outlast a registry's rate limit or short outage. A sixth failure stops the update before anything is rebuilt or applied. An image that could not be refreshed but is already local at the tag the checkout asks for is kept, so one registry being down does not block an update that leaves its image alone.
 
 **Host files are re-applied** through `make install-system` (`scripts/install-system.sh`), because a pull can change what this repository copies outside itself: the systemd units, the sysctl drop-in, the swap size, the kernel command line, the shell completions. The `pi-pcloud` command needs no refresh — it is a symlink into the checkout.
 

@@ -241,7 +241,12 @@ jobs:
             /tmp/pi-pcloud-ci-data/traefik/letsencrypt \
             /tmp/pi-pcloud-ci-data/traefik/ci-tls
 
+      # The script `make update` pulls with, retry policy included. Capped well
+      # above a normal pull (about four minutes) plus its eight minutes of
+      # backoff, so a registry that never answers fails here, not at the job's
+      # timeout.
       - name: Pull images
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           # Deliberately no COMPOSE_PROGRESS override: plain progress prints one
@@ -252,16 +257,7 @@ jobs:
           # before, on immich-machine-learning's torch layers, and "failed to
           # register layer" reads like a registry fault until you see the disk.
           df -h /
-          for attempt in 1 2 3; do
-            if docker compose pull --ignore-buildable --policy missing; then
-              exit 0
-            fi
-            delay=$((attempt * 20))
-            echo "::warning::Pull attempt ${attempt}/3 failed; retrying in ${delay}s"
-            sleep "${delay}"
-          done
-          echo "::error::Image pull failed after 3 attempts"
-          exit 1
+          sh ./scripts/pull-images.sh
 
       - name: Start the stack
         run: |

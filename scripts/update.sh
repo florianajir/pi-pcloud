@@ -24,21 +24,11 @@ STAGE=none
 UPDATE_RECORD=""
 
 # Compose pulls every image at once, and GHCR (lscr.io included) answers that
-# burst with `toomanyrequests` for a dozen images at a time. Every image the
-# failed attempt did fetch is local by the next one, so a retry asks for far
-# less. Same three attempts as CI's pull step. `pull` skips the images built
-# here, which `build --pull` rebuilds against their updated bases.
+# burst with `toomanyrequests` for a dozen images at a time; pull-images.sh
+# retries only what each attempt left missing. It skips the images built here,
+# which `build --pull` rebuilds against their updated bases.
 refresh_images() {
-    local attempt=1
-    until docker compose pull --ignore-buildable; do
-        if [ "$attempt" -ge 3 ]; then
-            echo "❌ Image pull failed after 3 attempts"
-            exit 1
-        fi
-        echo "  ⚠ pull attempt $attempt/3 failed; retrying in $((attempt * 20))s..."
-        sleep $((attempt * 20))
-        attempt=$((attempt + 1))
-    done
+    run_script pull-images.sh
     echo "🔨 Locally built images..."
     docker compose build --pull
 }

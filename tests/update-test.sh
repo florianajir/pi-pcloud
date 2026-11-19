@@ -30,7 +30,8 @@ cat >"$WORK/bin/docker" <<'STUB'
 #!/bin/sh
 echo "docker $*" >>"$CALLS"
 case "$*" in
-    "compose pull --ignore-buildable")
+    # The strict pass of pull-images.sh; the lenient one around it always succeeds.
+    "compose pull --ignore-buildable --policy missing")
         n=$(($(cat "$PULLS" 2>/dev/null || echo 0) + 1))
         echo "$n" >"$PULLS"
         [ "$n" -gt "${FAIL_PULLS:-0}" ] ;;
@@ -73,7 +74,8 @@ export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=f
 
 ORIGIN="$WORK/origin"
 mkdir -p "$ORIGIN/scripts"
-cp "$REPO_DIR/scripts/update.sh" "$REPO_DIR/scripts/lib.sh" "$ORIGIN/scripts/"
+cp "$REPO_DIR/scripts/update.sh" "$REPO_DIR/scripts/lib.sh" "$REPO_DIR/scripts/pull-images.sh" \
+    "$ORIGIN/scripts/"
 
 cat >"$ORIGIN/scripts/changed-services.sh" <<'STUB'
 #!/bin/sh
@@ -136,7 +138,8 @@ run_update "" UNIT_ACTIVE=1 CHANGED_ANSWER="kavita ntfy"
 ok "an update with changed config succeeds" "$rc" 0
 ok "and runs every step in order" "$calls" "$(cat <<EOF
 check-env.sh at $AFTER
-docker compose pull --ignore-buildable
+docker compose pull --ignore-buildable --policy always --ignore-pull-failures
+docker compose pull --ignore-buildable --policy missing
 docker compose build --pull
 install-system.sh
 systemctl try-restart pi-pcloud-authelia-ntfy.service
@@ -195,13 +198,17 @@ contains "  or to run it again" "$out" "run \`make update\` again: it resumes fr
 fresh_clone
 run_update "" UNIT_ACTIVE=1 FAIL_PULLS=2
 ok "a rate-limited pull is retried" "$rc" 0
-ok "  after 20 s then 40 s" "$(grep '^sleep' "$CALLS" | tr '\n' ' ')" "sleep 20 sleep 40 "
+ok "  after 15 s then 30 s" "$(grep '^sleep' "$CALLS" | tr '\n' ' ')" "sleep 15 sleep 30 "
+contains "  refreshing every image first" "$calls" \
+    "compose pull --ignore-buildable --policy always --ignore-pull-failures"
+contains "  then fetching only what is missing, without one failure cancelling the rest" "$calls" \
+    "compose pull --ignore-buildable --policy missing --ignore-pull-failures"
 
 fresh_clone
-run_update "" UNIT_ACTIVE=1 FAIL_PULLS=3
+run_update "" UNIT_ACTIVE=1 FAIL_PULLS=6
 [ "$rc" -ne 0 ] && failed=yes || failed=no
-ok "a third failed pull stops the update" "$failed" yes
-contains "  with the reason" "$out" "Image pull failed after 3 attempts"
+ok "a sixth failed pull stops the update" "$failed" yes
+contains "  with the reason" "$out" "Image pull failed after 6 attempts"
 lacks "  before the host files are applied" "$calls" "install-system.sh"
 
 # --- a pull that never happened ----------------------------------------------------
@@ -281,7 +288,8 @@ ok "an images-only update succeeds" "$rc" 0
 ok "  without pulling the repository" "$(git -C "$APP" rev-parse HEAD)" "$BEFORE"
 ok "  and runs only the image steps" "$calls" "$(cat <<EOF
 check-env.sh at $BEFORE
-docker compose pull --ignore-buildable
+docker compose pull --ignore-buildable --policy always --ignore-pull-failures
+docker compose pull --ignore-buildable --policy missing
 docker compose build --pull
 systemctl is-active --quiet pi-pcloud.service
 stack-up.sh
