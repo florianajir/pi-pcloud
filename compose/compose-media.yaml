@@ -430,7 +430,7 @@ services:
 
   aiometadata:
     <<: *service-defaults
-    image: ghcr.io/cedya77/aiometadata:3.9.0@sha256:55b918cf344e6ece700eddd4aa96a7d107e41ea19b4baf471bb38940976491a9
+    image: ghcr.io/cedya77/aiometadata:4.1.0@sha256:c17e1aa7c670055e14dea99087cfe18ff07fa6ea4dfce9c3484830a718e066ce
     container_name: pi-aiometadata
     profiles: ["aiometadata", "all"]
     networks:
