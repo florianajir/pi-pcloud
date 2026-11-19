@@ -210,9 +210,6 @@ def render_config(people, host_name, timezone, family_room):
     agents = {
         "defaults": {
             "model": {"primary": "agentgateway/assistant"},
-            # No background work at all to start with: no heartbeat turn, no
-            # dreaming consolidation (plugins below), no cron.
-            "heartbeat": {"every": "0m"},
             "sandbox": {"mode": "off"},
             "userTimezone": timezone,
         },
@@ -320,6 +317,10 @@ def render_config(people, host_name, timezone, family_room):
         # snapshot of it. This covers OpenClaw's own copy only; the one it puts
         # in the agent's workspace is pruned by scripts/openclaw-sync.py.
         "attachments": {"ttlHours": 168},
+        # No background work: no scheduled automation runs, and no dreaming
+        # consolidation (plugins). The heartbeat is one of those automations,
+        # provisioned only by an interactive setup, which never runs here; the
+        # gateway refuses to start on an `agents.defaults.heartbeat` key.
         "cron": {"enabled": False},
         "browser": {"enabled": False},
         "tools": {
