@@ -192,7 +192,7 @@ services:
     # the mount is the parent and the host path carries the major. Upgrade only
     # with scripts/pg-major-upgrade.sh, and rebuild backrest after: its pg
     # client follows this major. docs/POSTGRES-UPGRADE.md.
-    image: ghcr.io/immich-app/postgres:18-vectorchord1.1.1-pgvector0.8.5@sha256:bdc53be78d9bd84f440d131834be58ca3e95d7057b802bb51d155f4eb1068427
+    image: ghcr.io/immich-app/postgres:18-vectorchord1.1.1-pgvector0.8.5@sha256:4c3a3696605d5e436ca35b703c4918c46fedf8ddd3597c5610ba91c1ee3b0dd1
     environment:
       POSTGRES_PASSWORD: ${PASSWORD}
       POSTGRES_INITDB_ARGS: "--data-checksums"
