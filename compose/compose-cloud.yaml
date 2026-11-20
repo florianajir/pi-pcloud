@@ -723,7 +723,7 @@ services:
 
   ntfy:
     <<: *service-defaults
-    image: binwiederhier/ntfy:v2.38.0
+    image: binwiederhier/ntfy:v2.38.1
     container_name: pi-ntfy
     command: serve
     networks:
