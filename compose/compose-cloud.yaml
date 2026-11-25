@@ -630,7 +630,7 @@ services:
 
   n8n:
     <<: *service-defaults
-    image: n8nio/n8n:2.48.7
+    image: n8nio/n8n:2.49.3
     container_name: pi-n8n
     profiles: ["n8n", "n8n-runners", "all"]
     expose:
@@ -696,7 +696,7 @@ services:
 
   n8n-runners:
     <<: *service-defaults
-    image: n8nio/runners:2.48.7
+    image: n8nio/runners:2.49.3
     container_name: pi-n8n-runners
     profiles: ["n8n-runners", "all"]
     labels:
