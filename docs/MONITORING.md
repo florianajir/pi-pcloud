@@ -415,7 +415,7 @@ docker compose logs -f <service>   # one service
 journalctl -t pi-traefik           # same lines, survives container recreation
 ```
 
-Journald caps itself at 10% of the disk or 4 GB by default. Tune `SystemMaxUse=` in `/etc/systemd/journald.conf`, or reclaim with `journalctl --vacuum-time=30d`.
+The journal is kept on disk and capped at 1 GB. Raspberry Pi OS ships `Storage=volatile` — RAM only, a cap of 10% of `/run`, nothing kept across a reboot — which at this stack's log volume holds about a day and a half, so `make install-system` overrides it with `config/journald/pi-pcloud.conf`, installed as `/etc/systemd/journald.conf.d/pi-pcloud.conf`. Once the cap is reached, the oldest entries go first; check what is held with `journalctl --disk-usage` and how far back it reaches with `journalctl -o short-iso | head -1`.
 
 Traefik additionally emits a JSON access log to the same journal — one object per request, carrying `ClientAddr`, `RequestHost`, `RouterName` and `DownstreamStatus`. It is the only record of a request a middleware rejected before it reached a backend, which is what makes an allowlist 403 attributable ([Troubleshooting → Access](TROUBLESHOOTING.md#access)):
 

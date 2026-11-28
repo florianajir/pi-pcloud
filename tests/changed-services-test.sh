@@ -122,6 +122,7 @@ answer "a config tree read under another name" \
 answer "host-side tooling touches no container"     "" scripts/lint.sh
 answer "nor a file install-system copies to /etc"   "" config/completion/pi-pcloud.bash
 answer "nor the sysctl drop-in"                     "" config/sysctl.d/pi-pcloud.conf
+answer "nor the journald drop-in"                   "" config/journald/pi-pcloud.conf
 answer "nor a path outside config/ and scripts/"    "" docs/COMMANDS.md
 answer "nor a disabled service's own config"        "" config/freshrss/x.php
 

@@ -1,7 +1,7 @@
 #!/bin/sh
-# Everything this repository installs outside itself: sysctl, swap, the kernel
-# command line, the /etc/hosts record, the systemd units (rendered with this
-# checkout's path) and the pi-pcloud command. `make install` runs it, and
+# Everything this repository installs outside itself: sysctl, journald, swap,
+# the kernel command line, the /etc/hosts record, the systemd units (rendered
+# with this checkout's path) and the pi-pcloud command. `make install` runs it, and
 # `make update` again after every pull: these are copies, so a unit or a
 # completion changed upstream would otherwise sit stale on the host until the
 # next install. Every step is idempotent.
@@ -30,6 +30,7 @@ BIN_LINK=/usr/local/bin/pi-pcloud
 BASH_COMPLETION=/usr/share/bash-completion/completions/pi-pcloud
 ZSH_COMPLETION=/usr/share/zsh/vendor-completions/_pi-pcloud
 SYSCTL_DROP_IN=/etc/sysctl.d/99-pi-pcloud.conf
+JOURNALD_DROP_IN=/etc/systemd/journald.conf.d/pi-pcloud.conf
 HOSTS_BEGIN='# pi-pcloud local overrides'
 HOSTS_END='# end pi-pcloud local overrides'
 
@@ -57,6 +58,28 @@ remove_sysctl() {
     echo "🧰 Removing host sysctl settings..."
     $SUDO rm -f "$SYSCTL_DROP_IN"
     $SUDO "$(sysctl_command)" --system >/dev/null
+}
+
+# journald reads its configuration only when it starts, so it is restarted -
+# but only when the drop-in changed, since `make update` runs this after every
+# pull. --flush then moves what the volatile journal held onto the disk.
+apply_journald() {
+    local source="$PROJECT_DIR/config/journald/pi-pcloud.conf" changed=yes
+    echo "📜 Applying host journald settings..."
+    if cmp -s "$source" "$JOURNALD_DROP_IN"; then
+        changed=no
+    fi
+    $SUDO install -D -m 644 -o root -g root "$source" "$JOURNALD_DROP_IN"
+    if [ "$changed" = yes ]; then
+        $SUDO systemctl restart systemd-journald
+        $SUDO journalctl --flush
+    fi
+}
+
+remove_journald() {
+    echo "📜 Removing host journald settings..."
+    $SUDO rm -f "$JOURNALD_DROP_IN"
+    $SUDO systemctl restart systemd-journald
 }
 
 # Both best-effort, never blocking: a host that cannot take a bigger swap file
@@ -167,6 +190,7 @@ remove_command() {
 install_all() {
     echo "📦 Installing system files..."
     apply_sysctl
+    apply_journald
     apply_boot_settings
     add_hosts_override
     install_systemd_units
@@ -181,6 +205,7 @@ remove_all() {
     remove_command
     remove_hosts_override
     remove_sysctl
+    remove_journald
     restore_boot_settings
 }
 
