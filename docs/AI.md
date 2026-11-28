@@ -393,7 +393,8 @@ Podman), or on a separate host over SSH. Neither belongs here, so the boundary i
   `sessions_spawn`, `sessions_send` and `agents_list` are denied, along with tools that do nothing in a
   DM but cost prompt tokens (`conversations_*`, `subagents`, `agents_wait`, `sessions_yield`,
   `presence`). What a generalist assistant uses stays: `skill_workshop` (teach it a procedure, kept as
-  a skill), goals, `ask_user`, and its own sessions.
+  a skill — only when asked: the bundled `skill-workshop` plugin is in `plugins.allow` with its
+  background learning off), goals, `ask_user`, and its own sessions.
 - **No route out.** The container sits on `ai` (agentgateway, SearXNG) and `assistant` (Tuwunel,
   Forgejo, Nextcloud), both internal. A prompt injection has nowhere to send what it finds.
 - **Replies stay in their conversation.** `tools.message.crossContext` defaults to letting the

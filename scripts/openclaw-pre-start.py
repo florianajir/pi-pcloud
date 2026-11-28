@@ -219,6 +219,10 @@ def render_config(people, host_name, timezone, family_room):
         agents["ownership"] = "explicit"
 
     return {
+        # Without this marker OpenClaw takes the skill-workshop entry below for
+        # policy written while Skill Workshop was built into core, ignores it,
+        # and refuses to start until `doctor --fix` rewrites the read-only file.
+        "meta": {"migrations": {"skillWorkshopPlugin": True}},
         "gateway": {
             # Nothing connects to the gateway but the CLI inside the container,
             # so no port is published and no Control UI is served.
@@ -303,7 +307,6 @@ def render_config(people, host_name, timezone, family_room):
             }
         },
         "skills": {
-            "workshop": {"autonomous": {"mode": "off"}},
             # Only config/openclaw/skills: the bundled ones mostly drive tools
             # this agent does not have, and each one listed costs prompt tokens.
             # Not [], which OpenClaw reads as no allowlist at all - every
@@ -381,7 +384,9 @@ def render_config(people, host_name, timezone, family_room):
             # nextcloud is this stack's own (config/openclaw/plugins/nextcloud):
             # each person's agent finds, reads and saves files in that person's
             # Nextcloud, with an app password picked by agent id in its code.
-            "allow": ["matrix", "memory-core", "searxng", "document-extract", "nextcloud"],
+            # skill-workshop provides skill_workshop, which keeps a procedure
+            # the person teaches as a skill.
+            "allow": ["matrix", "memory-core", "searxng", "document-extract", "nextcloud", "skill-workshop"],
             "load": {"paths": [f"{HOUSEHOLD_PLUGINS}/nextcloud"]},
             "entries": {
                 # By container name, on the internal `assistant` network.
@@ -395,6 +400,9 @@ def render_config(people, host_name, timezone, family_room):
                 },
                 "matrix": {"enabled": True},
                 "memory-core": {"config": {"dreaming": {"enabled": False}}},
+                # Skills are saved when asked, never by a background review of
+                # the conversation.
+                "skill-workshop": {"config": {"autonomous": {"mode": "off"}}},
                 # By container name on the internal `ai` network: SearXNG makes
                 # the outbound requests, the gateway still has no route out.
                 "searxng": {"enabled": True, "config": {"webSearch": {"baseUrl": "http://searxng:8080"}}},
