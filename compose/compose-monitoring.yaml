@@ -251,6 +251,10 @@ services:
       - GF_ANALYTICS_CHECK_FOR_UPDATES=false
       - GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES=false
       - GF_NEWS_NEWS_FEED_ENABLED=false
+      # 13.3 warns on every manifest poll when no app plugin publishes one,
+      # about 3,000 lines a day (grafana/grafana#137058). The fix, #137059,
+      # is not in 13.3.2: drop this once a release carries it.
+      - GF_LOG_FILTERS=search-manifest-watcher:error
       - GF_USERS_ALLOW_SIGN_UP=false
       # Off by default whatever root_url says: one mistyped http:// link would
       # send the session cookie in clear.
