@@ -41,8 +41,11 @@ API="http://localhost:5000/api"
 #   - an issue must be named "<Series> <NNN>.pdf" to join its series. The folder name
 #     is NOT used, so a release left as "Hackable_N59_Mars_Avril.pdf" is a series of
 #     its own, and a file loose at the library root is skipped without a word.
-#   - a PDF carrying an embedded /Title beats the filename, and there is no fixing
-#     that from outside the file.
+#   - embedded metadata is switched off (enableMetadata false). A PDF's /Title beats
+#     the filename, and repackaged issues carry a layout file name, a URL or
+#     "Untitled" there, which split one magazine into a series per issue. It also
+#     spares Kavita's own PDF parser, which rejects valid files with an indirect
+#     /Length and logs a warning for each of them on every scan.
 #
 # Provider Hardcover (2) with matching off. /api/Library/metadata-providers takes a
 # libraryType and offers only [4,2] for Comic - there is no "none" - and
@@ -51,7 +54,7 @@ DESIRED_LIBRARIES='[
   {"name":"Comics","type":5,"folders":["/comics","/comics-downloads"],"fileGroupTypes":[1,2,3,4],"metadataProvider":4},
   {"name":"Manga","type":0,"folders":["/manga","/manga-downloads"],"fileGroupTypes":[1,2,3,4],"metadataProvider":3},
   {"name":"Books","type":2,"folders":["/books"],"fileGroupTypes":[1,2,3],"metadataProvider":3},
-  {"name":"Magazines","type":1,"folders":["/magazines"],"fileGroupTypes":[1,2,3,4],"metadataProvider":2,"allowMetadataMatching":false}
+  {"name":"Magazines","type":1,"folders":["/magazines"],"fileGroupTypes":[1,2,3,4],"metadataProvider":2,"allowMetadataMatching":false,"enableMetadata":false}
 ]'
 
 kv_curl() {
@@ -87,7 +90,7 @@ library_payload() {
           # value they were created with. Spelt out rather than `// true`, which
           # would read an explicit false as absent and flip it back on.
           allowMetadataMatching: (if has("allowMetadataMatching") then .allowMetadataMatching else true end),
-          enableMetadata: true,
+          enableMetadata: (if has("enableMetadata") then .enableMetadata else true end),
           removePrefixForSortName: false,
           inheritWebLinksFromFirstChapter: false,
           defaultLanguage: "",
@@ -124,7 +127,8 @@ ensure_libraries() {
             (.type != $d.type)
             or ((.folders | sort) != ($d.folders | sort))
             or ((.libraryFileTypes | sort) != ($d.fileGroupTypes | sort))
-            or (.allowMetadataMatching != (if ($d | has("allowMetadataMatching")) then $d.allowMetadataMatching else true end))')"
+            or (.allowMetadataMatching != (if ($d | has("allowMetadataMatching")) then $d.allowMetadataMatching else true end))
+            or (.enableMetadata != (if ($d | has("enableMetadata")) then $d.enableMetadata else true end))')"
 
         if [ "$drift" != "true" ]; then
             log "Kavita library '$name' already correct"
@@ -134,7 +138,7 @@ ensure_libraries() {
         excludes="$(printf '%s' "$current" | jq -c '.excludePatterns // [""]')"
         code="$(library_payload "$desired" "$id" "$excludes" | kv_post "Library/update")"
         case "$code" in
-            20*) log "Updated Kavita library '$name' (type/folders/file types)" ;;
+            20*) log "Updated Kavita library '$name' (type/folders/file types/metadata)" ;;
             *)   log "WARNING: updating Kavita library '$name' returned HTTP $code" ;;
         esac
     done
