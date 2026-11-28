@@ -220,8 +220,9 @@ def render_config(people, host_name, timezone, family_room):
 
     return {
         # Without this marker OpenClaw takes the skill-workshop entry below for
-        # policy written while Skill Workshop was built into core, ignores it,
-        # and refuses to start until `doctor --fix` rewrites the read-only file.
+        # policy written while Skill Workshop was built into core and ignores
+        # it, so background learning runs. Nothing reports that: the gateway
+        # starts, and only `doctor --fix` would drop the entry.
         "meta": {"migrations": {"skillWorkshopPlugin": True}},
         "gateway": {
             # Nothing connects to the gateway but the CLI inside the container,
