@@ -399,6 +399,8 @@ sudo systemctl edit pi-pcloud-authelia-ntfy.service
 
 `scripts/dockhand-oidc-bootstrap.sh` creates an Apprise channel named **Dockhand ntfy**, bound to the local Docker environment, with credentials from `config/ntfy/ntfy.env` (`ntfy://dockhand:<password>@ntfy/<topic>`).
 
+Its daily image-update check skips every service built from a `config/*/Dockerfile` (the `:local` images), through a `dockhand.update=false` label: no registry holds those images, so each lookup would end in a `401`. `tests/compose-invariants.py` fails a built service that lacks the label.
+
 One event type is configured, deliberately: `container_oom` (a container hit an out-of-memory condition), which Uptime Kuma cannot see. Everything else would duplicate Kuma. `container_unhealthy` in particular pushes per container on the first failed probe, outside Kuma's retry budget and grouping; the one container it would cover that Kuma does not is Kuma itself, which [the watchdog](#who-watches-uptime-kuma) watches.
 
 ## Backups

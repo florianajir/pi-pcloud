@@ -162,6 +162,7 @@ def project(service):
         "memswap_limit": bytes_of(service.get("memswap_limit")),
         "image": service.get("image"),
         "has_build": bool(service.get("build")),
+        "skips_update_check": labels_of(service).get("dockhand.update") == "false",
         "has_healthcheck": bool(service.get("healthcheck")),
         # A service name, never a credential - and the one thing that says which
         # containers a recreate cannot leave behind. See recreate_mapping_gaps.
@@ -808,6 +809,9 @@ def main():
         report("FLOOR", f"only {reservations} services reserve memory, expected at least {MIN_MEM_RESERVATIONS}")
 
     for name, service in sorted(services.items()):
+        if service["has_build"] and not service["skips_update_check"]:
+            report("IMAGE", f"{name} is built here, so Dockhand's update check finds no registry "
+                            "for it and logs a 401 every day: label it dockhand.update=false")
         image = service.get("image")
         if not image:
             if not service["has_build"]:

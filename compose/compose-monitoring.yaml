@@ -97,6 +97,7 @@ services:
     container_name: pi-beszel-agent
     profiles: ["beszel-agent", "all"]
     labels:
+      - "dockhand.update=false"
       - "homepage.description=Host metrics collector for Beszel"
       - "pi-pcloud.companion-of=beszel"
     depends_on:
@@ -669,6 +670,7 @@ services:
       authelia:
         condition: service_healthy
     labels:
+      - "dockhand.update=false"
       - "homepage.group=Backup & Recovery"
       - "homepage.name=Backrest"
       - "homepage.icon=backrest.png"
