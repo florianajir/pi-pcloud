@@ -124,6 +124,48 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
 
+  # OpenClaw reads its config read-only, so the migrations a release applies
+  # with `doctor --fix` never run. A moved setting either stops the gateway at
+  # boot, which the smoke test reports only as an unhealthy container, or is
+  # accepted and ignored, which nothing reports. This puts what doctor would
+  # drop or change in the job summary.
+  openclaw-config:
+    name: OpenClaw Config Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Nothing to compare against on a push; skipped passes a required check.
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0
+
+      # The image is large, and the result moves only with what it reads.
+      - name: Check whether the config or its image changed
+        id: scope
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet "${BASE_SHA}...HEAD" -- \
+              compose/compose-ai.yaml config/openclaw/ scripts/openclaw-pre-start.py \
+              scripts/pilib.py tests/openclaw-config-contract.py; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
+      - name: Log in to ghcr.io
+        if: steps.scope.outputs.changed == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Check the rendered config against the pinned image
+        if: steps.scope.outputs.changed == 'true'
+        run: python3 tests/openclaw-config-contract.py
+
   smoke-test:
     name: Smoke Test Stack Startup
     runs-on: ubuntu-latest
@@ -323,12 +365,24 @@ jobs:
           HOOKS_SKIP: headscale-init.sh pihole-bootstrap.sh
         run: sh ./scripts/run-hooks.sh post-start blocking
 
+      # The failing services first, and named in an annotation: the full dump
+      # runs to thousands of lines, where one service's migrations bury the
+      # error that failed the run.
       - name: Collect logs on failure
         if: failure()
         run: |
           df -h /
           docker compose ps --all
+          failing="$(docker compose ps --all --format '{{.Service}}\t{{.State}}\t{{.Health}}\t{{.ExitCode}}' \
+            | awk -F '\t' '$2 == "restarting" || $3 == "unhealthy" || $3 == "starting" || ($2 == "exited" && $4 != 0) { print $1 }')"
+          if [ -n "${failing}" ]; then
+            echo "::error::not healthy: $(echo "${failing}" | tr '\n' ' ')"
+            # shellcheck disable=SC2086
+            docker compose logs --timestamps --tail 100 ${failing}
+          fi
+          echo "::group::Every service's logs"
           docker compose logs --timestamps
+          echo "::endgroup::"
 
       - name: Tear down stack
         if: always()

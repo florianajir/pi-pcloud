@@ -42,6 +42,7 @@ The command is a symlink to `scripts/pi-pcloud` inside the checkout, so `git pul
 | `make recovery-kit` | Print the five values that open the off-site backup, as two sheets to store apart — verified against the live repository first ([Backups](BACKUP.md#the-recovery-kit)) |
 | `make api-keys` | Print the gateway base URLs and the tokens that open them, to paste into a client on another machine ([Local AI](AI.md#the-key-that-is-not-password)) |
 | `make test` | Run the suites in `tests/` against temporary copies and throwaway containers — no change to the host or the running stack |
+| `make openclaw-check [image=<ref>]` | Check the config `scripts/openclaw-pre-start.py` renders for OpenClaw against the pinned image, or a candidate: it must validate, and the image's own `doctor --fix` must not drop or change anything it sets. On a failure, prints what doctor would change, path by path ([Local AI](AI.md#isolated-rather-than-sandboxed)). Pulls the OpenClaw image, so it is not part of `make test`; its containers have no network and no volumes |
 | `make lint` | Run every static check CI runs: shell syntax and `shellcheck -s dash` over every tracked shell file, `yamllint`, `ruff`, the docs invariants (links, anchors, prose rules), `hadolint`, `actionlint` and a `gitleaks` history scan. A gate whose tool is missing is reported as skipped; `LINT_STRICT=1` makes a skip fail |
 
 ### VPN and credentials
