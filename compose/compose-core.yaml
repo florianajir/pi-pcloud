@@ -279,6 +279,10 @@ services:
       # AAAA seeds a NODATA into its negative cache and the healthcheck then
       # reports a mismatch on a correct record.
       RESOLVER_ADDRESS: 1.1.1.1:53
+      # Every default but ipleak, whose /json now answers with a redirect that
+      # fails each rotation through it (qdm12/ddns-updater#1145).
+      PUBLICIPV4_HTTP_PROVIDERS: ipify,icanhazip,ident,nnev,wtfismyip,seeip
+      PUBLICIPV6_HTTP_PROVIDERS: ipify,icanhazip,ident,nnev,wtfismyip,seeip
       # ip_version on every entry: unpinned, an entry replaces the A record with
       # an AAAA. `:+` so an empty switch adds no comma (invalid JSON).
       CONFIG: >-

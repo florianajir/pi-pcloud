@@ -68,8 +68,12 @@ kv_post() {
 # The create and update endpoints take the same DTO; only "id" differs, and update
 # refuses an id that does not exist. Everything not in $desired keeps Kavita's
 # defaults on create, and its current value on update.
+#
+# $3 carries the exclude patterns to keep on update. They are set by hand in
+# Kavita, for instance to hide a seeded original whose repaired copy sits beside
+# it, and an update for drift elsewhere must not reset them.
 library_payload() {
-    printf '%s' "$1" | jq -c --argjson id "$2" '
+    printf '%s' "$1" | jq -c --argjson id "$2" --argjson excludes "${3:-[\"\"]}" '
         {
           id: $id,
           name, type, folders, fileGroupTypes, metadataProvider,
@@ -87,12 +91,12 @@ library_payload() {
           removePrefixForSortName: false,
           inheritWebLinksFromFirstChapter: false,
           defaultLanguage: "",
-          excludePatterns: [""]
+          excludePatterns: $excludes
         }'
 }
 
 ensure_libraries() {
-    local existing="" desired="" name="" current="" id="" code="" drift=""
+    local existing="" desired="" name="" current="" id="" code="" drift="" excludes=""
     existing="$(kv_curl -H "Authorization: Bearer $TOKEN" "$API/Library/libraries" 2>/dev/null)"
     printf '%s' "$existing" | jq -e 'type == "array"' >/dev/null 2>&1 || {
         log "WARNING: could not list Kavita libraries; skipping"
@@ -127,7 +131,8 @@ ensure_libraries() {
             continue
         fi
 
-        code="$(library_payload "$desired" "$id" | kv_post "Library/update")"
+        excludes="$(printf '%s' "$current" | jq -c '.excludePatterns // [""]')"
+        code="$(library_payload "$desired" "$id" "$excludes" | kv_post "Library/update")"
         case "$code" in
             20*) log "Updated Kavita library '$name' (type/folders/file types)" ;;
             *)   log "WARNING: updating Kavita library '$name' returned HTTP $code" ;;

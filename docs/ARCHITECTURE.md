@@ -411,6 +411,9 @@ break it.
 
 Refreshing is the image's own cron, enabled by `CRON_MIN` (twice an hour here). Left
 unset, the image installs no crontab at all and feeds only update when a browser asks.
+Push through WebSub is switched off by `scripts/freshrss-bootstrap.sh`: the installer
+enables it for any public base URL, but a hub's callback cannot pass `lan@docker`, so
+each subscription would fail after giving the hub the callback URL.
 
 The SSO wiring is why the **Debian** image is pinned rather than `-alpine`: the OIDC flow
 runs in Apache through `mod_auth_openidc`, which only that variant ships. Apache passes

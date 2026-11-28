@@ -399,6 +399,8 @@ sudo systemctl edit pi-pcloud-authelia-ntfy.service
 
 `scripts/dockhand-oidc-bootstrap.sh` creates an Apprise channel named **Dockhand ntfy**, bound to the local Docker environment, with credentials from `config/ntfy/ntfy.env` (`ntfy://dockhand:<password>@ntfy/<topic>`).
 
+Its daily image-update check skips every service built from a `config/*/Dockerfile` (the `:local` images), through a `dockhand.update=false` label: no registry holds those images, so each lookup would end in a `401`. `tests/compose-invariants.py` fails a built service that lacks the label.
+
 One event type is configured, deliberately: `container_oom` (a container hit an out-of-memory condition), which Uptime Kuma cannot see. Everything else would duplicate Kuma. `container_unhealthy` in particular pushes per container on the first failed probe, outside Kuma's retry budget and grouping; the one container it would cover that Kuma does not is Kuma itself, which [the watchdog](#who-watches-uptime-kuma) watches.
 
 ## Backups
@@ -415,7 +417,7 @@ docker compose logs -f <service>   # one service
 journalctl -t pi-traefik           # same lines, survives container recreation
 ```
 
-Journald caps itself at 10% of the disk or 4 GB by default. Tune `SystemMaxUse=` in `/etc/systemd/journald.conf`, or reclaim with `journalctl --vacuum-time=30d`.
+The journal is kept on disk and capped at 1 GB. Raspberry Pi OS ships `Storage=volatile` — RAM only, a cap of 10% of `/run`, nothing kept across a reboot — which at this stack's log volume holds about a day and a half, so `make install-system` overrides it with `config/journald/pi-pcloud.conf`, installed as `/etc/systemd/journald.conf.d/pi-pcloud.conf`. Once the cap is reached, the oldest entries go first; check what is held with `journalctl --disk-usage` and how far back it reaches with `journalctl -o short-iso | head -1`.
 
 Traefik additionally emits a JSON access log to the same journal — one object per request, carrying `ClientAddr`, `RequestHost`, `RouterName` and `DownstreamStatus`. It is the only record of a request a middleware rejected before it reached a backend, which is what makes an allowlist 403 attributable ([Troubleshooting → Access](TROUBLESHOOTING.md#access)):
 

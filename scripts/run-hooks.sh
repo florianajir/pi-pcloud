@@ -111,6 +111,7 @@ open-webui:open-webui-bootstrap.sh
 trilium:trilium-bootstrap.sh
 openclaw:openclaw-bootstrap.py
 changedetection:changedetection-bootstrap.sh
+freshrss:freshrss-bootstrap.sh
 homepage-widgets-bootstrap.sh
 '
 

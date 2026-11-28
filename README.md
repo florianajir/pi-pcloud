@@ -82,6 +82,7 @@ Your files, photos, passwords and chat stay on the Pi. These are the exceptions:
 | What | Goes to | When |
 |------|---------|------|
 | DNS records for your domain, and the certificate challenge | Cloudflare (DNS only, never proxied) and Let's Encrypt | Always |
+| A request every five minutes, to learn the public address the DNS records must carry | ipify, icanhazip, ident.me, nnev.de, wtfismyip and SeeIP over HTTPS, and Cloudflare and OpenDNS resolvers, rotated by ddns-updater | Always |
 | A share of DNS queries | Cloudflare and Quad9, as Pi-hole's fallback upstreams — remove them in `PIHOLE_DNS_UPSTREAMS` ([why](docs/NETWORKING.md#the-dns-pipeline)) | By default |
 | VPN traffic between two devices that cannot connect directly | Tailscale's public DERP relays, end-to-end encrypted | When a direct link fails |
 | Backups | Your S3 bucket, encrypted by restic before upload | If configured |

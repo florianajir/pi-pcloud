@@ -299,6 +299,9 @@ services:
       - TS_HOSTNAME=tailscale
     extra_hosts:
       - "headscale.${HOST_NAME:-pi.lan}:${HOST_LAN_IP:-192.168.1.30}"
+      # Traefik's ingress6 address. Without an IPv6 answer, every netcheck logs
+      # that the embedded DERP region "has no v6 address", a few times a minute.
+      - "headscale.${HOST_NAME:-pi.lan}=[fd00:30:15::250]"
     volumes:
       - tailscale_state:/var/lib/tailscale
       - /dev/net/tun:/dev/net/tun

@@ -39,11 +39,12 @@ rev_b="$2"
 # --- deliberate exceptions, each with the reason it is not a bug -------------
 
 # config/ subdirectories `make install-system` copies to /etc rather than
-# mounting into a container: the sysctl drop-in and the shell completions.
+# mounting into a container: the sysctl and journald drop-ins and the shell
+# completions.
 # install-system runs before this and applies both, so there is no container to
 # recreate for either.
 #
-HOST_CONFIG_DIRS='completion sysctl.d'
+HOST_CONFIG_DIRS='completion journald sysctl.d'
 
 # config/ subdirectories that answer ALL on purpose. install-system copies the
 # units too, but all it does there is `daemon-reload` - it never restarts the

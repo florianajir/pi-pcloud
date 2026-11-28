@@ -161,6 +161,9 @@ catches "a moving tag" IMAGE '{"services": {"drifting": {"image": "somewhere/thi
 
 catches "an image with no tag at all" IMAGE '{"services": {"untagged": {"image": "somewhere/thing"}}}'
 
+catches "a locally built image Dockhand would look up" IMAGE '{"services": {"homemade": {
+  "image": "pi-homemade:local", "build": {"context": "config/homemade"}}}}'
+
 catches "a public router with no middlewares" ROUTER '{"services": {"exposed": {"image": "x:1", "labels": {
   "traefik.http.routers.exposed.rule": "Host(`x`)",
   "traefik.http.routers.exposed.entrypoints": "websecure"

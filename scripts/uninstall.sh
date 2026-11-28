@@ -51,7 +51,7 @@ confirm() {
     for file in $GENERATED_CONFIGS; do
         echo "   - Generated config: ./config/$file"
     done
-    echo "   - The systemd units, sysctl drop-in, /etc/hosts record and pi-pcloud command"
+    echo "   - The systemd units, sysctl and journald drop-ins, /etc/hosts record and pi-pcloud command"
     echo
     echo "   Kept: .env and the media libraries ($MEDIA_DIRS under $root)."
     echo

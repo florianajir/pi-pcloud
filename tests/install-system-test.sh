@@ -79,7 +79,7 @@ APP="$WORK/app"
 mkdir -p "$APP/scripts" "$APP/config"
 cp "$REPO_DIR/scripts/install-system.sh" "$REPO_DIR/scripts/uninstall.sh" \
     "$REPO_DIR/scripts/lib.sh" "$APP/scripts/"
-cp -R "$REPO_DIR/config/systemd" "$REPO_DIR/config/sysctl.d" \
+cp -R "$REPO_DIR/config/systemd" "$REPO_DIR/config/sysctl.d" "$REPO_DIR/config/journald" \
     "$REPO_DIR/config/completion" "$APP/config/"
 for stub in configure-swap.sh configure-kernel-params.sh; do
     printf '#!/bin/sh\necho "%s $*" >>"$CALLS"\n' "$stub" >"$APP/scripts/$stub"
@@ -134,6 +134,8 @@ ok "the /etc/hosts block names headscale" "$(cat "$HOSTS_OUT")" "$(printf '%s\n%
 contains "the command links into the checkout" "$(cat "$CALLS")" \
     "sudo ln -sfn $APP/scripts/pi-pcloud /usr/local/bin/pi-pcloud"
 contains "swap is sized" "$(cat "$CALLS")" "configure-swap.sh "
+contains "the journald drop-in is installed" "$(cat "$INSTALLED")" \
+    "/etc/systemd/journald.conf.d/pi-pcloud.conf"
 contains "the timers start now, not at the next boot" "$(cat "$CALLS")" "systemctl enable --now nextcloud-cron.timer"
 
 # --- remove -----------------------------------------------------------------------

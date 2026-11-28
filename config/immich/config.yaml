@@ -10,3 +10,12 @@ ffmpeg:
 backup:
   database:
     enabled: false
+# 01:00 rather than Immich's 03:00: the checksum pass reads originals for up to
+# an hour, and from 03:00 it ran into Backrest's 04:00 snapshot of the same disk.
+integrityChecks:
+  missingFiles:
+    cronExpression: "0 1 * * *"
+  untrackedFiles:
+    cronExpression: "0 1 * * *"
+  checksumFiles:
+    cronExpression: "0 1 * * *"
