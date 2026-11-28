@@ -410,6 +410,13 @@ Matrix and SearXNG plugins instead, pinned to the image's version, from a throwa
 only moment anything of this service reaches the internet — together with the native crypto binding
 the Matrix plugin would otherwise download at runtime.
 
+Bypassing it also skips the config migrations doctor applies on an upgrade. A release that moves a
+setting then either refuses the read-only file at boot or accepts it and ignores the setting, which
+nothing reports. `make openclaw-check` — and CI, on a pull request that touches the image or the
+renderer — validates the rendered config against the pinned image and runs that image's doctor on a
+copy, offline: whatever doctor would drop or change is printed, path by path, to carry into
+`scripts/openclaw-pre-start.py`.
+
 ### Web search, and prompt injection
 
 The assistant searches the web through the stack's own SearXNG, with OpenClaw's built-in

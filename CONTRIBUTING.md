@@ -23,6 +23,12 @@ Both leave the running stack alone. `tests/trilium-api-contract.sh` is the one s
 TRILIUM_CONTRACT_IMAGE=ghcr.io/triliumnext/trilium:v0.106.0 sh tests/trilium-api-contract.sh
 ```
 
+OpenClaw's config has a check of the same kind, `tests/openclaw-config-contract.py`, kept out of `make test` because it pulls the OpenClaw image; CI runs it on pull requests that touch the image or the renderer. Run it before committing an OpenClaw bump:
+
+```bash
+make openclaw-check image=ghcr.io/openclaw/openclaw:<tag>
+```
+
 `make lint` runs `scripts/lint.sh`, which CI calls too, so a green run locally means a green run there. A gate whose tool is missing is reported as skipped; CI sets `LINT_STRICT=1`, which makes a skip fail.
 
 `shellcheck` comes from your package manager. `ruff` and `yamllint` are pinned in `requirements-lint.txt`; Raspberry Pi OS (like any PEP 668 distro) refuses to install them system-wide, so use a virtualenv:

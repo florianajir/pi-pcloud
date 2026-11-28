@@ -1,4 +1,4 @@
-.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env test smoke lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit api-keys
+.PHONY: help install install-system uninstall pg-upgrade start stop restart update update-images status logs doctor preflight check-env test smoke openclaw-check lint services enable disable config headscale-register headscale-reset rotate-password rotate-password-full rotate-secret check-secrets recovery-kit api-keys
 
 MAKEFLAGS += --no-print-directory
 
@@ -138,6 +138,12 @@ test: ## Run the test suites against temporary copies (no host changes)
 # it. Nothing is restarted and no configuration is written.
 smoke: ## Probe the running stack through Traefik: every router loaded, LAN admitted, outside refused
 	@sh tests/routing-smoke.sh
+
+# Not part of `test`: it pulls the OpenClaw image. CI runs it on every pull
+# request that touches the image or what renders the config. image= checks a
+# candidate before the bump is committed.
+openclaw-check: ## [image=<ref>] | Check OpenClaw's rendered config against its pinned image: valid, and nothing its doctor would migrate
+	@OPENCLAW_CONTRACT_IMAGE="$(image)" python3 tests/openclaw-config-contract.py
 
 # The same script CI runs, so a green local run means a green CI run. Gates
 # whose tool is missing are reported as skipped; CI adds LINT_STRICT=1 to make
