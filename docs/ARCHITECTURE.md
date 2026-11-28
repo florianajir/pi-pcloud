@@ -196,8 +196,10 @@ library — so the parser, the metadata provider and the OIDC library grant are 
 
 Magazines is a Comic library because Kavita has no magazine type, and the comic parser
 groups issues by the `<title> <number>` in their filename. An issue must therefore be
-named `<Series> <NNN>.pdf` to join its series; the folder name is not used, and a title
-embedded in the PDF overrides the filename. Details in `scripts/kavita-library-bootstrap.sh`.
+named `<Series> <NNN>.pdf` to join its series; the folder name is not used. Embedded
+metadata is switched off for this library only: a PDF's `/Title` would otherwise beat the
+filename, and repackaged issues carry a layout file name, a URL or "Untitled" there.
+Details in `scripts/kavita-library-bootstrap.sh`.
 
 Everything else under `download/` stays invisible to Kavita, which matters because
 Kavita indexes *every* subfolder of a folder it is given — point it at the download
